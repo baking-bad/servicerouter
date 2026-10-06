@@ -402,4 +402,4 @@ The implementing agent uses these defaults until the product owner answers. Keep
 | AR16 | Do we pay targets with Circle Gateway nanopayments? | Not in v1. We skip those options. |
 | AR17 | A path with an ID, such as `/v1/tx/<hash>`, registers a new endpoint per ID. Do we cap them? | Up to 1,000 routed endpoints per host. Beyond that, log and don't register. |
 | AR18 | When is Cardano enabled on mainnet? | After the readiness checks in [CF-8](cardano-facilitator.md) pass, with the product owner's approval. |
-| AR19 | How do we send email? | SMTP, through any transactional provider. The relay is in platform config. Its password is a stack secret. |
+| AR19 | How do we send email? | skip it |
