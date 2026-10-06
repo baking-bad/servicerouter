@@ -16,10 +16,18 @@
   "scripts": {
     "build": "tsc -b",
     "typecheck": "tsc -p tsconfig.check.json",
-    "test": "vitest run --root ../.. --project db"
+    "test": "vitest run --root ../.. --project db",
+    "db:generate": "drizzle-kit generate"
   },
   "dependencies": {
     "@servicerouter/common": "0.1.0",
-    "@servicerouter/core": "0.1.0"
+    "@servicerouter/core": "0.1.0",
+    "drizzle-orm": "^0.45.3",
+    "pg": "^8.23.1",
+    "redis": "^6.3.0"
+  },
+  "devDependencies": {
+    "@types/pg": "^8.23.1",
+    "drizzle-kit": "^0.31.11"
   }
 }
