@@ -3,11 +3,13 @@ import {
 } from '@servicerouter/common';
 import { loadPlatformConfig } from '@servicerouter/core';
 import { createPostgres } from '@servicerouter/db';
-import { createFacilitators } from '@servicerouter/payments';
+import { checkFacilitators, createFacilitators } from '@servicerouter/payments';
 
 import { createApp } from './app.js';
 
 export const defaultMetricsPort = 9082;
+// How long the facilitators get to answer /supported at startup, as for the proxy (PR-6)
+export const facilitatorStartupTimeoutMs = 10_000;
 
 /** Wires the production dependencies from platform config and the environment, then listens. */
 export const startWorkers = async ({ env, logger }: AppContext): Promise<RunningApp> => {
@@ -24,6 +26,8 @@ export const startWorkers = async ({ env, logger }: AppContext): Promise<Running
     cdpApiKey: auth => ({ id: readSecret(auth.apiKeyId, env), secret: readSecret(auth.apiKeySecret, env) }),
     clock: systemClock,
   });
+  // Every enabled facilitator answers /supported, or the workers don't start (PR-6)
+  await checkFacilitators({ config, facilitators, timeoutMs: facilitatorStartupTimeoutMs });
 
   const postgres = createPostgres({ url: databaseUrl, logger });
   const server = createApp({ config, logger, postgres, facilitators });
