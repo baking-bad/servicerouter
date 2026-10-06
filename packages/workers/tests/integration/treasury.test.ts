@@ -72,7 +72,7 @@ describe('the treasury jobs (TR-3, TR-5)', () => {
     const metrics = createTreasuryMetrics(registry);
     const wallets = async () => treasuryWallets({ ...config, assets: config.assets.filter(asset => asset.name === 'cardano-usdm' || asset.name === 'base-usdc') });
 
-    await createTreasuryBalancesJob({ wallets, readerFor: readers(), payouts: undefined, metrics, logger })();
+    await createTreasuryBalancesJob({ wallets, readerFor: readers(), payouts: undefined, signerDailyLimit: config.signer.maxPerNetworkPerDay, metrics, logger })();
 
     const text = await registry.metrics();
     expect(text).toMatch(/treasury_balance_usd\{wallet="payTo:cardano-usdm",asset="cardano-usdm"\} 40/);
@@ -103,5 +103,46 @@ describe('the treasury jobs (TR-3, TR-5)', () => {
     });
     expect(logs).toContainEqual(expect.objectContaining({ asset: 'base-usdc', drift: '2.5', alert: true }));
     expect(await registry.metrics()).toMatch(/treasury_drift_usd\{asset="base-usdc"\} 2\.5/);
+  });
+
+  it('reports the Signer\'s hot wallets and warns below a day\'s limit, while reconciliation\'s totals stay unchanged (TR-1, TR-3, TR-5, T27)', async () => {
+    const tempoAsset = config.assets.find(asset => asset.network.id === config.mpp.network.id)!;
+    const wallets = { base: '0x3333333333333333333333333333333333333333', tempo: '0x4444444444444444444444444444444444444444' };
+    const assets = config.assets.filter(asset => asset.name === 'cardano-usdm' || asset.name === 'base-usdc' || asset.name === tempoAsset.name);
+    const withSigner = { ...config, assets, signer: { ...config.signer, wallets } };
+    // $4 on Base and $6 on Tempo, against a $5 daily limit
+    evm.balances.set(wallets.base, 4_000_000n);
+    evm.balances.set(wallets.tempo, 6_000_000n);
+    const evmReaders = readerFor({
+      cardano: createCardanoBalanceReader(createBlockfrostClient({ url: blockfrost.url, projectId: Secret.from('preprodTestProjectId'), timeoutMs: 2_000 })),
+      evm: createEvmBalanceReader({ rpcUrlFor: network => network === 'eip155:84532' || network === config.mpp.network.id ? evm.url : undefined, timeoutMs: 2_000 }),
+    });
+    const registry = new Registry();
+    logs.length = 0;
+
+    await createTreasuryBalancesJob({
+      wallets: async () => treasuryWallets(withSigner), readerFor: evmReaders, payouts: undefined, signerDailyLimit: 5_000_000n as MicroUsd,
+      metrics: createTreasuryMetrics(registry), logger,
+    })();
+
+    const text = await registry.metrics();
+    expect(text).toMatch(/treasury_balance_usd\{wallet="signer:base",asset="base-usdc"\} 4/);
+    expect(text).toMatch(new RegExp(`treasury_balance_usd\\{wallet="signer:tempo",asset="${tempoAsset.name}"\\} 6`));
+    const warnings = logs.filter(line => line['msg'] === 'A Signer wallet holds less than a day\'s spend limit: top it up');
+    expect(warnings).toEqual([expect.objectContaining({ level: 40, wallet: 'signer:base', held: '4', dailyLimit: '5', alert: true })]);
+
+    // TR-5: the operator funds hot wallets outside the ledger, so reconciliation leaves them out
+    const ledger = createLedger({ db: database.db, clock, ids: randomIdGenerator });
+    const reconcileWith = async (source: PlatformConfig) => {
+      await database.db.delete(reconciliationRuns);
+      await createReconciliationJob({
+        db: database.db, config: source, wallets: async () => treasuryWallets(source), readerFor: evmReaders, ledger,
+        metrics: createTreasuryMetrics(new Registry()), clock, ids: randomIdGenerator, logger,
+      })();
+      const [run] = await database.db.select().from(reconciliationRuns);
+
+      return run!.results;
+    };
+    expect(await reconcileWith(withSigner)).toEqual(await reconcileWith({ ...config, assets }));
   });
 });

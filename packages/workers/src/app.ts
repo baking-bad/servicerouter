@@ -161,7 +161,9 @@ export const createApp = ({
       const metrics = createTreasuryMetrics(server.registry);
 
       return {
-        balances: createTreasuryBalancesJob({ wallets, readerFor: pickReader, payouts: payoutRepository, metrics, logger }),
+        balances: createTreasuryBalancesJob({
+          wallets, readerFor: pickReader, payouts: payoutRepository, signerDailyLimit: config.signer.maxPerNetworkPerDay, metrics, logger,
+        }),
         reconciliation: createReconciliationJob({ db: postgres.db, config, wallets, readerFor: pickReader, ledger, metrics, clock, ids, logger }),
       };
     })()

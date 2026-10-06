@@ -49,6 +49,12 @@ curl ${payUrl}/service/<service-id>/<path> -H "Authorization: Bearer $SERVICEROU
 
 Either way, the payment settles only after a \`2xx\` answer. A failed call costs nothing.
 
+## Pay any x402 or MPP API
+
+Put \`${payUrl}/\` in front of a paid API's URL, without \`https://\`: \`${payUrl}/api.example.com/v1/pools\` calls \`https://api.example.com/v1/pools\`. The API doesn't need to be listed here. Service Router pays it in its own protocol, x402 on Base or MPP on Tempo, and returns its answer.
+
+You pay Service Router the quote, the API's price plus any routing fee, in any way above: a payment key in one request, or the options of its \`402\`, such as x402 with USDM on Cardano. \`GET ${payUrl}/_/check?url=<link>\` quotes a link without paying. A failed call costs nothing.
+
 ## Find services
 
 - [The catalog](${siteUrl}/discover.md): every service, with prices, payment methods, and stats. Filter with \`?category=\`, \`q=\`, \`method=\`, \`maxPrice=\`, and \`sort=\`.
