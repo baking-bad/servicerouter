@@ -3,8 +3,8 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { formatUsd, parseUsd, Secret, ServiceRouterError, usdAmountPattern, type Clock, type IdGenerator } from '@servicerouter/common';
 import type { AuditLog, Environment, OwnershipVerifier } from '@servicerouter/core';
 import {
-  createAccountRepository, createAuditLogRepository, createLedger, createPayoutRepository, createTreasuryRepository, withTransaction,
-  type Database, type DatabaseTransaction,
+  createAccountRepository, createAuditLogRepository, createLedger, createPayoutRepository, createRoutingRepository, createTreasuryRepository,
+  withTransaction, type Database, type DatabaseTransaction,
 } from '@servicerouter/db';
 
 import { ConflictError, InvalidRequestError, NotFoundError } from '../errors.js';
@@ -142,6 +142,67 @@ export const registerInternalRoutes = (app: FastifyInstance, {
 
     return typeof header === 'string' && callerPattern.test(header) ? header : 'unknown';
   };
+
+  const routing = createRoutingRepository({ db, clock });
+  const audit = (request: FastifyRequest, action: `${string}.${string}`, subject: { kind: string; id: string }, details: Record<string, string | number | null>) =>
+    withTransaction(db, tx => auditLog(tx).append({ actor: { kind: 'internal_api', id: callerOf(request) }, action, subject, requestId: request.id, details }));
+
+  // RT-12, RT-13: the proxy registers an endpoint that answered 402, once, up to the cap per host (AR17)
+  app.put<{ Body: { readonly host: string; readonly path: string } }>('/internal/v1/routed-endpoints', {
+    schema: { body: {
+      type: 'object', required: ['host', 'path'], additionalProperties: false,
+      properties: { host: { type: 'string', maxLength: 253 }, path: { type: 'string', pattern: '^/', maxLength: 2048 } },
+    } },
+  }, async (request, reply) => {
+    const { host, path } = request.body;
+    // The host as the routing link names it: a lowercase DNS name, with a port when one was given
+    const [hostname = '', port] = host.split(':');
+    if (!hostPattern.test(hostname) || (port !== undefined && !/^\d{1,5}$/.test(port)))
+      throw new InvalidRequestError('host must be a lowercase DNS name, with an optional port');
+    const result = await routing.registerEndpoint({ host, path });
+    if (result === 'created')
+      await audit(request, 'routing.endpoint_register', { kind: 'routed_endpoint', id: `${host}${path}` }, { host, path });
+
+    return reply.status(result === 'created' ? 201 : 200).send({ host, path, result });
+  });
+
+  // RT-5: an endpoint's own fee, or null for routingFeeBps
+  app.put<{ Params: { readonly host: string }; Body: { readonly path: string; readonly feeBps: number | null } }>('/internal/v1/routed-endpoints/:host/fee', {
+    schema: { body: {
+      type: 'object', required: ['path', 'feeBps'], additionalProperties: false,
+      properties: { path: { type: 'string', pattern: '^/', maxLength: 2048 }, feeBps: { type: ['integer', 'null'], minimum: 0, maximum: 10_000 } },
+    } },
+  }, async request => {
+    const { host } = request.params;
+    const { path, feeBps } = request.body;
+    if (!await routing.setEndpointFee({ host, path, feeBps }))
+      throw new NotFoundError('No such routed endpoint');
+    await audit(request, 'routing.endpoint_fee', { kind: 'routed_endpoint', id: `${host}${path}` }, { feeBps });
+
+    return { host, path, feeBps };
+  });
+
+  // RT-18: hosts the proxy refuses
+  app.put<{ Params: { readonly host: string }; Body: { readonly reason: string } }>('/internal/v1/blocklist/:host', {
+    schema: { body: { type: 'object', required: ['reason'], additionalProperties: false, properties: { reason: { type: 'string', minLength: 1, maxLength: 500 } } } },
+  }, async request => {
+    const { host } = request.params;
+    if (!hostPattern.test(host))
+      throw new InvalidRequestError('host must be a lowercase DNS name');
+    await routing.block({ host, reason: request.body.reason });
+    await audit(request, 'routing.block', { kind: 'host', id: host }, { reason: request.body.reason });
+
+    return { host, blocked: true };
+  });
+
+  app.delete<{ Params: { readonly host: string } }>('/internal/v1/blocklist/:host', async request => {
+    const { host } = request.params;
+    if (!await routing.unblock(host))
+      throw new NotFoundError('The host isn\'t blocked');
+    await audit(request, 'routing.unblock', { kind: 'host', id: host }, {});
+
+    return { host, blocked: false };
+  });
 
   // PO-6, AR10: an operator approves a payout run that waits. The workers then submit it.
   app.post<{ Params: { readonly run: string } }>('/internal/v1/payouts/:run/approve', async request => {
