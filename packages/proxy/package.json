@@ -1,0 +1,28 @@
+{
+  "name": "@servicerouter/proxy",
+  "version": "0.1.0",
+  "private": true,
+  "description": "App: pay.servicerouter.ai",
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -p tsconfig.check.json",
+    "test": "vitest run --root ../.. --project proxy",
+    "start": "node dist/main.js"
+  },
+  "dependencies": {
+    "@servicerouter/common": "0.1.0",
+    "@servicerouter/core": "0.1.0",
+    "@servicerouter/db": "0.1.0",
+    "@servicerouter/payments": "0.1.0"
+  }
+}

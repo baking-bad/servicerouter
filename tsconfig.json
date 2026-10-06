@@ -14,6 +14,12 @@
       "path": "packages/payments"
     },
     {
+      "path": "packages/proxy"
+    },
+    {
+      "path": "packages/api"
+    },
+    {
       "path": "packages/testing"
     }
   ]
