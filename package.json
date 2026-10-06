@@ -1,0 +1,28 @@
+{
+  "name": "servicerouter",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Payment router for AI agents: pay-per-call for every agent and every API",
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "watch": "tsc -b --watch",
+    "clean": "tsc -b --clean",
+    "typecheck": "npm run build && npm run typecheck --workspaces",
+    "test": "vitest run --project '!*:*'",
+    "test:integration": "vitest run --project '*:integration'",
+    "test:functional": "vitest run --project '*:functional'",
+    "test:all": "vitest run"
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.1",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.3"
+  },
+  "workspaces": [
+    "packages/*"
+  ]
+}
