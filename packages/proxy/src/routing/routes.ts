@@ -264,7 +264,7 @@ export const createRouting = ({ config, http, redis, payments, routing, ledger, 
     }
 
     await routing.updateTargetPayment(paymentId, { status: 'settled', ...receipt ? { receipt } : {} });
-    registrar.register(target.host, target.path);
+    registrar.register(target.host, target.path, quoted.quote);
     if (call.rail.settlesBeforeResponse) {
       // x402 and MPP buyers: settle before any byte goes out (PX-12)
       const buffered = bodyless ? undefined : await response.bytes();

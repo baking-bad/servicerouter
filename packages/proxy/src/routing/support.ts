@@ -1,6 +1,6 @@
 import type { IncomingHttpHeaders } from 'node:http';
 
-import { withTimeout, type Logger, type MicroUsd, type OutboundHeaders, type OutboundHttp, type Secret } from '@servicerouter/common';
+import { formatUsd, withTimeout, type Logger, type MicroUsd, type OutboundHeaders, type OutboundHttp, type Secret } from '@servicerouter/common';
 import { createOwnershipFileFetcher, type PlatformConfig } from '@servicerouter/core';
 import type { Redis } from '@servicerouter/db';
 import type { PaymentRequirements } from '@x402/core/types';
@@ -159,7 +159,7 @@ export const createEndpointRegistrar = ({ url, secret, logger, fetch = globalThi
   readonly capacity?: number;
 }) => {
   const seen = new Set<string>();
-  const queue: { host: string; path: string }[] = [];
+  const queue: { host: string; path: string; quote?: string }[] = [];
   let running = false;
 
   const drain = async (): Promise<void> => {
@@ -189,14 +189,14 @@ export const createEndpointRegistrar = ({ url, secret, logger, fetch = globalThi
   };
 
   return {
-    register: (host: string, path: string): void => {
+    register: (host: string, path: string, quote?: MicroUsd): void => {
       if (!url || !secret)
         return;
       const key = `${host}${path}`;
       if (seen.has(key) || queue.length >= capacity)
         return;
       seen.add(key);
-      queue.push({ host, path });
+      queue.push({ host, path, ...quote === undefined ? {} : { quote: formatUsd(quote) } });
       void drain();
     },
     /** For tests and shutdown: waits until the queue is empty. */
