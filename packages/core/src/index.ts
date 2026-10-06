@@ -6,3 +6,4 @@ export * from './platform/index.js';
 export * from './service/index.js';
 export * from './audit.js';
 export * from './invalidation.js';
+export * from './secrets/index.js';
