@@ -15,7 +15,9 @@
     "test": "vitest run --project '!*:*'",
     "test:integration": "vitest run --project '*:integration'",
     "test:functional": "vitest run --project '*:functional'",
-    "test:all": "vitest run"
+    "test:all": "vitest run",
+    "db:generate": "npm run db:generate -w @servicerouter/db",
+    "db:migrate": "tsc -b packages/db && node --env-file-if-exists=.env packages/db/dist/migrate.js"
   },
   "devDependencies": {
     "@types/node": "^24.19.1",
