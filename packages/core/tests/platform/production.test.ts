@@ -92,6 +92,14 @@ describe('config/production.yaml (PC-1, PC-5, P-1 to P-9)', () => {
     expect(config.deposits?.asset.name ?? config.deposits?.asset).toBe('cardano-usdm');
   });
 
+  it('reaches the Cardano facilitator by a host without an underscore, since its Tomcat answers 400 to one (PR-6)', async () => {
+    const config = await loadText(filled(text));
+    const cardano = config.facilitators.find(facilitator => facilitator.name === 'cardano');
+
+    expect(cardano?.url).toBe('http://cardano-facilitator:4022');
+    expect(new URL(cardano!.url).hostname).not.toContain('_');
+  });
+
   it('takes $0.0005 on each x402 payment CDP settles, and no flat fee on Cardano or MPP (P-2)', async () => {
     const config = await loadText(filled(text));
 

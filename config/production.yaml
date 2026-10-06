@@ -56,7 +56,7 @@ facilitators:
       apiKeySecret: CDP_API_KEY_SECRET
     feePerPayment: "0.0005"     # P-2: half of CDP's $0.001 settlement fee, on each x402 payment it settles, from the seller's earnings
   - name: cardano
-    url: http://servicerouter_cardano-facilitator:4022   # The stack's service, for STACK_NAME=servicerouter
+    url: http://cardano-facilitator:4022   # The stack's service by its short name. Not <STACK_NAME>_…: its Tomcat answers 400 to a Host with an underscore
     networks: [cardano:mainnet]
 
 mpp:
