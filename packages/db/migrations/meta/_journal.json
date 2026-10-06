@@ -71,6 +71,13 @@
       "when": 1791288480000,
       "tag": "0009_routing",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1791288600000,
+      "tag": "0010_catalog",
+      "breakpoints": true
     }
   ]
 }
