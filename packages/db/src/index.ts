@@ -29,3 +29,5 @@ export { createLedger, ledgerAccountIds } from './ledgerRepository.js';
 export type { CreditResult, Ledger, LedgerOptions } from './ledgerRepository.js';
 export { createOwnershipStatus, createOwnershipStore, createPayoutConfirmationRepository } from './ownershipRepository.js';
 export type { OwnershipRepositoryOptions, OwnershipStoreOptions, PayoutConfirmationRepository } from './ownershipRepository.js';
+export { createDepositRepository, depositReference } from './depositRepository.js';
+export type { DepositAddressView, DepositRepository, DepositRepositoryOptions } from './depositRepository.js';
