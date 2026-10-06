@@ -29,6 +29,13 @@
       "when": 1791287760000,
       "tag": "0003_payment_keys_and_ledger",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1791287880000,
+      "tag": "0004_settlement_request",
+      "breakpoints": true
     }
   ]
 }
