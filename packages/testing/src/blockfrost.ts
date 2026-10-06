@@ -3,6 +3,9 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import type { AddressInfo } from 'node:net';
 
 import * as PrivateKey from '@evolution-sdk/evolution/PrivateKey';
+import * as Transaction from '@evolution-sdk/evolution/Transaction';
+import * as TransactionBody from '@evolution-sdk/evolution/TransactionBody';
+import * as TransactionHash from '@evolution-sdk/evolution/TransactionHash';
 import { toClientCardanoSigner, type ClientCardanoSigner } from '@x402/cardano';
 
 export interface BlockfrostRequest {
@@ -33,6 +36,13 @@ export interface FakeBlockfrost {
   addBlocks(count: number): void;
   /** A re-org drops the transaction: Blockfrost no longer knows it. */
   dropTransaction(txHash: string): void;
+  /** Every transaction submitted to `/tx/submit`, by hash, with its CBOR in hex. */
+  readonly submitted: ReadonlyMap<string, string>;
+  /**
+   * What `/tx/submit` does next: `include` (the default) puts the transaction in the block at the tip,
+   * `hold` accepts it but never includes it, and `reject` answers 400, as for spent inputs.
+   */
+  onSubmit(mode: 'include' | 'hold' | 'reject'): void;
   readonly tipHeight: number;
   close(): Promise<void>;
 }
@@ -96,6 +106,8 @@ export const startFakeBlockfrost = async (): Promise<FakeBlockfrost> => {
   const utxos = new Map<string, Utxo[]>();
   const transactions = new Map<string, ChainTransaction>();
   let tipHeight = 1_000;
+  const submitted = new Map<string, string>();
+  let submitMode: 'include' | 'hold' | 'reject' = 'include';
   const notFound = (response: ServerResponse) => send(response, 404, { status_code: 404, error: 'Not Found', message: 'The requested component has not been found.' });
 
   const server = createServer((request: IncomingMessage, response: ServerResponse) => {
@@ -105,6 +117,38 @@ export const startFakeBlockfrost = async (): Promise<FakeBlockfrost> => {
     const url = new URL(path, 'http://blockfrost');
     if (request.method === 'GET' && url.pathname === '/epochs/latest/parameters')
       return send(response, 200, protocolParameters);
+
+    if (request.method === 'POST' && url.pathname === '/tx/submit') {
+      const chunks: Buffer[] = [];
+      request.on('data', (chunk: Buffer) => chunks.push(chunk));
+      request.on('end', () => {
+        if (submitMode === 'reject')
+          return send(response, 400, { status_code: 400, error: 'Bad Request', message: 'The transaction is invalid' });
+
+        const cbor = Buffer.concat(chunks).toString('hex');
+        const hash = TransactionHash.toHex(TransactionBody.toHash(Transaction.fromCBORHex(cbor).body));
+        submitted.set(hash, cbor);
+        if (submitMode === 'include')
+          transactions.set(hash, { hash, blockHeight: tipHeight, outputs: [] });
+        send(response, 200, hash);
+      });
+      return;
+    }
+
+    const balance = /^\/addresses\/([^/]+)$/.exec(url.pathname);
+    if (request.method === 'GET' && balance) {
+      const address = decodeURIComponent(balance[1]!);
+      const held = utxos.get(address);
+      if (!held)
+        return notFound(response);
+      const totals = new Map<string, bigint>();
+      for (const utxo of held) {
+        for (const amount of utxo.amount)
+          totals.set(amount.unit, (totals.get(amount.unit) ?? 0n) + BigInt(amount.quantity));
+      }
+
+      return send(response, 200, { address, amount: [...totals].map(([unit, quantity]) => ({ unit, quantity: quantity.toString() })) });
+    }
 
     if (request.method === 'GET' && url.pathname === '/blocks/latest')
       return send(response, 200, { height: tipHeight, slot: tipHeight * 20, time: 1_791_287_400 + tipHeight * 20 });
@@ -191,6 +235,10 @@ export const startFakeBlockfrost = async (): Promise<FakeBlockfrost> => {
     },
     dropTransaction: txHash => {
       transactions.delete(txHash);
+    },
+    submitted,
+    onSubmit: mode => {
+      submitMode = mode;
     },
     get tipHeight() {
       return tipHeight;
