@@ -57,6 +57,13 @@
       "when": 1791288240000,
       "tag": "0007_service_documents",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1791288360000,
+      "tag": "0008_payouts_and_treasury",
+      "breakpoints": true
     }
   ]
 }
