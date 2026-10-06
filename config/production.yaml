@@ -106,7 +106,10 @@ rateLimits:
   paymentKey: { requests: 600, windowSeconds: 60 }
   service: { requests: 6000, windowSeconds: 60 }
   unpaidIp: { requests: 60, windowSeconds: 60 }
-  signup: { requests: 10, windowSeconds: 3600 }   # P-5
+  signup: { requests: 200, windowSeconds: 3600 }  # P-5: a hackathon venue shares one IP
+  # The website's server reads these for every visitor, from one IP
+  documents: { requests: 600, windowSeconds: 60 }  # The catalog and agent documents
+  topup: { requests: 300, windowSeconds: 60 }
 
 timeouts:
   connectMs: 5000

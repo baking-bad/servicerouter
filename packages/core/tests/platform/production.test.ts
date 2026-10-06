@@ -53,7 +53,9 @@ describe('config/production.yaml (PC-1, PC-5, P-1 to P-9)', () => {
     ]);
     expect(config.keyPrefixes).toEqual({ master: 'srm_live_', payment: 'sr_live_' });
     expect(config.urls.website).toBe('https://servicerouter.agents.bakingbad.dev');
-    expect(config.rateLimits.signup).toEqual({ requests: 10, windowSeconds: 3600 });
+    expect(config.rateLimits.signup).toEqual({ requests: 200, windowSeconds: 3600 });
+    expect(config.rateLimits.documents).toEqual({ requests: 600, windowSeconds: 60 });
+    expect(config.rateLimits.topup).toEqual({ requests: 300, windowSeconds: 60 });
     expect({ feeBps: config.feeBps, routingFeeBps: config.routingFeeBps }).toEqual({ feeBps: 0, routingFeeBps: 0 });
     expect(config.deposits?.asset.name ?? config.deposits?.asset).toBe('cardano-usdm');
   });
