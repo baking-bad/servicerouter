@@ -21,7 +21,8 @@ Runs every background job.
 | Payouts | Every 10 minutes: builds once per cutoff, the 1st of the month, UTC | [Payouts](payouts.md) | 11 |
 | Treasury balances | Every 5 minutes | [Treasury](treasury.md) | 11 |
 | Reconciliation | Daily | [Treasury](treasury.md) | 11 |
-| Service stats | Every few minutes | [Catalog and intents](catalog-and-intents.md) | 13 |
+| Catalog index | Every minute | [Catalog and intents](catalog-and-intents.md) | 13 |
+| Service stats | Every 5 minutes | [Catalog and intents](catalog-and-intents.md) | 13 |
 
 ## Requirements
 

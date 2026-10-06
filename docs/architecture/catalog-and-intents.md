@@ -32,3 +32,12 @@ An agent that knows the platform but not the service sends an intent: a descript
   - Routed endpoints rank below registered services.
 - **CI-7** Prices in an intent response are informational. The `402` at call time is binding.
 - **CI-8** Public and rate limited per IP. No key needed.
+
+## As built in step 13
+
+- **The index (CI-1):** the workers' `catalog_index` job runs every minute. It compiles every live service's active revision with the current platform config, and makes `catalog_entries` exactly those. A suspended or pending service leaves at the next run, and a price change shows. Each entry keeps when it was first listed, for `newest`. Search is Postgres full-text (`websearch_to_tsquery('english', q)`) over the title, summary, description, tags, category, and route summaries.
+- **Routed endpoints (CI-2):** `routed_endpoints.last_price` holds the last quote (the target's price and the fee), from the proxy's registration. They follow the registered services, with no category filter or method filter set:
+  - `id` is `routed:<host><path>`, `verified: false`, `stats` zero, and `link` the routing link;
+  - `GET /v1/catalog/{id}` serves registered services only.
+- **Stats (CI-4):** `service_stats`, written every 5 minutes by `service_stats` for the whole service (route `''`) and each keyed route. They count payments with a decision over 30 days. `successRate` is the billable share, and the latencies are p50 and p95 of `upstream_latency_ms`.
+- **Pages:** `limit` is 1 to 100 (default 20). `cursor` is the offset as a string. The category counts follow the other filters. `rateLimits.documents` limits the catalog too.
