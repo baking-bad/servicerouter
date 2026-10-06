@@ -1,26 +1,26 @@
-import type { ServiceId } from '@servicerouter/common';
-
+import { serviceStateFor, type HostState } from '../ownership/state.js';
 import type { ServiceConfigDocument } from './document.js';
 import type { ServiceState } from './runtime.js';
 
 export interface OwnershipStatusInput {
-  readonly serviceId: ServiceId;
+  // Hosts are verified per account (OV-1, OV-3)
+  readonly accountId: string;
   // Each upstream's hostname, once. Every host is verified on its own (OV-3).
   readonly hosts: readonly string[];
 }
 
 /** Port: Ownership verification's answer for the hosts of a service (SR-8, OV-4, OV-5). */
 export interface OwnershipStatus {
-  /** Whether every one of these hosts is verified. */
-  allHostsVerified(input: OwnershipStatusInput): Promise<boolean>;
+  /** The state of each host that has one. A host without a state is `unverified`. */
+  hostStates(input: OwnershipStatusInput): Promise<ReadonlyMap<string, HostState>>;
 }
 
 /**
- * The step 2 adapter (S2-D1): every host counts as verified until Ownership verification ships in
- * step 8, so an activated service is `live`. Step 8 replaces it.
+ * Every host counts as verified, so an activated service is `live`. The step 2 adapter (S2-D1), kept for
+ * tests that aren't about ownership. Production wires the `upstream_hosts` adapter.
  */
 export const assumeHostsVerified: OwnershipStatus = Object.freeze({
-  allHostsVerified: async () => true,
+  hostStates: async ({ hosts }: OwnershipStatusInput) => new Map(hosts.map(host => [host, 'verified' as const])),
 });
 
 /** The upstream hosts of a config, once each, in config order (OV-3). */
@@ -28,8 +28,12 @@ export const getUpstreamHosts = (config: ServiceConfigDocument): readonly string
   [...new Set(config.upstreams.map(upstream => new URL(upstream.baseUrl).hostname))];
 
 /**
- * The state a revision activates in (SR-8): `live` once every upstream host is verified, `pending`
- * until then. `suspended` comes with ownership verification (step 8).
+ * The state a revision activates in (SR-8): `suspended` while any upstream host is, `live` once every
+ * host is verified or in its grace period, `pending` until then.
  */
-export const stateForActivation = async (ownership: OwnershipStatus, serviceId: ServiceId, config: ServiceConfigDocument): Promise<ServiceState> =>
-  await ownership.allHostsVerified({ serviceId, hosts: getUpstreamHosts(config) }) ? 'live' : 'pending';
+export const stateForActivation = async (ownership: OwnershipStatus, accountId: string, config: ServiceConfigDocument): Promise<ServiceState> => {
+  const hosts = getUpstreamHosts(config);
+  const states = await ownership.hostStates({ accountId, hosts });
+
+  return serviceStateFor(hosts.map(host => states.get(host)));
+};

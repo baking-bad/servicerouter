@@ -13,6 +13,8 @@ export interface ServiceRecord {
   readonly state: ServiceState;
   // Set in the transaction that creates the service, so undefined only inside it
   readonly activeRevision: number | undefined;
+  // The active revision's upstream hosts (OV-5). Empty until the first activation.
+  readonly hosts: readonly string[];
   readonly createdAt: Date;
   readonly updatedAt: Date;
 }
@@ -93,8 +95,18 @@ export interface ServiceRepository {
   lock(id: string): Promise<ServiceRecord | undefined>;
   /** Inserts the service unless its ID exists. Returns whether it did. */
   createIfMissing(service: NewService): Promise<boolean>;
-  /** Points the service at a stored revision (SR-7). */
-  activate(input: { readonly id: string; readonly revision: number; readonly state: ServiceState; readonly updatedAt: Date }): Promise<void>;
+  /** Points the service at a stored revision (SR-7), with that revision's upstream hosts (OV-5). */
+  activate(input: {
+    readonly id: string;
+    readonly revision: number;
+    readonly hosts: readonly string[];
+    readonly state: ServiceState;
+    readonly updatedAt: Date;
+  }): Promise<void>;
+  /** Changes the state alone, after an ownership check (OV-5). */
+  setState(input: { readonly id: string; readonly state: ServiceState; readonly updatedAt: Date }): Promise<void>;
+  /** The account's services whose active revision uses the host, each locked until the transaction ends (OV-5). */
+  lockUsingHost(accountId: string, host: string): Promise<readonly ServiceRecord[]>;
   /** Stores a revision. There is no update or delete: revisions are immutable (SR-4). */
   insertRevision(revision: NewServiceRevision): Promise<void>;
   findRevision(id: string, number: number): Promise<ServiceRevision | undefined>;
