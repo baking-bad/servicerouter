@@ -27,6 +27,7 @@
     "fastify": "^5.12.5"
   },
   "devDependencies": {
-    "@servicerouter/testing": "0.1.0"
+    "@servicerouter/testing": "0.1.0",
+    "@servicerouter/workers": "0.1.0"
   }
 }

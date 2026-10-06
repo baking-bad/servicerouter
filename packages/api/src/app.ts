@@ -20,6 +20,7 @@ import { registerAccountRoutes } from './accounts/routes.js';
 import { createAccountService } from './accounts/service.js';
 import { createIpLimit, createSignupLimit } from './accounts/signupLimit.js';
 import { registerAgentDocRoutes } from './agentDocs/routes.js';
+import { registerCatalogRoutes } from './catalog/routes.js';
 import { createAgentDocsService } from './agentDocs/service.js';
 import { registerDepositRoutes } from './deposits/routes.js';
 import { createDepositService } from './deposits/service.js';
@@ -143,6 +144,8 @@ export const createApp = ({
     deposits,
   });
   registerDepositRoutes(app, { deposits, topupLimit: createIpLimit({ limiter, limit: config.rateLimits.topup, name: 'topup' }) });
+  // CI-8: the catalog shares the public documents' per-IP limit
+  registerCatalogRoutes(app, { db: postgres.db, config, clock, limit: createIpLimit({ limiter, limit: config.rateLimits.documents, name: 'catalog' }) });
   registerAgentDocRoutes(app, {
     docs: createAgentDocsService({ db: postgres.db, config, clock }),
     limit: createIpLimit({ limiter, limit: config.rateLimits.documents, name: 'docs' }),

@@ -148,18 +148,23 @@ export const registerInternalRoutes = (app: FastifyInstance, {
     withTransaction(db, tx => auditLog(tx).append({ actor: { kind: 'internal_api', id: callerOf(request) }, action, subject, requestId: request.id, details }));
 
   // RT-12, RT-13: the proxy registers an endpoint that answered 402, once, up to the cap per host (AR17)
-  app.put<{ Body: { readonly host: string; readonly path: string } }>('/internal/v1/routed-endpoints', {
+  app.put<{ Body: { readonly host: string; readonly path: string; readonly quote?: string } }>('/internal/v1/routed-endpoints', {
     schema: { body: {
       type: 'object', required: ['host', 'path'], additionalProperties: false,
-      properties: { host: { type: 'string', maxLength: 253 }, path: { type: 'string', pattern: '^/', maxLength: 2048 } },
+      properties: {
+        host: { type: 'string', maxLength: 253 },
+        path: { type: 'string', pattern: '^/', maxLength: 2048 },
+        // The last quote, in USD, for the catalog (CI-2)
+        quote: { type: 'string', pattern: usdAmountPattern, maxLength: 26 },
+      },
     } },
   }, async (request, reply) => {
-    const { host, path } = request.body;
+    const { host, path, quote } = request.body;
     // The host as the routing link names it: a lowercase DNS name, with a port when one was given
     const [hostname = '', port] = host.split(':');
     if (!hostPattern.test(hostname) || (port !== undefined && !/^\d{1,5}$/.test(port)))
       throw new InvalidRequestError('host must be a lowercase DNS name, with an optional port');
-    const result = await routing.registerEndpoint({ host, path });
+    const result = await routing.registerEndpoint({ host, path, ...quote === undefined ? {} : { lastPrice: parseUsd(quote) } });
     if (result === 'created')
       await audit(request, 'routing.endpoint_register', { kind: 'routed_endpoint', id: `${host}${path}` }, { host, path });
 
