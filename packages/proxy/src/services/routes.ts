@@ -17,8 +17,11 @@ import { parseServicePath } from './path.js';
 // Every method an operation may declare (SR-5). HEAD reaches only operations declared as head (PX-8).
 export const proxiedMethods = ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS', 'TRACE'] as const;
 
-// First path segments the platform keeps for itself (PX-1)
-const platformSegments = new Set(['_', '.well-known']);
+// First path segments the platform keeps for itself (PX-1). Browsers ask for /favicon.ico and
+// crawlers for /robots.txt on their own: neither is a routing link to a host of that name.
+const platformSegments = new Set(['_', '.well-known', 'favicon.ico', 'robots.txt']);
+// Crawlers stay off the pay host: every path on it is a paid call or a routing link to someone else's API
+const robotsTxt = 'User-agent: *\nDisallow: /\n';
 
 export interface ProxyRoutesOptions {
   readonly cache: RuntimeCache<ServiceLoad>;
@@ -97,6 +100,7 @@ export const registerProxyRoutes = (app: FastifyInstance, { cache, http, payUrl,
   // RT-19: the link checker's endpoint
   if (routing)
     app.get<{ Querystring: { readonly url?: string } }>('/_/check', async request => routing.check(request));
+  app.get('/robots.txt', async (_request, reply) => reply.type('text/plain; charset=utf-8').send(robotsTxt));
   // Everything up to the request to the upstream, while the runtime's secrets are leased (SC-5)
   const prepare = async (request: FastifyRequest): Promise<Prepared> => {
     // Dot segments are refused before anything is matched

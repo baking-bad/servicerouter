@@ -653,6 +653,8 @@ describe('dispatch (PX-1)', () => {
     ['service without an ID', '/service', 404],
     ['an unknown platform path', '/_/nothing', 404],
     ['.well-known', '/.well-known/servicerouter.json', 404],
+    ['the favicon a browser asks for, never a routing link to a host favicon.ico', '/favicon.ico', 404],
+    ['a path under robots.txt, never a routing link', '/robots.txt/x', 404],
     ['anything else', '/v1/services', 400],
   ])('answers %s with %i', async (_case, path, status) => {
     const before = upstream.requests.length;
@@ -663,6 +665,17 @@ describe('dispatch (PX-1)', () => {
     expect(await response.json()).toEqual(status === 400
       ? { error: { code: 'invalid_target', message: 'The path must start with /service/<service-id>/' } }
       : { error: { code: 'not_found', message: 'Not found' } });
+    expect(upstream.requests.length).toBe(before);
+  });
+
+  it('answers /robots.txt itself, keeping crawlers off the pay host, never as a routing link (PX-1, RT-1)', async () => {
+    const before = upstream.requests.length;
+
+    const response = await fetch(`${proxyUrl}/robots.txt`);
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('content-type')).toBe('text/plain; charset=utf-8');
+    expect(await response.text()).toBe('User-agent: *\nDisallow: /\n');
     expect(upstream.requests.length).toBe(before);
   });
 
