@@ -8,6 +8,8 @@ import type { CacheLoad } from './cache.js';
 /** A service ready to serve: its compiled runtime, and its secrets opened, by secret name (SC-5). */
 export interface LoadedService {
   readonly runtime: ServiceRuntime;
+  // The seller, who earns from paid calls (LG-7)
+  readonly ownerAccountId: string;
   readonly secrets: ReadonlyMap<string, Secret>;
 }
 
@@ -57,8 +59,9 @@ export const createServiceLoader = ({ services, opener, platform, logger }: Serv
     }
 
     const { runtime } = compiled;
+    const { ownerAccountId } = serving;
     if (runtime.state !== 'live')
-      return { kind: 'value', value: { runtime, secrets: new Map() } };
+      return { kind: 'value', value: { runtime, ownerAccountId, secrets: new Map() } };
 
     // The origin each secret goes to, from the compiled runtime
     const origins = new Map<string, string>();
@@ -95,5 +98,5 @@ export const createServiceLoader = ({ services, opener, platform, logger }: Serv
       }
     }
 
-    return { kind: 'value', value: { runtime, secrets: opened } };
+    return { kind: 'value', value: { runtime, ownerAccountId, secrets: opened } };
   };

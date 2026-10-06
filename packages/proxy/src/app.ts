@@ -1,11 +1,23 @@
 import type { FastifyInstance } from 'fastify';
 
-import { createServer, OutboundHttp, type IdGenerator, type Logger, type Server } from '@servicerouter/common';
-import type { InvalidationBus, PlatformConfig, SecretOpener } from '@servicerouter/core';
-import { createRedisInvalidationBus, createServiceRepository, type Postgres, type Redis } from '@servicerouter/db';
+import {
+  createServer, OutboundHttp, randomIdGenerator, ServiceRouterError, systemClock, type Clock, type IdGenerator, type Logger, type Secret,
+  type Server,
+} from '@servicerouter/common';
+import { RateLimitedError, type InvalidationBus, type PlatformConfig, type RateLimiter, type SecretOpener } from '@servicerouter/core';
+import {
+  createKeyStore, createLedger, createPaymentRepository, createRedisInvalidationBus, createRedisRateLimiter, createServiceRepository,
+  type Postgres, type Redis,
+} from '@servicerouter/db';
+import { createCreditsRail, detectMpp, detectX402 } from '@servicerouter/payments';
 
 import { errorStatuses } from './errors.js';
 import { createProxyMetrics } from './metrics.js';
+import { createBuyerHeaderValue } from './payments/buyer.js';
+import { createKeyCache, type KeyCacheSettings } from './payments/keyCache.js';
+import { createProxyLimits } from './payments/limits.js';
+import { createPaymentStep } from './payments/step.js';
+import { registerKeyRoute } from './platform/key.js';
 import { createRuntimeCache } from './services/cache.js';
 import { createServiceLoader, disposeService, type ServiceLoad } from './services/loader.js';
 import { proxiedMethods, registerProxyRoutes } from './services/routes.js';
@@ -24,6 +36,14 @@ export interface RuntimeCacheSettings {
   readonly noneTtlMs: number;
 }
 
+// Payment key cache defaults (PR-4, AK-9): key events keep entries fresh, the TTL is the safety net
+export const keyCacheDefaults = {
+  maxKeys: 10_000,
+  ttlMs: 60_000,
+  // Unknown hashes, so random keys don't reach Postgres
+  missTtlMs: 10_000,
+} as const satisfies KeyCacheSettings;
+
 export interface ProxyDependencies {
   readonly config: PlatformConfig;
   readonly logger: Logger;
@@ -38,9 +58,20 @@ export interface ProxyDependencies {
   readonly http?: Pick<OutboundHttp, 'request'>;
   // Where runtime changes are announced (SR-7). Default: the Redis channel, closed with the app.
   readonly invalidation?: InvalidationBus;
-  // Milliseconds since the epoch, for the cache's TTLs. Default: Date.now.
+  // Milliseconds since the epoch, for the caches' TTLs. Default: Date.now.
   readonly now?: () => number;
   readonly runtimeCache?: Partial<RuntimeCacheSettings>;
+  readonly keyCache?: Partial<KeyCacheSettings>;
+  // BUYER_HEADER_KEY, the buyer header's HMAC key (PX-15). See `readBuyerHeaderKey`.
+  readonly buyerHeaderKey: Secret;
+  // Payment and ledger times, key expiry, and the UTC day (CK-5). Default: the system clock.
+  readonly clock?: Clock;
+  // Payment and ledger IDs. Default: random UUIDs.
+  readonly ids?: IdGenerator;
+  // PX-13. Default: fixed windows in Redis.
+  readonly rateLimiter?: RateLimiter;
+  // The proxies in front, such as Traefik, whose X-Forwarded-For gives the client IP for the unpaid limit
+  readonly trustProxy?: string;
 }
 
 export interface ProxyServer extends Server {
@@ -65,6 +96,9 @@ const preflightHeaders = {
   'access-control-max-age': '600',
 } as const;
 
+// A 401 names the scheme it expects
+const keyErrorCodes = new Set(['unauthorized', 'invalid_key', 'wrong_key_type']);
+
 const registerResponseHeaders = (app: FastifyInstance): void => {
   // A CORS preflight is answered here, before any route: it never reaches an upstream
   app.addHook('onRequest', async (request, reply) => {
@@ -73,16 +107,25 @@ const registerResponseHeaders = (app: FastifyInstance): void => {
 
     return undefined;
   });
-  // Every response, proxied or not, including errors
+  // Headers that belong to an error: Retry-After on 429 (PX-13), the scheme on 401
+  app.addHook('onError', async (_request, reply, error) => {
+    if (error instanceof RateLimitedError)
+      reply.header('retry-after', String(error.retryAfterSeconds));
+    else if (error instanceof ServiceRouterError && keyErrorCodes.has(error.code))
+      reply.header('www-authenticate', 'Bearer');
+  });
+  // Every response, proxied or not, including errors. A 402 is never cached (PR-2).
   app.addHook('onSend', async (_request, reply, payload) => {
     reply.headers({ ...securityHeaders, ...corsHeaders });
+    if (reply.statusCode === 402)
+      reply.header('cache-control', 'no-store');
 
     return payload;
   });
 };
 
 /**
- * The proxy on pay.servicerouter.ai (PX-1 to PX-10, PX-16). Readiness covers Postgres and Redis.
+ * The proxy on pay.servicerouter.ai (PX-1 to PX-16). Readiness covers Postgres and Redis.
  * Facilitators join it with x402 (PX-17).
  */
 export const createApp = ({
@@ -96,11 +139,18 @@ export const createApp = ({
   invalidation,
   now,
   runtimeCache = {},
+  keyCache: keyCacheSettings = {},
+  buyerHeaderKey,
+  clock = systemClock,
+  ids = randomIdGenerator,
+  rateLimiter = createRedisRateLimiter({ redis }),
+  trustProxy,
 }: ProxyDependencies): ProxyServer => {
   const server = createServer({
     logger,
     errorStatuses,
     requestIds,
+    trustProxy,
     bodyLimit: config.sizeLimits.requestBodyBytes,
     readinessChecks: [
       { name: 'postgres', check: () => postgres.ping() },
@@ -135,19 +185,58 @@ export const createApp = ({
     noneTtlMs: settings.noneTtlMs,
     onLookup: result => metrics.cacheLookup(result),
   });
-  registerProxyRoutes(app, { cache, http: upstreams, payUrl: config.urls.pay, metrics });
 
-  // Invalidation (SR-7, SC-7): drop a service when it changes, and everything after a missed stretch
+  // Payments (PR-1 to PR-4, PR-10): the credits rail, with keys from a short cache (AK-9)
+  const keys = createKeyCache({
+    ...keyCacheDefaults,
+    ...keyCacheSettings,
+    store: createKeyStore({ db: postgres.db }),
+    now,
+    onLookup: result => metrics.keyCacheLookup(result),
+  });
+  const ledger = createLedger({ db: postgres.db, clock, ids });
+  const credits = createCreditsRail({
+    keys,
+    ledger,
+    clock,
+    keyPrefixes: config.keyPrefixes,
+    signupUrl: `${config.urls.api.replace(/\/+$/, '')}/v1/accounts`,
+    guideUrl: `${config.urls.website.replace(/\/+$/, '')}/llms.txt`,
+  });
+  const limits = createProxyLimits({ limiter: rateLimiter, limits: config.rateLimits, logger, metrics });
+  const payments = createPaymentStep({
+    rails: [credits],
+    // x402 (step 5) and MPP (step 7) are detected already, so two credentials of any kind get 400
+    detectors: [credits.detect, detectX402, detectMpp],
+    recorder: createPaymentRepository({ db: postgres.db, clock }),
+    limits,
+    buyerHeaderValue: createBuyerHeaderValue(buyerHeaderKey),
+    ids,
+    feeBps: config.feeBps,
+    payUrl: config.urls.pay,
+    logger,
+    metrics,
+  });
+  registerKeyRoute(app, { credits, limits, ledger, clock });
+  registerProxyRoutes(app, { cache, http: upstreams, payUrl: config.urls.pay, metrics, payments });
+  // Shutdown finishes or releases the holds of the last responses (PX-18)
+  app.addHook('onClose', async () => payments.drain());
+
+  // Invalidation (SR-7, SC-7, AK-9): drop a service or a key when it changes, and everything after a
+  // missed stretch
   const ownedBus = invalidation ? undefined : createRedisInvalidationBus({ redis, logger });
   const bus = invalidation ?? ownedBus!;
   const subscription = bus.subscribe(event => {
     metrics.invalidation(event.kind);
     if (event.kind === 'service')
       cache.invalidate(event.id);
+    else if (event.kind === 'key')
+      keys.invalidate(event.id);
   }, {
     onReconnect: () => {
       metrics.reconnect();
       cache.clear();
+      keys.clear();
     },
   });
   let closing = false;
@@ -163,6 +252,7 @@ export const createApp = ({
     void subscription.then(unsubscribe => unsubscribe(), () => undefined);
     await ownedBus?.close();
     cache.clear();
+    keys.clear();
   });
 
   return { ...server, subscribed };

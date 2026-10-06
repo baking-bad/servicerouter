@@ -5,6 +5,7 @@ import { declaresStatus, normalizePathText, type RuntimeOperation } from '@servi
 
 import { InvalidTargetError, NotFoundError, ServiceSuspendedError, UpstreamUnavailableError } from '../errors.js';
 import type { ProxyMetrics } from '../metrics.js';
+import type { PaidCall, PaymentStep } from '../payments/step.js';
 import type { RuntimeCache } from './cache.js';
 import { buildUpstreamRequest, createSelfLinkRewriter, filterResponseHeaders, type UpstreamRequest } from './forward.js';
 import type { ServiceLoad } from './loader.js';
@@ -23,11 +24,16 @@ export interface ProxyRoutesOptions {
   // The canonical pay URL from platform config (PX-10)
   readonly payUrl: string;
   readonly metrics: ProxyMetrics;
+  // Runs the payment rails around the forward, for an operation with a price (rule 5)
+  readonly payments: PaymentStep;
 }
 
 interface Prepared {
   readonly serviceId: string;
+  readonly ownerAccountId: string;
   readonly operation: RuntimeOperation;
+  // The path after the service ID, such as `/weather/oslo`
+  readonly path: string;
   readonly upstreamRequest: UpstreamRequest;
 }
 
@@ -47,10 +53,11 @@ const dispatch = async (request: FastifyRequest): Promise<never> => {
 };
 
 /**
- * `/service/<service-id>/<path>` (PX-1 to PX-10): checks the path, finds the runtime, matches the
- * operation, and forwards to its upstream with the seller's credentials.
+ * `/service/<service-id>/<path>` (PX-1 to PX-12): checks the path, finds the runtime, matches the
+ * operation, takes the payment for a priced one, and forwards to its upstream with the seller's
+ * credentials. An operation priced at 0 is free: no payment step.
  */
-export const registerProxyRoutes = (app: FastifyInstance, { cache, http, payUrl, metrics }: ProxyRoutesOptions): void => {
+export const registerProxyRoutes = (app: FastifyInstance, { cache, http, payUrl, metrics, payments }: ProxyRoutesOptions): void => {
   // Everything up to the request to the upstream, while the runtime's secrets are leased (SC-5)
   const prepare = async (request: FastifyRequest): Promise<Prepared> => {
     // Dot segments are refused before anything is matched
@@ -66,7 +73,7 @@ export const registerProxyRoutes = (app: FastifyInstance, { cache, http, payUrl,
       if (found.value === 'unavailable')
         throw new UpstreamUnavailableError();
 
-      const { runtime, secrets } = found.value;
+      const { runtime, secrets, ownerAccountId } = found.value;
       if (runtime.state === 'suspended')
         throw new ServiceSuspendedError();
       if (runtime.state !== 'live')
@@ -78,7 +85,9 @@ export const registerProxyRoutes = (app: FastifyInstance, { cache, http, payUrl,
 
       return {
         serviceId,
+        ownerAccountId,
         operation: match.operation,
+        path: `/${segments.join('/')}`,
         upstreamRequest: buildUpstreamRequest({ match, query, headers: request.headers, requestId: request.id, secrets }),
       };
     }
@@ -88,19 +97,39 @@ export const registerProxyRoutes = (app: FastifyInstance, { cache, http, payUrl,
   };
 
   const serve = async (request: FastifyRequest, reply: FastifyReply): Promise<FastifyReply> => {
-    const { serviceId, operation, upstreamRequest } = await prepare(request);
+    const { serviceId, ownerAccountId, operation, path, upstreamRequest } = await prepare(request);
+    // Rule 5: authorize before forwarding. No credential gets the combined 402 (PR-2).
+    let paid: PaidCall | undefined;
+    let headers = upstreamRequest.headers;
+    if (operation.price > 0n) {
+      const payment = await payments.begin({
+        headers: request.headers, ip: request.ip, requestId: request.id, serviceId, ownerAccountId, operation, path,
+      });
+      if (payment.kind === 'challenge')
+        return reply.status(payment.response.status).headers(payment.response.headers).send(payment.response.body);
+
+      paid = payment.call;
+      headers = { ...headers, ...payment.upstreamHeaders };
+    }
+
     // A client that goes away stops the upstream call too
     const abort = new AbortController();
     reply.raw.once('close', () => abort.abort());
 
     const started = performance.now();
     const seconds = () => (performance.now() - started) / 1_000;
+    // No usable answer: nothing is billable, and the payment goes back before the opaque 503 (PX-7)
+    const unavailable = async (): Promise<never> => {
+      if (paid)
+        await payments.finish(paid, await payments.decide(paid, { status: undefined, latencyMs: Math.round(seconds() * 1_000) }));
+      throw new UpstreamUnavailableError();
+    };
     let response: OutboundResponse;
     try {
       response = await http.request({
         url: upstreamRequest.url,
         method: request.method,
-        headers: upstreamRequest.headers,
+        headers,
         body: request.body as Buffer | undefined,
         // Forward, never redirect (PX-2, OH-3)
         redirect: 'none',
@@ -110,7 +139,7 @@ export const registerProxyRoutes = (app: FastifyInstance, { cache, http, payUrl,
     catch (error) {
       metrics.upstream(serviceId, { reason: reasonOf(error) }, seconds());
       request.log.warn({ serviceId, error }, 'The upstream call failed');
-      throw new UpstreamUnavailableError();
+      return unavailable();
     }
 
     // PX-7: a status the operation doesn't declare is as opaque as a failure
@@ -118,12 +147,25 @@ export const registerProxyRoutes = (app: FastifyInstance, { cache, http, payUrl,
       response.dispose();
       metrics.upstream(serviceId, { reason: 'undeclared_status' }, seconds());
       request.log.warn({ serviceId, status: response.status }, 'The upstream answered with a status the operation doesn\'t declare');
-      throw new UpstreamUnavailableError();
+      return unavailable();
     }
 
     metrics.upstream(serviceId, { status: response.status }, seconds());
     const rewrite = createSelfLinkRewriter({ payUrl, serviceId, upstream: operation.upstream, requestUrl: response.url });
     reply.status(response.status).headers(filterResponseHeaders(response.headers, rewrite));
+    if (paid) {
+      // Decide and record (rule 5, PX-11), then finalize once the response is out or the client has
+      // gone, even while the decision is still being written. A client that leaves after the decision
+      // still follows it.
+      const call = paid;
+      const deciding = payments.decide(call, { status: response.status, latencyMs: Math.round(seconds() * 1_000) });
+      reply.raw.once('close', () => {
+        void (async () => payments.finish(call, await deciding))();
+      });
+      const decision = await deciding;
+      if (decision === 'billable')
+        reply.headers(call.authorization.receipt?.headers ?? {});
+    }
     if (request.method === 'HEAD' || response.status === 204 || response.status === 304) {
       response.dispose();
       return reply.send();

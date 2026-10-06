@@ -7,12 +7,35 @@ export const errorStatuses = {
   invalid_target: 400,
   // Dot segments, raw or encoded (PX-4)
   invalid_path: 400,
+  // Two or more payment credentials (PR-1)
+  multiple_payment_methods: 400,
+  // GET /_/key without a payment key (AK-8)
+  unauthorized: 401,
+  // An unknown, revoked, expired, or malformed payment key, and a master key (AK-4, PR-4)
+  invalid_key: 401,
+  wrong_key_type: 401,
+  // The hold or the key's limits refused the price (PR-4, LG-6)
+  insufficient_balance: 402,
+  key_budget_exceeded: 402,
+  key_allowance_exceeded: 402,
+  key_price_limit: 402,
   // PX-4
   service_suspended: 403,
   not_found: 404,
+  // PX-13
+  rate_limited: 429,
   // PX-7
   upstream_unavailable: 503,
 } as const satisfies ErrorStatusTable;
+
+/** `GET /_/key` without a payment key (AK-8). */
+export class KeyRequiredError extends ServiceRouterError {
+  readonly code = 'unauthorized';
+
+  constructor() {
+    super('GET /_/key needs a payment key: Authorization: Bearer <key>');
+  }
+}
 
 /** The first path segment isn't `service`, a platform path, or a hostname (PX-1). */
 export class InvalidTargetError extends ServiceRouterError {
