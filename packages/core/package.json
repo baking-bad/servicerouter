@@ -19,6 +19,7 @@
     "test": "vitest run --root ../.. --project core"
   },
   "dependencies": {
+    "@evolution-sdk/evolution": "0.5.17",
     "@servicerouter/common": "0.1.0",
     "ajv": "^8.20.0"
   }

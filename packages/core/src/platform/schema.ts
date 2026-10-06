@@ -64,10 +64,11 @@ export const platformConfigSchema: SchemaObject = {
       enabled: boolean,
     }, ['name', 'url', 'networks']), { minItems: 1 }),
     mpp: object({ network: networkId, recipient: addressText, enabled: boolean, rpcUrl: httpsUrl }, ['network', 'recipient']),
+    deposits: object({ asset: assetName, confirmations: integer(1, 2160), enabled: boolean, blockfrostUrl: httpUrl }, ['asset']),
     payouts: object({ assets: array(assetName, { minItems: 1, uniqueItems: true }), minimum: usdAmount }, ['assets']),
     categories: array(object({ id: categoryId, title: text(60) }, ['id', 'title']), { minItems: 1 }),
     rateLimits: object(
-      { paymentKey: rateLimit, service: rateLimit, unpaidIp: rateLimit, signup: rateLimit },
+      { paymentKey: rateLimit, service: rateLimit, unpaidIp: rateLimit, signup: rateLimit, topup: rateLimit },
       ['paymentKey', 'service', 'unpaidIp', 'signup'],
     ),
     timeouts: object({ connectMs: positive, requestMs: positive, settleMs: positive }),

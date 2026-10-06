@@ -16,4 +16,14 @@ export const platformDefaults = {
   sizeLimits: { requestBodyBytes: 1024 * 1024, bufferedResponseBytes: 10 * 1024 * 1024 },
   // AR8: $1 per call, $100 a day per network. No hourly limit unless set.
   signer: { maxPerCall: '1', maxPerNetworkPerDay: '100' },
+  // DP-3: blocks on top of a deposit's, its own included, before it is credited. About 5 minutes on Cardano.
+  depositConfirmations: 15,
+  // PA-5: GET /v1/topup/{token} per client IP
+  topupRateLimit: { requests: 60, windowSeconds: 60 },
+  // DP-2: Blockfrost's base URL per network
+  blockfrostUrls: {
+    'cardano:mainnet': 'https://cardano-mainnet.blockfrost.io/api/v0',
+    'cardano:preprod': 'https://cardano-preprod.blockfrost.io/api/v0',
+    'cardano:preview': 'https://cardano-preview.blockfrost.io/api/v0',
+  } as Readonly<Record<string, string>>,
 } as const;

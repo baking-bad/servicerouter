@@ -52,6 +52,17 @@ export interface MppDocument {
   readonly rpcUrl?: string;
 }
 
+export interface DepositsDocument {
+  // A Cardano asset in the registry: deposits of it are credited 1:1 in USD (DP-4). Its network is where deposit addresses live.
+  readonly asset: string;
+  // Blocks before a deposit is credited, its own included (DP-3). Default: 15.
+  readonly confirmations?: number;
+  // Default: true. Disabled, signup creates no deposit address and the watcher doesn't run.
+  readonly enabled?: boolean;
+  // Blockfrost's base URL. Default: Blockfrost's for the asset's network.
+  readonly blockfrostUrl?: string;
+}
+
 export interface PayoutsDocument {
   readonly assets: readonly string[];
   readonly minimum?: string;
@@ -72,6 +83,7 @@ export interface RateLimitsDocument {
   readonly service: RateLimitDocument;
   readonly unpaidIp: RateLimitDocument;
   readonly signup: RateLimitDocument;
+  readonly topup?: RateLimitDocument;
 }
 
 export interface TimeoutsDocument {
@@ -113,6 +125,7 @@ export interface PlatformConfigDocument {
   readonly assets: readonly AssetDocument[];
   readonly facilitators: readonly FacilitatorDocument[];
   readonly mpp: MppDocument;
+  readonly deposits?: DepositsDocument;
   readonly payouts: PayoutsDocument;
   readonly categories: readonly CategoryDocument[];
   readonly rateLimits: RateLimitsDocument;

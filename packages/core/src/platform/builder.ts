@@ -128,6 +128,17 @@ export const checkPlatformConfig = (document: PlatformConfigDocument): readonly 
     if (!assetNames.has(name))
       add(['payouts', 'assets', index], `is not in the asset registry`);
   }
+
+  // DP-1, DP-4: deposits are a Cardano asset of the registry, read through Blockfrost
+  if (document.deposits) {
+    const asset = document.assets.find(item => item.name === document.deposits!.asset);
+    if (!asset)
+      add(['deposits', 'asset'], 'is not in the asset registry');
+    else if (findNetwork(asset.network)?.chain !== 'cardano')
+      add(['deposits', 'asset'], 'must be a Cardano asset: deposit addresses are on Cardano');
+    else if (!document.deposits.blockfrostUrl && !platformDefaults.blockfrostUrls[asset.network])
+      add(['deposits', 'blockfrostUrl'], `is required: Blockfrost has no default URL for ${asset.network}`);
+  }
   checkAmount(['payouts', 'minimum'], document.payouts.minimum);
   checkAmount(['paymentKeyDefaults', 'dailyBudget'], document.paymentKeyDefaults?.dailyBudget);
   checkAmount(['signer', 'maxPerCall'], document.signer?.maxPerCall);
@@ -173,6 +184,9 @@ export const buildPlatformConfig = (document: PlatformConfigDocument, locator?: 
     payTo: asset.payTo,
   }));
   const { timeouts, sizeLimits, signer } = platformDefaults;
+  const depositAsset = document.deposits && (document.deposits.enabled ?? true)
+    ? assets.find(asset => asset.name === document.deposits!.asset)
+    : undefined;
 
   return deepFreeze<PlatformConfig>({
     version: document.version,
@@ -198,6 +212,14 @@ export const buildPlatformConfig = (document: PlatformConfigDocument, locator?: 
       enabled: document.mpp.enabled ?? true,
       rpcUrl: document.mpp.rpcUrl,
     },
+    deposits: depositAsset && document.deposits
+      ? {
+        asset: depositAsset,
+        network: depositAsset.network,
+        confirmations: document.deposits.confirmations ?? platformDefaults.depositConfirmations,
+        blockfrostUrl: (document.deposits.blockfrostUrl ?? platformDefaults.blockfrostUrls[depositAsset.network.id]!).replace(/\/+$/, ''),
+      }
+      : undefined,
     payouts: {
       assets: [...document.payouts.assets],
       minimum: usd(document.payouts.minimum, platformDefaults.minimumPayout),
@@ -208,6 +230,7 @@ export const buildPlatformConfig = (document: PlatformConfigDocument, locator?: 
       service: { ...document.rateLimits.service },
       unpaidIp: { ...document.rateLimits.unpaidIp },
       signup: { ...document.rateLimits.signup },
+      topup: { ...document.rateLimits.topup ?? platformDefaults.topupRateLimit },
     },
     timeouts: { ...timeouts, ...document.timeouts },
     sizeLimits: { ...sizeLimits, ...document.sizeLimits },
