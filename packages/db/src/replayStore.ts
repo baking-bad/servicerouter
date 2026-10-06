@@ -1,11 +1,15 @@
+import { randomInt } from 'node:crypto';
+import { setTimeout as sleep } from 'node:timers/promises';
+
 import { WatchError } from 'redis';
 
 import { closeRedisClient, RedisNotReadyError, type Redis, type RedisClient } from './redis.js';
 
 // The key space after the connection's prefix (section 5: `mpp:*`)
 export const replayKeyPrefix = 'mpp:';
-// How often an update retries when another writer changed its key meanwhile
-const maxUpdateAttempts = 10;
+// How often an update tries when other writers keep changing its key meanwhile. Each lost try backs
+// off a few milliseconds at random, so two writers don't keep colliding.
+const maxUpdateAttempts = 100;
 
 /** A store update's outcome, as `mppx`'s `Store.Change`: keep, write, or delete the value. */
 export type ReplayStoreChange<TResult> =
@@ -79,6 +83,7 @@ export const createRedisReplayStore = ({ redis }: RedisReplayStoreOptions): Redi
       catch (error) {
         if (!(error instanceof WatchError) || attempt >= maxUpdateAttempts)
           throw error;
+        await sleep(randomInt(1, 2 + Math.min(attempt, 20)));
       }
     }
   };
