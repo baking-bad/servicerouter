@@ -8,5 +8,7 @@
 !config/
 !config/**
 packages/*/dist/
+packages/*/.next/
+packages/*/.next-*/
 packages/*/node_modules/
 **/.DS_Store

@@ -155,7 +155,7 @@ jobs:
         run: npm run test:functional
 
   publish:
-    name: Build and push image
+    name: Build and push images
     needs:
       - build
       - unit
@@ -202,3 +202,26 @@ jobs:
           cache-to: type=gha,scope=runtime,mode=max
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+
+      # The website builds separately into its own image (WB-6)
+      - name: Extract Docker metadata for the website
+        id: meta-web
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ env.DOCKER_REGISTRY }}/${{ env.DOCKER_IMAGE_NAME }}-web
+          tags: |
+            type=ref,event=branch
+            type=sha
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push the website image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: packages/web/Dockerfile
+          target: runtime
+          push: true
+          cache-from: type=gha,scope=web
+          cache-to: type=gha,scope=web,mode=max
+          tags: ${{ steps.meta-web.outputs.tags }}
+          labels: ${{ steps.meta-web.outputs.labels }}

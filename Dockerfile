@@ -5,8 +5,9 @@ WORKDIR /app
 COPY package.json package-lock.json tsconfig.json tsconfig.base.json ./
 COPY packages ./packages
 RUN --mount=type=cache,target=/root/.npm npm ci
-RUN npm run build
-RUN rm -rf packages/*/src packages/*/tests packages/*/tsconfig*.json packages/*/drizzle.config.ts packages/*/dist/.tsbuildinfo
+# The TypeScript packages only: the website builds into its own image (packages/web/Dockerfile)
+RUN npx tsc -b
+RUN rm -rf packages/web packages/*/src packages/*/tests packages/*/tsconfig*.json packages/*/drizzle.config.ts packages/*/dist/.tsbuildinfo
 
 FROM node:24-alpine AS runtime
 WORKDIR /app

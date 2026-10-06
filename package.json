@@ -8,13 +8,14 @@
     "node": ">=24"
   },
   "scripts": {
-    "build": "tsc -b",
+    "build": "tsc -b && npm run build -w @servicerouter/web",
     "watch": "tsc -b --watch",
     "clean": "tsc -b --clean",
-    "dev": "tsc -b && concurrently --kill-others --names tsc,proxy,api --prefix-colors gray,cyan,magenta \"tsc -b --watch --preserveWatchOutput\" \"npm:dev:proxy\" \"npm:dev:api\"",
+    "dev": "tsc -b && concurrently --kill-others --names tsc,proxy,api,web --prefix-colors gray,cyan,magenta,green \"tsc -b --watch --preserveWatchOutput\" \"npm:dev:proxy\" \"npm:dev:api\" \"npm:dev:web\"",
     "dev:proxy": "node --env-file-if-exists=.env --watch packages/proxy/dist/main.js",
     "dev:api": "node --env-file-if-exists=.env --watch packages/api/dist/main.js",
-    "typecheck": "npm run build && npm run typecheck --workspaces",
+    "dev:web": "next dev packages/web --port 3000",
+    "typecheck": "tsc -b && npm run typecheck --workspaces",
     "test": "vitest run --project '!*:*'",
     "test:integration": "vitest run --project '*:integration'",
     "test:functional": "vitest run --project '*:functional'",
