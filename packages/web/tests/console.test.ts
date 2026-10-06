@@ -105,7 +105,7 @@ const recordingFetch = (answer: (url: URL, init: RequestInit) => Response = () =
 describe('the console\'s Platform API client (WB-8, WB-2)', () => {
   it('sends the master key only to API_URL, in Authorization, never in a URL', async () => {
     const { calls, fetch } = recordingFetch(url => jsonAnswer(url.pathname === '/v1/keys' ? { keys: [] } : url.pathname === '/v1/services' ? { services: [] } : {}));
-    const api = createHttpConsoleApi({ apiUrl, key: masterKey, statusMocked: false, fetch });
+    const api = createHttpConsoleApi({ apiUrl, key: masterKey, fetch });
 
     await api.account();
     await api.balance();
@@ -151,21 +151,19 @@ describe('the console\'s Platform API client (WB-8, WB-2)', () => {
     expect(calls[0]!.headers['authorization']).toBeUndefined();
   });
 
-  it('reads ownership status from the API, or sample status while the status group is mocked (OV-7, WB-10)', async () => {
+  it('reads a signed-in account\'s ownership status from the API, never sample data; only the sample console has sample status (OV-7, WB-10)', async () => {
     const live = recordingFetch(() => jsonAnswer({ id: 'my-weather', verificationToken: 'sr-verify=abc', hosts: [], payoutConfirmation: null, notices: [] }));
     const service = { id: 'my-weather', state: 'live', revision: 2, config: { mediaType: 'application/yaml', text: 'baseUrl: https://api.weather.example\n' }, secrets: [], createdAt: now.toISOString(), updatedAt: now.toISOString() } as const;
 
-    const status = await createHttpConsoleApi({ apiUrl, key: masterKey, statusMocked: false, fetch: live.fetch }).status(service);
-    const verified = await createHttpConsoleApi({ apiUrl, key: masterKey, statusMocked: false, fetch: live.fetch }).verify(service);
+    const status = await createHttpConsoleApi({ apiUrl, key: masterKey, fetch: live.fetch }).status(service);
+    const verified = await createHttpConsoleApi({ apiUrl, key: masterKey, fetch: live.fetch }).verify(service);
 
     expect(status).toEqual({ value: expect.objectContaining({ verificationToken: 'sr-verify=abc' }), sample: false });
     expect(verified.sample).toBe(false);
     expect(live.calls.map(call => `${call.method} ${call.url.pathname}`)).toEqual(['GET /v1/services/my-weather/status', 'POST /v1/services/my-weather/verify']);
 
-    const mocked = recordingFetch();
-    const sample = await createHttpConsoleApi({ apiUrl, key: masterKey, statusMocked: true, fetch: mocked.fetch }).status(service);
+    const sample = await createSampleConsoleApi(() => now).status(service);
 
-    expect(mocked.calls).toHaveLength(0);
     expect(sample.sample).toBe(true);
     expect(sample.value.hosts.map(host => [host.host, host.state])).toEqual([['api.weather.example', 'verified']]);
   });
@@ -173,7 +171,7 @@ describe('the console\'s Platform API client (WB-8, WB-2)', () => {
   it('keeps the API\'s error code and message (PA-3)', async () => {
     const { fetch } = recordingFetch(() => jsonAnswer({ error: { code: 'wrong_key_type', message: 'This is a payment key. The console takes the master key.' } }, 401));
 
-    await expect(createHttpConsoleApi({ apiUrl, key: 'sr_test_payment', statusMocked: true, fetch }).account()).rejects.toMatchObject({
+    await expect(createHttpConsoleApi({ apiUrl, key: 'sr_test_payment', fetch }).account()).rejects.toMatchObject({
       status: 401, code: 'wrong_key_type', message: 'This is a payment key. The console takes the master key.',
     });
   });
@@ -182,7 +180,7 @@ describe('the console\'s Platform API client (WB-8, WB-2)', () => {
     let status = 401;
     const { fetch } = recordingFetch(() => jsonAnswer({ error: { code: 'invalid_key', message: 'The key isn\'t valid' } }, status));
     const onUnauthorized = vi.fn();
-    const api = signingOutOnUnauthorized(createHttpConsoleApi({ apiUrl, key: masterKey, statusMocked: true, fetch }), onUnauthorized);
+    const api = signingOutOnUnauthorized(createHttpConsoleApi({ apiUrl, key: masterKey, fetch }), onUnauthorized);
 
     await expect(api.revokeKey('key_1')).rejects.toBeInstanceOf(ApiError);
     expect(onUnauthorized).toHaveBeenCalledTimes(1);

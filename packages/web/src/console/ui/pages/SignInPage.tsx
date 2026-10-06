@@ -29,7 +29,7 @@ export const SignInPage = () => {
     setError(undefined);
     try {
       // GET /v1/account checks the key; a payment key gets wrong_key_type with the reason (AK-4)
-      await createHttpConsoleApi({ apiUrl: settings.apiUrl, key: key.trim(), statusMocked: settings.statusMocked }).account();
+      await createHttpConsoleApi({ apiUrl: settings.apiUrl, key: key.trim() }).account();
       signIn({ kind: 'key', key: key.trim() });
     }
     catch (caught) {

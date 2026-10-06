@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import type { CatalogItem, CatalogService } from '../../src/api/types';
+import type { CatalogItem, CatalogService, Topup } from '../../src/api/types';
 import { logoPaths } from '../../src/logo';
 import { sampleTopup } from '../../src/mocks/topup';
 
@@ -73,6 +73,14 @@ const routedItem: CatalogItem = {
   category: '', tags: [], priceFrom: '0.01', currency: 'USD', methods: ['credits', 'x402', 'mpp'], stats: { calls30d: 0, successRate: 0, p50Ms: 0, p95Ms: 0 },
   verified: false, updatedAt: fixtureTime(0, 6, 10, 0, 0, 0), link: `${pay}/api.paid.example/v1/data`,
 };
+// A buyer's real top-up link, as the API issues it: 32 base64url characters
+const realToken = 'Rk3vQ9xT2mLpA7cZ0yBn4WsE8uHfJd6G';
+const realTopup: Topup = {
+  address: 'addr1q9realbuyeraddressfromtheplatformapi0000000000000000000000000000000000000',
+  asset: { name: 'cardano-usdm', symbol: 'USDM', network: 'cardano:mainnet', networkTitle: 'Cardano' },
+  confirmationsRequired: 15,
+  deposits: [],
+};
 const apiRequests: string[] = [];
 const fakeApi: Server = createServer((request, response) => {
   apiRequests.push(request.url ?? '');
@@ -82,6 +90,8 @@ const fakeApi: Server = createServer((request, response) => {
     json(200, { services: [realItem satisfies CatalogItem, routedItem], categories: [{ id: 'weather', title: 'Weather', count: 1 }], next: null });
   else if (path === '/v1/catalog/real-weather')
     json(200, realService);
+  else if (path === `/v1/topup/${realToken}`)
+    json(200, realTopup);
   else
     json(404, { error: { code: 'not_found', message: 'Not found' } });
 });
@@ -102,8 +112,8 @@ beforeAll(async () => {
   const apiUrl = `http://127.0.0.1:${(fakeApi.address() as AddressInfo).port}`;
   [sampled, real] = await Promise.all([
     // The API is never called while everything is sample data
-    startSite({ API_URL: 'http://127.0.0.1:9', WEB_MOCKS: 'catalog,agent-docs,topup,status' }),
-    startSite({ API_URL: apiUrl, WEB_MOCKS: 'agent-docs,topup,status' }),
+    startSite({ API_URL: 'http://127.0.0.1:9', WEB_MOCKS: 'catalog,agent-docs,topup' }),
+    startSite({ API_URL: apiUrl, WEB_MOCKS: 'agent-docs,topup' }),
   ]);
 }, 300_000);
 
@@ -298,6 +308,21 @@ describe('the top-up page (WB-3)', () => {
     expect(body).toContain('Never send funds to it');
     expect(body).toContain('3<!-- -->/<!-- -->15');
     expect(body).toContain('Not credited');
+  });
+
+  it('shows a buyer\'s real link from the Platform API even while top-up samples are on, never the sample address (DP-5, WB-10, T15 round 1)', async () => {
+    const { response, body } = await page(`/topup/${realToken}`, undefined, real);
+    const markdown = await page(`/topup/${realToken}.md`, undefined, real);
+    const unknown = await page('/topup/Zz9ZZzz9ZZzz9ZZzz9ZZzz9ZZzz9ZZzz', undefined, real);
+
+    expect(response.status).toBe(200);
+    expect(body).toContain(realTopup.address);
+    expect(body).not.toContain(sampleTopup('x').address);
+    expect(body).not.toContain('data-sample="true"');
+    expect(markdown.body).toContain(realTopup.address);
+    expect(apiRequests).toContain(`/v1/topup/${realToken}`);
+    expect(unknown.response.status).toBe(404);
+    expect(unknown.body).not.toContain(sampleTopup('x').address);
   });
 });
 

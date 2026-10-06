@@ -2,7 +2,6 @@ import { ApiError, callApi } from '../api/http';
 import type {
   Account, Balance, CreatedKey, Earnings, KeyLimits, OwnedService, PaymentKey, PaymentPage, Revision, ServiceDetail, ServiceStatus, Signup,
 } from './types';
-import { sampleStatus } from './sample';
 
 // The console's calls (WB-8). In the browser they go straight to the Platform API with the master key in
 // Authorization (WB-2): the web server never sees the key.
@@ -22,7 +21,7 @@ export interface ConsoleApi {
   revisions(id: string): Promise<readonly Revision[]>;
   rollback(id: string, revision: number): Promise<{ readonly revision: number; readonly state: string }>;
   earnings(id: string): Promise<Earnings>;
-  // Ownership status (OV-7), sample data while the `status` group of WEB_MOCKS is on (WB-10)
+  // Ownership status (OV-7). Sample data only in the sample console (WB-10).
   status(service: ServiceDetail): Promise<{ readonly value: ServiceStatus; readonly sample: boolean }>;
   /** Checks every upstream host now (OV-6), and returns the new status. */
   verify(service: ServiceDetail): Promise<{ readonly value: ServiceStatus; readonly sample: boolean }>;
@@ -33,14 +32,12 @@ export interface ConsoleApi {
 export interface HttpConsoleOptions {
   readonly apiUrl: string;
   readonly key: string;
-  // Whether service status is still sample data
-  readonly statusMocked: boolean;
   readonly fetch?: typeof fetch;
 }
 
 const path = (id: string): string => `/v1/services/${encodeURIComponent(id)}`;
 
-export const createHttpConsoleApi = ({ apiUrl, key, statusMocked, fetch: fetchFn }: HttpConsoleOptions): ConsoleApi => {
+export const createHttpConsoleApi = ({ apiUrl, key, fetch: fetchFn }: HttpConsoleOptions): ConsoleApi => {
   const call = <TResult>(method: string, route: string, body?: unknown): Promise<TResult> =>
     callApi<TResult>(apiUrl, { method, path: route, key, ...(body === undefined ? {} : { body }), ...(fetchFn ? { fetch: fetchFn } : {}) });
 
@@ -60,12 +57,8 @@ export const createHttpConsoleApi = ({ apiUrl, key, statusMocked, fetch: fetchFn
     revisions: async id => (await call<{ readonly revisions: readonly Revision[] }>('GET', `${path(id)}/revisions`)).revisions,
     rollback: (id, revision) => call('POST', `${path(id)}/rollback`, { revision }),
     earnings: id => call('GET', `${path(id)}/earnings`),
-    status: async service => statusMocked
-      ? { value: sampleStatus(service), sample: true }
-      : { value: await call<ServiceStatus>('GET', `${path(service.id)}/status`), sample: false },
-    verify: async service => statusMocked
-      ? { value: sampleStatus(service), sample: true }
-      : { value: await call<ServiceStatus>('POST', `${path(service.id)}/verify`), sample: false },
+    status: async service => ({ value: await call<ServiceStatus>('GET', `${path(service.id)}/status`), sample: false }),
+    verify: async service => ({ value: await call<ServiceStatus>('POST', `${path(service.id)}/verify`), sample: false }),
     rotateMasterKey: async () => (await call<{ readonly masterKey: string }>('POST', '/v1/account/master-key/rotate')).masterKey,
   };
 };

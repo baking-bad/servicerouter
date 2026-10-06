@@ -15,7 +15,6 @@ export interface ConsoleSettings {
   readonly apiUrl: string;
   readonly siteUrl: string;
   readonly payUrl: string;
-  readonly statusMocked: boolean;
   readonly topupMocked: boolean;
   readonly agentDocsMocked: boolean;
 }
@@ -121,10 +120,10 @@ export const ConsoleRoot = ({ settings, children }: { readonly settings: Console
     return session.kind === 'sample'
       ? createSampleConsoleApi()
       : signingOutOnUnauthorized(
-        createHttpConsoleApi({ apiUrl: settings.apiUrl, key: session.key, statusMocked: settings.statusMocked }),
+        createHttpConsoleApi({ apiUrl: settings.apiUrl, key: session.key }),
         () => signOut('Your master key no longer works here. Sign in again.'),
       );
-  }, [session, settings.apiUrl, settings.statusMocked, signOut]);
+  }, [session, settings.apiUrl, signOut]);
 
   useEffect(() => {
     if (session === null && pathname !== '/console')

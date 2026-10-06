@@ -3,15 +3,19 @@ import { sampleTopup } from '../mocks/topup';
 import { ApiError, callApi } from './http';
 import type { Sourced, Topup } from './types';
 
-// The top-up data (DP-5): GET /v1/topup/{token}, or sample data while the `topup` group is on (WB-10).
+// The top-up data (DP-5): GET /v1/topup/{token}, or sample data for a sample link while the `topup`
+// group is on (WB-10).
 
 const tokenPattern = /^[A-Za-z0-9_-]{1,128}$/;
+// A token as the Platform API issues it: 24 random bytes, base64url (AK-15)
+const issuedTokenPattern = /^[A-Za-z0-9_-]{32}$/;
 
 /** The deposit address and recent deposits for a top-up token, or undefined for an unknown token. */
 export const getTopup = async (settings: SiteSettings, token: string): Promise<Sourced<Topup> | undefined> => {
   if (!tokenPattern.test(token))
     return undefined;
-  if (isMocked(settings, 'topup'))
+  // A real link always reads the API, so a buyer never sees a sample address for their account
+  if (isMocked(settings, 'topup') && !issuedTokenPattern.test(token))
     return { value: sampleTopup(token), sample: true };
 
   try {

@@ -3,7 +3,7 @@
 // secrets.
 
 /** Endpoint groups the website can serve from sample data until their step ships (WB-10). */
-export const mockGroups = ['catalog', 'agent-docs', 'topup', 'status'] as const;
+export const mockGroups = ['catalog', 'agent-docs', 'topup'] as const;
 export type MockGroup = typeof mockGroups[number];
 
 export interface SiteSettings {
@@ -21,8 +21,8 @@ export const defaultSettings = {
   siteUrl: 'https://servicerouter.ai',
   apiUrl: 'https://api.servicerouter.ai',
   payUrl: 'https://pay.servicerouter.ai',
-  // Sample data while the platform fills up (owner, 2026-10-06T19:50:00+08:00): the catalog (CI-5), agent docs (AD-1),
-  // top-up data (DP-5), and service status (OV-7). The Platform API serves each; `none` reads them all.
+  // Sample data while the platform fills up (owner, 2026-10-06T19:50:00+08:00): the catalog (CI-5), its agent docs
+  // (AD-1), and sample top-up links (DP-5). Real top-up links and real accounts always read the API.
   mocks: mockGroups.join(','),
 } as const;
 

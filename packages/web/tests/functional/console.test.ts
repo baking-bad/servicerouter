@@ -122,7 +122,7 @@ describe('the console against the Platform API, from the website\'s origin (WB-8
     expect(signup.masterKey).toMatch(/^srm_/);
     expect(signup.notice).toEqual(expect.any(String));
     const onUnauthorized = vi.fn();
-    const consoleFor = (key: string): ConsoleApi => signingOutOnUnauthorized(createHttpConsoleApi({ apiUrl, key, statusMocked: false, fetch: browserFetch }), onUnauthorized);
+    const consoleFor = (key: string): ConsoleApi => signingOutOnUnauthorized(createHttpConsoleApi({ apiUrl, key, fetch: browserFetch }), onUnauthorized);
     let client = consoleFor(signup.masterKey);
 
     // The account, its balance, and no payments yet
@@ -184,9 +184,9 @@ describe('the console against the Platform API, from the website\'s origin (WB-8
 
   it('refuses a payment key with the API\'s wrong_key_type message, which the sign-in page shows', async () => {
     const signup = await signUp(apiUrl, browserFetch);
-    const paymentKey = await createHttpConsoleApi({ apiUrl, key: signup.masterKey, statusMocked: false, fetch: browserFetch }).createKey({});
+    const paymentKey = await createHttpConsoleApi({ apiUrl, key: signup.masterKey, fetch: browserFetch }).createKey({});
 
-    const refused = createHttpConsoleApi({ apiUrl, key: paymentKey.key, statusMocked: false, fetch: browserFetch }).account();
+    const refused = createHttpConsoleApi({ apiUrl, key: paymentKey.key, fetch: browserFetch }).account();
 
     await expect(refused).rejects.toMatchObject({ status: 401, code: 'wrong_key_type', message: expect.stringMatching(/master key/i) });
   });

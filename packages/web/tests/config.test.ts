@@ -28,4 +28,9 @@ describe('runtime settings (WB-6, WB-10)', () => {
     expect(() => readSettings(env)).toThrow(InvalidSettingError);
     expect(() => readSettings(env)).toThrow(message);
   });
+
+  it('has no sample group for service status: a signed-in account always reads its own (WB-10, T16 round 1)', () => {
+    expect([...mockGroups]).toEqual(['catalog', 'agent-docs', 'topup']);
+    expect(() => readSettings({ WEB_MOCKS: 'catalog,status' })).toThrow('WEB_MOCKS names unknown groups: status');
+  });
 });
