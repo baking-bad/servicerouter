@@ -9,7 +9,7 @@ Lets agents and people find services.
 | Packages | `core`, `db`, `api`, `workers` (stats) |
 | Owns | `catalog_entries` (search index), `service_stats`. The category list in platform config. |
 | Depends on | [Service registry](service-registry.md), [Ledger](ledger.md) (`payments` rows), [Payment routing](payment-routing.md) (routed endpoints) |
-| [Build step](README.md#7-build-order) | 13 |
+| [Build step](README.md#7-build-order) | 13: the catalog. Intents (CI-6, CI-7) come after the MVP |
 
 An agent that knows the platform but not the service sends an intent: a description of what it wants to do. The platform answers with services that can do it, with their prices, and recommends one. The agent picks one and calls it through the proxy.
 
@@ -20,6 +20,8 @@ An agent that knows the platform but not the service sends an intent: a descript
 - **CI-3** Categories are hierarchical IDs, such as `weather`, `finance/market-data`, or `ai/image-generation`, from the platform list.
 - **CI-4** Stats per service and route come from `payments` rows: calls, success rate, p50 and p95 upstream latency. A worker aggregates them every few minutes. The proxy writes nothing extra.
 - **CI-5** `GET /v1/catalog` lists and filters by category and text. `GET /v1/catalog/{id}` returns one service with its description, links, prices, and stats. The website reads only these.
+**After the MVP** (owner, 2026-10-06T19:50:00+08:00): CI-6 and CI-7, intents. Agents find services through the catalog.
+
 - **CI-6** `POST /v1/intents` takes a description and an optional budget per call. It returns candidates with prices and one recommendation.
   - v1 search: Postgres full-text.
   - Ranking: relevance, then price, success rate, and latency. Promoted results, if they ever exist, are labeled.

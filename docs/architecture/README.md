@@ -37,7 +37,7 @@ external    Proxy ──▶ sellers' upstreams, x402 and MPP targets, CDP facili
 |---|---|---|
 | `servicerouter.ai` | Landing page, catalog at `/discover`, service pages at `/discover/<service-id>`, top-up page, `llms.txt` | Website |
 | `pay.servicerouter.ai` | `/service/<service-id>/<path>`: a registered service. `/<host>/<path>`: payment routing to any x402 or MPP API. `/`: the link checker. | Proxy |
-| `api.servicerouter.ai` | `/v1/...`: accounts, keys, services, balances, catalog, intents, agent docs | Platform API |
+| `api.servicerouter.ai` | `/v1/...`: accounts, keys, services, balances, catalog, agent docs. Intents come after the MVP | Platform API |
 
 - **Paid traffic has its own host.** Seller and target responses can contain anything, so they never share an origin with the website or the Platform API. The host also deploys and scales on its own.
 - **Paid URLs carry no version.** They end up in x402 Bazaar listings, generated OpenAPI documents, agent skills, and sellers' docs, so they never change. The seller config carries its own version.
@@ -57,8 +57,8 @@ An app gets its own image only if it can't use the shared build: the website, if
 | App | Image | Host | Exposure | Replicas | Keys it holds |
 |---|---|---|---|---|---|
 | Proxy | Ours, app `proxy` | `pay.servicerouter.ai` | Public | 2+, stateless | Private key that opens seller secrets. CDP API key. Shared secrets for the Signer, the internal API, and MPP challenges. None of them moves funds. |
-| Platform API | Ours, app `api` | `api.servicerouter.ai`, plus an internal port | Public. Internal port private. | 2+ | Public key that seals seller secrets. Deposit account public key. SMTP credentials. |
-| Workers | Ours, app `workers` | None | Private | 1+, one runner per job | Payout key. Blockfrost key. SMTP credentials. |
+| Platform API | Ours, app `api` | `api.servicerouter.ai`, plus an internal port | Public. Internal port private. | 2+ | Public key that seals seller secrets. Deposit account public key. SMTP credentials, after the MVP. |
+| Workers | Ours, app `workers` | None | Private | 1+, one runner per job | Payout key. Blockfrost key. SMTP credentials, after the MVP. |
 | Signer | Ours, app `signer` | Internal | Private | 1–2 | Hot-wallet keys that pay routed targets. |
 | Website | Ours, app `web` | `servicerouter.ai` | Public | 2 | None. |
 | Cardano facilitator | `cardanofoundation/cardano-x402-facilitator`, plus its own Postgres 17 | Internal | Private | 1 | Blockfrost project ID. No funds. |
@@ -135,8 +135,8 @@ Don't add a second HTTP framework, ORM, logger, or validator. The website is the
 | Money operations | [Payouts](payouts.md) | `PO` | `core`, `db`, `workers`, `api` | 11 |
 | Money operations | [Treasury](treasury.md) | `TR` | `core`, `db`, `workers`, `api` | 11 |
 | Discovery | [Agent docs](agent-docs.md) | `AD` | `core`, `api` | 10 |
-| Discovery | [Catalog and intents](catalog-and-intents.md) | `CI` | `core`, `db`, `api`, `workers` | 13 |
-| Discovery | [Website and link checker](website-and-link-checker.md) | `WB` | `web`, `proxy` | 9, 12, 13 |
+| Discovery | [Catalog and intents](catalog-and-intents.md) | `CI` | `core`, `db`, `api`, `workers` | 13. Intents after the MVP |
+| Discovery | [Website and link checker](website-and-link-checker.md) | `WB` | `web`, `proxy` | 15 |
 | Discovery | [Config assistant](config-assistant.md) | `CA` | `api` | 14 |
 
 The product describes five platform components. They map here:
@@ -287,6 +287,11 @@ Redis runs with AOF on and `noeviction`. The MPP replay store must never lose a 
 
 Build one step at a time. Don't start a step before the previous one is done.
 
+**MVP scope** (owner, 2026-10-06T19:50:00+08:00):
+
+- **Email is out of the MVP** ([AR19](#8-open-questions)): AK-10 to AK-14, the email pages, email notices, and the SMTP relay.
+- **Intents are out of the MVP**: CI-6 and CI-7. The catalog stays.
+
 **Done means:**
 
 - Typecheck, build, and unit, integration, and functional tests pass in CI.
@@ -341,8 +346,8 @@ Build one step at a time. Don't start a step before the previous one is done.
 
 ### Step 9. Deposits
 
-- **Build:** [Deposits](deposits.md), [Accounts and keys](accounts-and-keys.md) (email, recovery, notices), the top-up page and the email pages ([Website](website-and-link-checker.md)).
-- **Done when:** a deposit seen through the fake Blockfrost credits the balance exactly once, after the confirmation threshold. The top-up page shows the account's address. Recovery through the fake mailer returns a new master key once and revokes the old one. An unknown email gets the same response. Opening a link without pressing the button doesn't use it up.
+- **Build:** [Deposits](deposits.md), with the top-up data endpoint (DP-5). Email, recovery, and notices are out of the MVP. The top-up page is part of the website, in step 15.
+- **Done when:** a deposit seen through the fake Blockfrost credits the balance exactly once, after the confirmation threshold. `GET /v1/topup/{token}` shows the account's address and the deposit's status.
 
 ### Step 10. Agent docs
 
@@ -356,7 +361,7 @@ Build one step at a time. Don't start a step before the previous one is done.
 
 ### Step 12. Payment routing
 
-- **Build:** [Signer](signer.md), [Payment routing](payment-routing.md), the link checker.
+- **Build:** [Signer](signer.md), [Payment routing](payment-routing.md), the link checker's endpoint (`GET /_/check`, RT-19). The link checker page is part of the website, in step 15.
 - **Done when:**
   - With a fake x402 target and test wallets, a payment-key call returns the target's response in one request. The buyer pays the quote. The ledger shows the target price in treasury and the fee in routing fees.
   - Without a credential, the proxy answers with the combined `402` at the quote. A retry with a signed x402 payment succeeds.
@@ -366,17 +371,35 @@ Build one step at a time. Don't start a step before the previous one is done.
   - The Signer refuses above the quote, above the per-call maximum, and above its spend limits.
   - Our hosts and opted-out hosts → `400 host_not_allowed`.
   - Each endpoint is registered once.
-  - The link checker returns the quote and the routing link without paying.
+  - `GET /_/check` returns the quote and the routing link without paying.
 
 ### Step 13. Discovery
 
-- **Build:** [Catalog and intents](catalog-and-intents.md), the [Website](website-and-link-checker.md).
-- **Done when:** an intent returns live services ranked by the default ranking. Routed endpoints are labeled "Unverified" and rank below. Suspending a service removes it from the catalog. A price change shows up in the catalog. The website renders from the public API only.
+- **Build:** [Catalog and intents](catalog-and-intents.md): the catalog and its stats. Intents are out of the MVP. The catalog pages are part of the website, in step 15.
+- **Done when:** `GET /v1/catalog` lists live services, filtered by category and text, ranked by the default ranking. Routed endpoints are labeled "Unverified" and rank below. Suspending a service removes it from the catalog. A price change shows up in the catalog.
 
 ### Step 14. Config assistant
 
 - **Build:** [Config assistant](config-assistant.md).
 - **Done when:** a sample OpenAPI document gives a draft that passes validation. Nothing is submitted. With the LLM faked, the mechanical mapping matches a fixture.
+
+### Step 15. Website
+
+- **Build:** the [Website](website-and-link-checker.md), once the platform is built:
+  - the landing page;
+  - the catalog at `/discover`, and service pages;
+  - the top-up page;
+  - the link checker page, served by the proxy;
+  - the platform guide and skills at `servicerouter.ai`;
+  - the console (WB-8).
+
+- **Done when:**
+  - every page renders from the public Platform API only (WB-2);
+  - the top-up page shows a real account's deposit address;
+  - the link checker shows a quote without paying;
+  - `servicerouter.ai/llms.txt` serves the platform guide;
+  - the console manages payment keys with a master key, as WB-8's requirements say;
+  - the logo, favicon, and social images come from the logo generator's vector paths.
 
 ## 8. Open questions
 
@@ -394,7 +417,7 @@ The implementing agent uses these defaults until the product owner answers. Keep
 | AR8 | What are the Signer's limits? | $1 per call. $100 a day per network. Operators change them in platform config. |
 | AR9 | What prefixes do keys use? | Master keys: `srm_live_…`, and `srm_test_…` in staging. Payment keys: `sr_live_…`, and `sr_test_…` in staging. Set in platform config ([PC-7](platform-config.md)). |
 | AR10 | Does an operator approve mainnet payouts? | Yes, every run. |
-| AR11 | Which stack does the website use? | **Answered (product owner, 2026-10-06T19:50:00+08:00):** a frontend framework, built separately, with its own image ([section 1.3](#13-deployables)). Which framework is decided before step 9, the first web work. The website also gets a console for people, signed in with a master key ([WB-8](website-and-link-checker.md)). |
+| AR11 | Which stack does the website use? | **Answered (product owner, 2026-10-06T19:50:00+08:00):** a frontend framework, built separately, with its own image ([section 1.3](#13-deployables)). Which framework is decided before step 15, the website. The website also gets a console for people, signed in with a master key ([WB-8](website-and-link-checker.md)). |
 | AR12 | How many Cardano confirmations make a payment settled? | `0`: block inclusion. The facilitator's default is `1`. Measure latency on mainnet, in step 6's live check, before changing it. |
 | AR13 | Do we pay routed targets on Cardano too? | No. Base, Solana, and Tempo. |
 | AR14 | Where does the catalog list routed endpoints? | A filter on `/discover`, labeled "Unverified". |
@@ -402,5 +425,5 @@ The implementing agent uses these defaults until the product owner answers. Keep
 | AR16 | Do we pay targets with Circle Gateway nanopayments? | Not in v1. We skip those options. |
 | AR17 | A path with an ID, such as `/v1/tx/<hash>`, registers a new endpoint per ID. Do we cap them? | Up to 1,000 routed endpoints per host. Beyond that, log and don't register. |
 | AR18 | When is Cardano enabled on mainnet? | **Answered (product owner, 2026-10-06T19:50:00+08:00):** from step 6, since the MVP runs on mainnet only. CF-8's checks are step 6's live check, and the owner signs off on its result. |
-| AR19 | How do we send email? | skip it |
+| AR19 | How do we send email? | **Answered (product owner, 2026-10-06T19:50:00+08:00):** no email in the MVP. AK-10 to AK-14, the email pages (WB-1, WB-7), email notices (OV-7, OV-10, AK-13), and the SMTP relay (PC-2) come after it. A lost master key can't be recovered in the MVP, and signup says so (AK-1). |
 | AR20 | At what load is PX-19's 50 ms checked? | **Answered (product owner, MVP):** 300 paid requests per second per proxy replica, sent at a fixed rate. One replica handled about 700 paid calls per second on a laptop in step 4. Past a replica's capacity, add replicas. |

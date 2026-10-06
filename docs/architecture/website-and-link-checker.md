@@ -9,7 +9,7 @@ The public pages for people, and the page that checks whether an x402 or MPP lin
 | Packages | `web`, `proxy` (serves the link checker) |
 | Hosts | `servicerouter.ai`. The link checker at `pay.servicerouter.ai/`. |
 | Depends on | [Platform API](platform-api.md), [Payment routing](payment-routing.md) |
-| [Build step](README.md#7-build-order) | 9 (top-up page, email pages), 12 (link checker), 13 (catalog pages) |
+| [Build step](README.md#7-build-order) | 15, once the platform is built: every page, the console, and the link checker page. The link checker's endpoint is step 12's |
 
 ## Requirements
 
@@ -18,8 +18,9 @@ The public pages for people, and the page that checks whether an x402 or MPP lin
   - `/discover`: all services, grouped by category, with filters in the query, such as `?category=finance/market-data`;
   - `/discover/<service-id>`: description, links, prices, stats, and links to the agent docs;
   - the top-up page;
-  - the email confirmation page and the recovery page ([AK-12](accounts-and-keys.md));
-  - `llms.txt` ([AD-5](agent-docs.md)).
+  - the email confirmation page and the recovery page ([AK-12](accounts-and-keys.md)), after the MVP with email ([AR19](README.md#8-open-questions));
+  - `llms.txt` and the platform skills ([AD-5](agent-docs.md), AD-7);
+  - the console (WB-8).
 - **WB-2** Reads only the public Platform API. No database access and no secrets.
 - **WB-3** The top-up page shows the deposit address with a QR code, the asset (USDM on Cardano), and deposit status, by the top-up token ([DP-5](deposits.md)).
 - **WB-4** The link checker is a static page that the proxy serves at `/`, with its files under `/_/`. The user pastes an x402 or MPP link. The page calls `GET /_/check` ([RT-19](payment-routing.md)) and shows whether the link is payable, the price, and the routing link. It stores no credentials, because seller responses share its origin ([PX-9](proxy.md)).
@@ -31,6 +32,9 @@ The public pages for people, and the page that checks whether an x402 or MPP lin
   - edges are inset rings of 5–10 % white, not solid borders. Resting cards have no shadow;
   - cards have a 12 px radius and 16 px padding. Buttons and inputs have a 6 px radius;
   - tabular numbers for amounts and counters.
-- **WB-6** The stack is a frontend framework, built separately, with its own image ([AR11](README.md#8-open-questions)). The framework is chosen before step 9.
-- **WB-7** The recovery page shows the new master key once, with a copy button and a warning that it won't be shown again. It lists the account's payment keys, so the owner can revoke any they don't recognize ([AK-11](accounts-and-keys.md)). It stores nothing in the browser.
-- **WB-8** A console for people, signed in with a master key: payment keys, balance, payments, services, and earnings. The owner asked for it on 2026-10-06T19:50:00+08:00. Its requirements, including where the master key lives in the browser, are written and approved before step 9.
+- **WB-6** The stack is a frontend framework, built separately, with its own image ([AR11](README.md#8-open-questions)). The framework is chosen before step 15.
+- **WB-7** After the MVP, with email. The recovery page shows the new master key once, with a copy button and a warning that it won't be shown again. It lists the account's payment keys, so the owner can revoke any they don't recognize ([AK-11](accounts-and-keys.md)). It stores nothing in the browser.
+- **WB-8** A console for people, signed in with a master key: payment keys, balance, payments, services, and earnings. The owner asked for it on 2026-10-06T19:50:00+08:00. Its requirements, including where the master key lives in the browser, are written and approved before step 15.
+  - Mint `#18D2A5` on the dark canvas, and `#109373` on light surfaces.
+  - The favicon, the app icons, and the social preview images are generated from the same paths, never redrawn or rasterized by hand.
+  - The website keeps one copy of the paths in its source.

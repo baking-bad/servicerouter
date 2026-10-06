@@ -9,7 +9,7 @@ Accounts, their master and payment keys, and account recovery by email.
 | Packages | `core`, `db`, `api`, `web` (email pages) |
 | Owns | `accounts`, `api_keys` with limits, `email_links` |
 | Depends on | [Platform config](platform-config.md) (key prefixes, default limits, SMTP relay), [Deposits](deposits.md) (deposit address at signup), [Website](website-and-link-checker.md) (email pages) |
-| [Build step](README.md#7-build-order) | 2 (accounts, master keys), 4 (payment keys), 9 (email, recovery) |
+| [Build step](README.md#7-build-order) | 2 (accounts, master keys), 4 (payment keys). Email and recovery (AK-10 to AK-14) come after the MVP ([AR19](README.md#8-open-questions)) |
 
 **Terms.** One API call creates an account, so an agent can sign up without a person or a UI. The same account can sell (own services) and buy (hold credits). Its master key manages it. Its payment keys pay for calls with credits. x402 and MPP buyers need no account.
 
@@ -61,6 +61,8 @@ The person keeps the master key. Each agent that spends gets only a payment key 
   - The Platform API doesn't cache master keys: every request looks up the hash, so a rotation applies at once without an event. The proxy's payment-key cache (step 4) needs the event.
   - Creating, changing, or revoking a payment key publishes `{ kind: 'key', id }` after the commit. Publishing is best effort, with a 2 s timeout: a failure is logged, and the cache TTL still applies.
   - The proxy caches payment keys by hash for 60 s, and unknown hashes for 10 s. A key event drops the key, and a lookup running at that moment isn't kept. A reconnect of the subscription drops every key.
+**After the MVP** (owner, 2026-10-06T19:50:00+08:00, [AR19](README.md#8-open-questions)): AK-10 to AK-14, email and recovery. In the MVP a lost master key can't be recovered.
+
 - **AK-10** Email is optional. An email at signup, or `PUT /v1/account/email`, sends a confirmation link. The email serves recovery and notices only once it's confirmed. A change sends a notice to the old confirmed address.
 - **AK-11** Recovery: `POST /v1/account/recover` with `{ "email": "…" }` sends a recovery link to a confirmed email.
   - The response is the same whether or not the email belongs to an account.

@@ -43,7 +43,7 @@ The seller adds nothing to the service config. The tokens, the verification stat
 - **OV-4** State per host: `unverified` → `verified` → `missing` → `suspended`, and back to `verified` when the token returns. `missing` starts a 7-day grace period. After it, the host is `suspended`. All timing reads the `Clock` port.
 - **OV-5** A host state change updates every service that uses the host ([SR-8](service-registry.md)) and reaches the proxy through the invalidation channel. A service goes live only when every host is verified.
 - **OV-6** `POST /v1/services/{id}/verify` checks at once. A daily job re-checks every host of every live or suspended service, and every waiting payout confirmation, spread over the day.
-- **OV-7** A notice to the seller is a status field and a log line. From step 9, it's also an email when the account has a confirmed email ([AK-13](accounts-and-keys.md)).
+- **OV-7** A notice to the seller is a status field and a log line. After the MVP, it's also an email when the account has a confirmed email ([AK-13](accounts-and-keys.md)).
 - **OV-8** The same parser serves payment routing's opt-out check ([RT-2](payment-routing.md)).
 - **OV-10** Payout confirmation. A stolen master key must not redirect earnings. An activation that changes `payouts` waits for the host owner ([SR-13](service-registry.md)):
   1. The submit or rollback response returns a confirmation token, `sr-confirm=<random>`, bound to the service and the new `payouts`.
@@ -53,4 +53,4 @@ The seller adds nothing to the service config. The tokens, the verification stat
   5. A newer submit replaces the waiting revision. With the same `payouts`, it keeps the token. With other new `payouts`, it gets a new token. With the active revision's `payouts`, it activates at once.
   6. Once the revision is active, the seller can remove the token from the file.
 
-  The confirmed email gets a notice when a payout change starts waiting and when it applies ([AK-13](accounts-and-keys.md)). A service's first activation needs no confirmation: verifying its hosts covers it.
+  After the MVP, the confirmed email gets a notice when a payout change starts waiting and when it applies ([AK-13](accounts-and-keys.md)). A service's first activation needs no confirmation: verifying its hosts covers it.

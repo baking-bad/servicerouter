@@ -23,12 +23,12 @@ The public HTTP surface of the control plane, plus a private internal API.
 | `GET /v1/balance`, `GET /v1/payments` | [Ledger](ledger.md) | 4 |
 | `GET /v1/services/{id}/earnings` | [Ledger](ledger.md) | 4 |
 | `GET /v1/services/{id}/status`, `POST …/verify` | [Ownership verification](ownership-verification.md) | 8 |
-| `PUT /v1/account/email`, `POST /v1/account/email/confirm` | [Accounts and keys](accounts-and-keys.md) | 9 |
-| `POST /v1/account/recover`, `POST /v1/account/recover/confirm` | [Accounts and keys](accounts-and-keys.md) | 9 |
+| `PUT /v1/account/email`, `POST /v1/account/email/confirm` | [Accounts and keys](accounts-and-keys.md) | After the MVP |
+| `POST /v1/account/recover`, `POST /v1/account/recover/confirm` | [Accounts and keys](accounts-and-keys.md) | After the MVP |
 | `GET /v1/topup/{token}` | [Deposits](deposits.md) | 9 |
 | `GET /v1/services/{id}/openapi.json`, `…/llms.txt`, `…/skill.md` | [Agent docs](agent-docs.md) | 10 |
 | `GET /v1/catalog`, `GET /v1/catalog/{id}` | [Catalog and intents](catalog-and-intents.md) | 13 |
-| `POST /v1/intents` | [Catalog and intents](catalog-and-intents.md) | 13 |
+| `POST /v1/intents` | [Catalog and intents](catalog-and-intents.md) | After the MVP |
 | `POST /v1/assistant/drafts` | [Config assistant](config-assistant.md) | 14 |
 
 ## Internal endpoints

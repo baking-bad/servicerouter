@@ -25,7 +25,7 @@ Everything about a deployment that isn't a seller config or a secret.
   - rate limits, including the signup limit per client IP (`rateLimits.signup`, [PA-5](platform-api.md)), and timeouts;
   - Signer limits;
   - key prefixes (PC-7) and the default limits for new payment keys ([AR4](README.md#8-open-questions));
-  - the SMTP relay: host, port, sender address, and credentials by name ([AR19](README.md#8-open-questions)).
+  - the SMTP relay: host, port, sender address, and credentials by name, after the MVP ([AR19](README.md#8-open-questions)).
 - **PC-3** Secrets appear by name only. Their values come from the stack's environment.
 - **PC-4** Read-only at runtime. A change ships as a deploy.
 - **PC-5** Staging and production differ only in this file and in secrets: testnets, key prefixes, hosts. The MVP deploys production only, on mainnets ([README section 6](README.md#6-deployment)). `config/example.yaml` is the testnet-shaped config for tests.
