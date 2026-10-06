@@ -36,6 +36,13 @@
       "when": 1791287880000,
       "tag": "0004_settlement_request",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1791288000000,
+      "tag": "0005_ownership",
+      "breakpoints": true
     }
   ]
 }
