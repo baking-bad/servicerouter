@@ -18,5 +18,12 @@
     "typecheck": "tsc -p tsconfig.check.json",
     "test": "vitest run --root ../.. --project web",
     "start": "node dist/main.js"
+  },
+  "dependencies": {
+    "@servicerouter/common": "0.1.0",
+    "@servicerouter/core": "0.1.0"
+  },
+  "devDependencies": {
+    "@servicerouter/testing": "0.1.0"
   }
 }

@@ -9,5 +9,12 @@
   "include": [
     "src/**/*.ts"
   ],
-  "references": []
+  "references": [
+    {
+      "path": "../common"
+    },
+    {
+      "path": "../core"
+    }
+  ]
 }
