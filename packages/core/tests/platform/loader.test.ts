@@ -70,7 +70,7 @@ describe('loadPlatformConfig', () => {
     expect(config.routingFeeBps).toEqual(expect.any(Number));
     expect(config.payouts.minimum).toBe(10_000_000n);
     expect(config.categories.length).toBeGreaterThan(0);
-    expect(Object.keys(config.rateLimits)).toEqual(['paymentKey', 'service', 'unpaidIp', 'signup', 'topup', 'documents']);
+    expect(Object.keys(config.rateLimits)).toEqual(['paymentKey', 'service', 'unpaidIp', 'signup', 'topup', 'documents', 'assistant']);
     // Deposits (DP-1 to DP-4): a Cardano asset, its confirmations, and Blockfrost's URL for its network
     expect(config.deposits).toMatchObject({
       asset: { name: 'cardano-usdm' }, network: { id: 'cardano:preprod' }, confirmations: 15, blockfrostUrl: 'https://cardano-preprod.blockfrost.io/api/v0',

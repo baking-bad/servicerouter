@@ -11,7 +11,7 @@ const limits = {
   paymentKey: { requests: 2, windowSeconds: 60 },
   service: { requests: 3, windowSeconds: 60 },
   unpaidIp: { requests: 1, windowSeconds: 30 },
-  signup: { requests: 10, windowSeconds: 3600 }, topup: { requests: 60, windowSeconds: 60 }, documents: { requests: 120, windowSeconds: 60 },
+  signup: { requests: 10, windowSeconds: 3600 }, topup: { requests: 60, windowSeconds: 60 }, documents: { requests: 120, windowSeconds: 60 }, assistant: { requests: 30, windowSeconds: 3600 },
 };
 
 // Counts in memory, like the Redis limiter: the first hit opens the window
