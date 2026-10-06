@@ -4,9 +4,11 @@ import {
 } from '@servicerouter/common';
 import type { PlatformConfig } from '@servicerouter/core';
 import { createLedger, createPaymentRepository, type Postgres } from '@servicerouter/db';
+import { createAssetLookup, createFacilitatorLookup, type Facilitator } from '@servicerouter/payments';
 
 import { createHoldExpiry, holdExpiryIntervalMs, holdExpiryLockId, holdTtlMs } from './holdExpiry.js';
 import { createScheduler, type Scheduler } from './scheduler.js';
+import { createSettlementFollowUp, settlementFollowUpIntervalMs, settlementFollowUpLockId } from './settlementFollowUp.js';
 
 export interface WorkersDependencies {
   readonly config: PlatformConfig;
@@ -18,6 +20,8 @@ export interface WorkersDependencies {
   readonly timers?: Timers;
   // Ledger IDs. Default: random UUIDs.
   readonly ids?: IdGenerator;
+  // The enabled facilitators, for the settlement follow-up (WK-6). Default: none.
+  readonly facilitators?: readonly Facilitator[];
 }
 
 export interface WorkersServer extends MetricsServer {
@@ -26,7 +30,8 @@ export interface WorkersServer extends MetricsServer {
 
 /**
  * Workers have no public listener. Health, readiness (Postgres), and metrics share the metrics port.
- * Jobs start with the listener and stop before it closes. Step 4: hold expiry (LG-9).
+ * Jobs start with the listener and stop before it closes: hold expiry (LG-9), and settlement follow-up
+ * (WK-6).
  */
 export const createApp = ({
   config,
@@ -35,17 +40,21 @@ export const createApp = ({
   clock = systemClock,
   timers = systemTimers,
   ids = randomIdGenerator,
+  facilitators = [],
 }: WorkersDependencies): WorkersServer => {
   const server = createMetricsServer({
     logger,
     health: true,
     readinessChecks: [{ name: 'postgres', check: () => postgres.ping() }],
   });
-  const holdExpiry = createHoldExpiry({
-    payments: createPaymentRepository({ db: postgres.db, clock }),
-    ledger: createLedger({ db: postgres.db, clock, ids }),
-    clock,
-    ttlMs: holdTtlMs(config),
+  const payments = createPaymentRepository({ db: postgres.db, clock });
+  const ledger = createLedger({ db: postgres.db, clock, ids });
+  const holdExpiry = createHoldExpiry({ payments, ledger, clock, ttlMs: holdTtlMs(config), feeBps: config.feeBps, logger });
+  const settlementFollowUp = createSettlementFollowUp({
+    payments,
+    ledger,
+    facilitatorFor: facilitators.length > 0 ? createFacilitatorLookup(config, facilitators) : () => undefined,
+    assetName: createAssetLookup(config),
     feeBps: config.feeBps,
     logger,
   });
@@ -56,6 +65,13 @@ export const createApp = ({
       intervalMs: holdExpiryIntervalMs,
       run: async () => {
         await holdExpiry();
+      },
+    }, {
+      name: 'settlement_follow_up',
+      lockId: settlementFollowUpLockId,
+      intervalMs: settlementFollowUpIntervalMs,
+      run: async () => {
+        await settlementFollowUp();
       },
     }],
     locks: postgres,
