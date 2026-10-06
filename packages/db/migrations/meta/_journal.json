@@ -50,6 +50,13 @@
       "when": 1791288120000,
       "tag": "0006_deposits",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1791288240000,
+      "tag": "0007_service_documents",
+      "breakpoints": true
     }
   ]
 }
