@@ -197,6 +197,22 @@ describe('x402 payments through the facilitator (PR-5, PR-10, PR-12)', () => {
     await expect(rail.authorize(rail.detect({ 'x-payment': 'eyJ4NDAyVmVyc2lvbiI6MX0=' })!, quoteOf())).rejects.toThrow(/PAYMENT-SIGNATURE/);
   });
 
+  it('refuses a payment the facilitator answers with a plain 400, as live CDP does for a malformed one', async () => {
+    const { rail } = createPorts();
+    const quote = quoteOf();
+    facilitator.handle('/verify', () => ({ status: 400, body: { errorType: 'invalid_request', errorMessage: '\'paymentPayload\' is invalid' } }));
+
+    await expect(rail.authorize(paidCredential(rail, await pay(await requiredOf(rail, quote), base)), quote)).rejects.toThrow('The facilitator rejected the payment: invalid_payload');
+  });
+
+  it.each([401, 403, 429])('treats a %i at verify as the facilitator being unavailable, not the payment being invalid', async status => {
+    const { rail } = createPorts();
+    const quote = quoteOf();
+    facilitator.handle('/verify', () => ({ status, body: { errorType: 'unauthorized' } }));
+
+    await expect(rail.authorize(paidCredential(rail, await pay(await requiredOf(rail, quote), base)), quote)).rejects.toBeInstanceOf(FacilitatorUnavailableError);
+  });
+
   it('answers a facilitator that is down at verify with facilitator_unavailable', async () => {
     const { rail } = createPorts();
     const quote = quoteOf();
@@ -234,6 +250,8 @@ describe('x402 payments through the facilitator (PR-5, PR-10, PR-12)', () => {
     ['a timeout', facilitatorAnswers.timeout(1_500), 'settling'],
     ['a 503', facilitatorAnswers.unavailable, 'settling'],
     ['a failed settlement', facilitatorAnswers.failed(), 'failed'],
+    ['a plain 400, refused before anything was submitted', () => ({ status: 400, body: { errorMessage: 'invalid' } }), 'failed'],
+    ['a 401', () => ({ status: 401, body: { errorType: 'unauthorized' } }), 'settling'],
   ])('refuses to send the response on %s with settlement_failed, recording it as %s (PR-12)', async (_case, answer, status) => {
     const { rail, changes, settled, authorization } = await authorized();
     facilitator.handle('/settle', answer);
