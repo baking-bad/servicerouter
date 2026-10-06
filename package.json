@@ -11,6 +11,9 @@
     "build": "tsc -b",
     "watch": "tsc -b --watch",
     "clean": "tsc -b --clean",
+    "dev": "tsc -b && concurrently --kill-others --names tsc,proxy,api --prefix-colors gray,cyan,magenta \"tsc -b --watch --preserveWatchOutput\" \"npm:dev:proxy\" \"npm:dev:api\"",
+    "dev:proxy": "node --env-file-if-exists=.env --watch packages/proxy/dist/main.js",
+    "dev:api": "node --env-file-if-exists=.env --watch packages/api/dist/main.js",
     "typecheck": "npm run build && npm run typecheck --workspaces",
     "test": "vitest run --project '!*:*'",
     "test:integration": "vitest run --project '*:integration'",
@@ -21,6 +24,7 @@
   },
   "devDependencies": {
     "@types/node": "^24.19.1",
+    "concurrently": "^10.0.5",
     "typescript": "^7.0.2",
     "vitest": "^5.0.3"
   },
