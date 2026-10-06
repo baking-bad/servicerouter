@@ -20,6 +20,10 @@ An agent that knows the platform but not the service sends an intent: a descript
 - **CI-3** Categories are hierarchical IDs, such as `weather`, `finance/market-data`, or `ai/image-generation`, from the platform list.
 - **CI-4** Stats per service and route come from `payments` rows: calls, success rate, p50 and p95 upstream latency. A worker aggregates them every few minutes. The proxy writes nothing extra.
 - **CI-5** `GET /v1/catalog` lists and filters by category and text. `GET /v1/catalog/{id}` returns one service with its description, links, prices, and stats. The website reads only these.
+  - Query: `category` (an ID; its subcategories match too), `q` (text), `method` (`credits`, `x402`, or `mpp`: services that take it), `maxPrice` (USD: the cheapest route costs at most this), `sort` (`popular`, calls over 30 days, the default; `price`; `newest`; `success`), `limit`, and `cursor`.
+  - A list item: `{ id, title, summary, category, tags, priceFrom, currency: "USD", methods, stats: { calls30d, successRate, p50Ms, p95Ms }, verified, updatedAt }`. The list adds `categories: [{ id, title, count }]` and `next`.
+  - One service adds `description`, `links`, `contact`, `routes: [{ key, method, path, summary, price, methods, stats }]`, `docs: { openapi, llms, skill }` (AR1), and `payUrl`.
+  - Until step 13, the website serves this shape from fixtures ([WB-10](website-and-link-checker.md)).
 **After the MVP** (owner, 2026-10-06T19:50:00+08:00): CI-6 and CI-7, intents. Agents find services through the catalog.
 
 - **CI-6** `POST /v1/intents` takes a description and an optional budget per call. It returns candidates with prices and one recommendation.

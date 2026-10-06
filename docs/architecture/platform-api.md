@@ -28,6 +28,7 @@ The public HTTP surface of the control plane, plus a private internal API.
 | `GET /v1/topup/{token}` | [Deposits](deposits.md) | 9 |
 | `GET /v1/services/{id}/openapi.json`, `…/llms.txt`, `…/skill.md` | [Agent docs](agent-docs.md) | 10 |
 | `GET /v1/catalog`, `GET /v1/catalog/{id}` | [Catalog and intents](catalog-and-intents.md) | 13 |
+| `GET /v1/services`: the account's services | [Service registry](service-registry.md), for the console ([WB-8](website-and-link-checker.md)) | 15 |
 | `POST /v1/intents` | [Catalog and intents](catalog-and-intents.md) | After the MVP |
 | `POST /v1/assistant/drafts` | [Config assistant](config-assistant.md) | 14 |
 
@@ -58,6 +59,10 @@ The public HTTP surface of the control plane, plus a private internal API.
   - While Redis is down, the limit fails closed: signup answers `500` rather than skipping the limit.
   - Behind Traefik, `TRUST_PROXY` must name it, or every client counts as Traefik's address.
 - **PA-6** `/_/health` for liveness. `/_/ready` checks Postgres and Redis. Metrics on an internal port.
+- **PA-7** CORS for the console ([WB-8](website-and-link-checker.md)): the public API answers browser requests from the website's origin (`urls.website`), and from the origins in `CORS_ORIGINS` (comma-separated, for local development).
+  - It sends `Access-Control-Allow-Origin` with that origin and `Vary: Origin`.
+  - Preflights allow `GET`, `POST`, `PUT`, `PATCH`, and `DELETE`, and the `Authorization` and `Content-Type` headers, cached for 10 minutes. It exposes `x-request-id`.
+  - No cookies: the master key travels in `Authorization`. Other origins get no CORS headers.
 
 ## Error codes
 
