@@ -50,4 +50,23 @@ The public HTTP surface of the control plane, plus a private internal API.
 - **PA-3** Errors: `{ "error": { "code": "...", "message": "..." } }`. Config errors add `details` with the path, line, and column.
 - **PA-4** The internal listener binds to the internal network only. Traefik never routes to it. It requires a shared-secret header, compared with `Secret.equals`. Every internal call writes the audit log.
 - **PA-5** Endpoints that need no key are rate limited per IP. Signup and recovery get the tightest limits.
+  - Signup: a fixed window per client IP in Redis, under `rl:api:signup:<ip>`, set by `rateLimits.signup` in platform config. An IPv6 client is counted by its /64. Over the limit: `429 rate_limited` with `Retry-After`.
+  - While Redis is down, the limit fails closed: signup answers `500` rather than skipping the limit.
+  - Behind Traefik, `TRUST_PROXY` must name it, or every client counts as Traefik's address.
 - **PA-6** `/_/health` for liveness. `/_/ready` checks Postgres and Redis. Metrics on an internal port.
+
+## Error codes
+
+Every `401` carries `WWW-Authenticate: Bearer`. Service endpoints add their codes in step 2 (T06).
+
+| Status | Code | When |
+|---|---|---|
+| `400` | `invalid_request` | A malformed request: invalid JSON, or a body that fails its schema. |
+| `401` | `unauthorized` | No `Authorization: Bearer` key. |
+| `401` | `invalid_key` | An unknown, revoked, or malformed key. |
+| `401` | `wrong_key_type` | A payment key ([AK-4](accounts-and-keys.md)). |
+| `404` | `not_found` | An unknown route. |
+| `413` | `request_too_large` | The request body is over the limit. |
+| `415` | `unsupported_media_type` | A content type the route doesn't take. |
+| `429` | `rate_limited` | Over a per-IP limit (PA-5). |
+| `500` | `internal_error` | Anything unexpected. Opaque: the details go to the log only (XC-7). |

@@ -26,10 +26,13 @@ The person keeps the master key. Each agent that spends gets only a payment key 
 ## Requirements
 
 - **AK-1** `POST /v1/accounts` creates an account and returns its master key once. The body is empty or `{ "email": "…" }`. No UI is needed, so an agent can sign up. From step 9, signup also creates a deposit address ([Deposits](deposits.md)) and a top-up link, and the response includes the link. The response states that a lost master key can't be recovered without a confirmed email.
+  - The `201` response is `{ id, email, emailConfirmed, topupUrl, createdAt, masterKey, notice }`, with `Cache-Control: no-store`. Signup is rate limited per IP ([PA-5](platform-api.md)).
 - **AK-2** `GET /v1/account` returns the account ID, the email and whether it's confirmed, and the top-up link.
 - **AK-3** Keys are 32 random bytes after a prefix from platform config ([PC-7](platform-config.md)). Store only the SHA-256 hash. Look keys up by hash. A key is shown once: in the response that creates it.
+  - The body is the 32 bytes in base62, 43 characters, so a key is one word on double-click.
+  - `api_keys` holds the hash with a unique index, and a partial unique index allows one active master key per account.
 - **AK-4** Each kind of key works on one host. A master key sent to the proxy, or a payment key sent to the Platform API, gets `401 wrong_key_type`. The prefix decides this before any lookup. A leaked payment key can't manage the account, and a master key can't pay.
-- **AK-5** `POST /v1/account/master-key/rotate` returns a new master key. The old one stops working at once.
+- **AK-5** `POST /v1/account/master-key/rotate` returns a new master key. The old one stops working at once. It revokes the key the caller used, so a second rotation with the same old key gets `401 invalid_key`.
 - **AK-6** The master key manages payment keys: `POST /v1/keys`, `GET /v1/keys`, `PATCH /v1/keys/{id}`, `DELETE /v1/keys/{id}`.
 
   ```
@@ -48,6 +51,7 @@ The person keeps the master key. Each agent that spends gets only a payment key 
 - **AK-7** An allowance is a cap, not money moved to the key. The credits stay in the account balance. A call goes through only when the balance covers it and every limit of the key allows it. The Ledger checks both in one hold ([LG-6](ledger.md)). Revoking a key leaves nothing to return.
 - **AK-8** `GET pay.servicerouter.ai/_/key` with a payment key returns the key's limits and what's left: of the allowance, of today's budget, and of the balance. An agent can check before it calls.
 - **AK-9** The proxy and the Platform API cache key lookups briefly. Creating, revoking, or changing a key, and rotating the master key, publish an invalidation event. The change applies at once, not at the end of the cache TTL.
+  - The Platform API doesn't cache master keys: every request looks up the hash, so a rotation applies at once without an event. The proxy's payment-key cache (step 4) needs the event.
 - **AK-10** Email is optional. An email at signup, or `PUT /v1/account/email`, sends a confirmation link. The email serves recovery and notices only once it's confirmed. A change sends a notice to the old confirmed address.
 - **AK-11** Recovery: `POST /v1/account/recover` with `{ "email": "…" }` sends a recovery link to a confirmed email.
   - The response is the same whether or not the email belongs to an account.
@@ -62,4 +66,5 @@ The person keeps the master key. Each agent that spends gets only a payment key 
 - **AK-14** Email goes out through the SMTP relay in platform config ([AR19](README.md#8-open-questions)), from `api` and `workers`, through a `Mailer` port. Tests use a fake mailer.
 - **AK-15** The top-up link uses its own random token. It isn't derived from any key, and it reveals only the deposit address and deposit status.
 - **AK-16** Every key creation, rotation, revocation, limit change, email change, and recovery writes the audit log, without the key.
+  - Actions so far: `account.create` and `master_key.rotate`, with key IDs in the details, in the same transaction as the change.
 - **AK-17** Later: register both key prefixes with GitHub secret scanning. A key that GitHub reports in a public repository is revoked at once, and the owner gets a notice.

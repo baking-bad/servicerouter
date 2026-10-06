@@ -39,3 +39,10 @@ Shared building blocks with no domain logic.
   - nesting depth at most 64, and no cycles;
   - keys named `__proto__`, `prototype`, or `constructor` are rejected.
 - **CK-9** Shared types: request ID, service ID, asset name, network ID (CAIP-2, such as `eip155:8453` or `cardano:mainnet`).
+- **CK-10** The HTTP server every app runs, on Fastify 5 (`createServer`, `runApp`):
+  - the request ID (XC-5), on the response and on every log line of the request;
+  - one log line per request with the method, route pattern, status, sizes, and latency, never the URL, headers, or body (XC-7, CK-3);
+  - errors as `{ "error": { "code", "message" } }` with statuses from the app's one table (CK-2). A code missing from the table, and any other error, answer an opaque `500 internal_error`, logged with its stack. Unknown routes are `404 not_found`. Fastify's own request errors are `400 invalid_request`, `413 request_too_large`, or `415 unsupported_media_type`;
+  - no automatic HEAD routes (PX-8);
+  - `/_/health` and `/_/ready` (XC-3), and a metrics listener on a port of its own (XC-2);
+  - an app that can't start, such as with an invalid platform config (PC-1), logs why and exits with 1. SIGINT and SIGTERM stop accepting, drain in-flight requests, close the app's connections, and exit (CK-6).

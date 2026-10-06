@@ -93,6 +93,8 @@ credentials:                            # How the platform authenticates to upst
 
 **Price merge order:** `payments.default`, then the route's `payment` (named or inline). Each layer overrides only the fields it sets. Objects merge by key. Values and lists replace.
 
+**Path templates:** a path segment holds at most one `{parameter}`, alone or with literal text around it, such as `/files/{id}.json` or `/jobs/{job}:cancel`. Two parameters in one segment, or a parameter name used twice, fail at compile (SR-2, pass 3).
+
 **Reserved for later**, rejected in v1: `rules` (CEL conditions on the request), upstream types `mcp`, `graphql`, `websocket`, `grpc`, `chargeOn`, and per-unit prices.
 
 ## Requirements
@@ -112,6 +114,7 @@ credentials:                            # How the platform authenticates to upst
      - paths don't conflict across upstreams.
   3. Compile (SR-5).
 - **SR-3** Fetch linked OpenAPI documents at submit time through Outbound HTTP, with `sameHost` redirects and size and time limits. Store a snapshot in the revision. Store inline `paths` as they are. Never fetch a document while serving a call.
+  - Links are fetched concurrently. A failure is an issue at the link that names the host and what went wrong, never anything from the response.
 - **SR-4** Revisions are immutable and numbered per service. Keep the config as submitted, for the seller, and normalized, for compiling. A submit identical to the active revision is a no-op.
 - **SR-5** Compiling is a pure function of the revision and platform config. It returns a deeply frozen `ServiceRuntime`:
   - state;
@@ -119,6 +122,9 @@ credentials:                            # How the platform authenticates to upst
   - per operation: the upstream, the `target` path, the price in micro-USD, the `enabled` flag, credential references, and doc metadata ([AD-3](agent-docs.md)).
 
   It reads no secret values and does no I/O.
+  - Each operation has its route key (SR-6, in its short form when the operationId is unique), method and path template, upstream (name, base URL, origin, path prefix), target template, price, `enabled`, credential references (the credential, how to apply it, and the secret's name), and doc metadata.
+  - `runtime.match` walks a trie per method, built at compile time. `targetPath` builds the upstream path, keeping params percent-encoded.
+  - Template literals are stored percent-encoded in one normalized form, `normalizePathText`. The proxy normalizes request segments with the same function.
 - **SR-6** Route keys are `operationId`, or `<upstream>/<operationId>` when two upstreams share an `operationId`. A key splits on the first `/` only. Upstream names are `[a-z0-9-]`, so they never clash.
 - **SR-7** Activation moves the pointer and publishes the service ID on the Redis invalidation channel. Rollback activates an earlier revision the same way.
 - **SR-8** Service state: `pending` until every upstream host is verified, then `live`. `suspended` while any host is suspended ([Ownership verification](ownership-verification.md)). The proxy serves only `live` services.

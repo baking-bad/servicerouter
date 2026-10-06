@@ -35,6 +35,8 @@ Serves `pay.servicerouter.ai`: registered services, routed calls, and platform p
 - **PX-2** Forward, never redirect. The proxy calls the upstream or target itself and returns its response. With a redirect, the agent would pay the target directly. Clients also drop `Authorization` on cross-origin redirects, which breaks payment keys and MPP.
 - **PX-3** Runtime cache: an in-process LRU by service ID. On a miss, load the active revision and its secrets, compile, and cache. Invalidate on the Redis channel. Keep a TTL as a safety net. Cache unknown IDs briefly, so random IDs don't reach Postgres.
 - **PX-4** Match the method and the rest of the path against the runtime's operations. Literal segments beat parameters. No match, `enabled: false`, or a `pending` service → `404`. A `suspended` service → `403 service_suspended`.
+  - Each request segment is normalized with `normalizePathText` before matching ([SR-5](service-registry.md)).
+  - Literal beats parameter segment by segment. A parameter route still matches when a literal branch leads nowhere further on.
 - **PX-5** The request to the upstream:
   - Method, path (after `target` rewriting), query, and body pass through.
   - Only these request headers pass: `accept`, `accept-encoding`, `accept-language`, `cache-control`, `content-digest`, `content-encoding`, `content-language`, `content-length`, `content-type`, `digest`, `idempotency-key`, `if-match`, `if-modified-since`, `if-none-match`, `if-range`, `if-unmodified-since`, `prefer`, `range`, `repr-digest`, `want-content-digest`, `want-digest`, `want-repr-digest`. Everything else is dropped, including `Authorization`, `PAYMENT-SIGNATURE`, `X-PAYMENT`, and `Cookie`.
@@ -62,6 +64,7 @@ Serves `pay.servicerouter.ai`: registered services, routed calls, and platform p
 
 | Status | Code | When |
 |---|---|---|
+| `400` | `invalid_request` | A malformed request, such as invalid JSON. Answered by the server itself ([CK-10](common-kit.md)). |
 | `400` | `invalid_target` | The first segment isn't `service`, a platform path, or a hostname. Or the host is an IP address. |
 | `400` | `multiple_payment_methods` | Two or more payment credentials. |
 | `400` | `not_payable` | Routing: the target didn't answer `402`. |
@@ -76,7 +79,10 @@ Serves `pay.servicerouter.ai`: registered services, routed calls, and platform p
 | `402` | `payment_invalid` | A facilitator rejected the x402 payment, or MPP verification failed. |
 | `403` | `service_suspended` | The service is suspended. |
 | `404` | `not_found` | Unknown service or operation, or a disabled route. |
+| `413` | `request_too_large` | The request body is over the limit (PX-8). |
+| `415` | `unsupported_media_type` | A content type the route doesn't take. |
 | `429` | `rate_limited` | Over a rate limit. |
+| `500` | `internal_error` | Anything unexpected. Opaque: the details go to the log only (XC-7). |
 | `502` | `unsupported_payment` | Routing: no option we can pay. |
 | `502` | `quote_exceeded` | Routing: the target asked for more than the quote. |
 | `502` | `response_too_large` | x402: the response is over the buffer limit. |
