@@ -1,7 +1,7 @@
 import {
   readHost, readPort, readSecret, systemClock, type AppContext, type RunningApp,
 } from '@servicerouter/common';
-import { loadPlatformConfig } from '@servicerouter/core';
+import { createBlockfrostClient, loadPlatformConfig } from '@servicerouter/core';
 import { createPostgres, createRedis } from '@servicerouter/db';
 import { checkFacilitators, createFacilitators, createMppSettlementCheck, createTempoRpc, type MppSettlementCheck } from '@servicerouter/payments';
 
@@ -11,6 +11,8 @@ export const defaultMetricsPort = 9082;
 // How long the facilitators get to answer /supported at startup, as for the proxy (PR-6), and the Tempo
 // RPC its chain ID (PR-9)
 export const facilitatorStartupTimeoutMs = 10_000;
+// Each Blockfrost call of the deposit watcher
+export const blockfrostTimeoutMs = 10_000;
 
 /** Wires the production dependencies from platform config and the environment, then listens. */
 export const startWorkers = async ({ env, logger }: AppContext): Promise<RunningApp> => {
@@ -40,12 +42,17 @@ export const startWorkers = async ({ env, logger }: AppContext): Promise<Running
     mppCheck = createMppSettlementCheck({ rpc, timeoutMs: config.timeouts.connectMs, clock: systemClock });
   }
 
+  // DP-2: the deposit watcher reads the chain through Blockfrost, while deposits are on
+  const blockfrost = config.deposits
+    ? createBlockfrostClient({ url: config.deposits.blockfrostUrl, projectId: readSecret('BLOCKFROST_PROJECT_ID', env), timeoutMs: blockfrostTimeoutMs })
+    : undefined;
+
   const postgres = createPostgres({ url: databaseUrl, logger });
   const redis = createRedis({ url: redisUrl, logger });
   const closeConnections = async () => {
     await Promise.all([postgres.close(), redis.close()]);
   };
-  const server = createApp({ config, logger, postgres, redis, facilitators, ...(mppCheck ? { mppCheck } : {}) });
+  const server = createApp({ config, logger, postgres, redis, facilitators, ...(mppCheck ? { mppCheck } : {}), ...(blockfrost ? { blockfrost } : {}) });
   try {
     await server.listen(listen);
   }

@@ -3,12 +3,15 @@ import {
   type MetricsServer, type Timers,
 } from '@servicerouter/common';
 import {
-  createOwnershipFileFetcher, createOwnershipVerifier, cryptoRandomSource, ownershipFileLimits, type InvalidationBus, type PlatformConfig,
-  type RandomSource,
+  createOwnershipFileFetcher, createOwnershipVerifier, cryptoRandomSource, ownershipFileLimits, type BlockfrostClient, type InvalidationBus,
+  type PlatformConfig, type RandomSource,
 } from '@servicerouter/core';
-import { createLedger, createOwnershipStore, createPaymentRepository, createRedisInvalidationBus, type Postgres, type Redis } from '@servicerouter/db';
+import {
+  createDepositRepository, createLedger, createOwnershipStore, createPaymentRepository, createRedisInvalidationBus, type Postgres, type Redis,
+} from '@servicerouter/db';
 import { createAssetLookup, createFacilitatorLookup, type Facilitator, type MppSettlementCheck } from '@servicerouter/payments';
 
+import { createDepositWatcherJob, depositWatcherIntervalMs, depositWatcherJobName, depositWatcherLockId } from './depositWatcher.js';
 import { createHoldExpiry, holdExpiryIntervalMs, holdExpiryLockId, holdTtlMs } from './holdExpiry.js';
 import { createOwnershipRecheck, ownershipRecheckJobIntervalMs, ownershipRecheckJobName, ownershipRecheckLockId } from './ownershipRecheck.js';
 import { createScheduler, type Scheduler } from './scheduler.js';
@@ -39,6 +42,8 @@ export interface WorkersDependencies {
   readonly ownershipFileUrl?: (host: string) => string;
   // Randomness for verification tokens. Default: node:crypto.
   readonly random?: RandomSource;
+  // Reads deposit addresses' transactions (DP-2). The deposit watcher runs only with it, while deposits are on.
+  readonly blockfrost?: BlockfrostClient;
 }
 
 export interface WorkersServer extends MetricsServer {
@@ -64,6 +69,7 @@ export const createApp = ({
   ownershipHttp,
   ownershipFileUrl,
   random = cryptoRandomSource,
+  blockfrost,
 }: WorkersDependencies): WorkersServer => {
   const server = createMetricsServer({
     logger,
@@ -96,6 +102,9 @@ export const createApp = ({
     feeBps: config.feeBps,
     logger,
   });
+  const depositWatcher = config.deposits && blockfrost
+    ? createDepositWatcherJob({ store: createDepositRepository({ db: postgres.db, clock, ids }), blockfrost, clock, logger, deposits: config.deposits })
+    : undefined;
   const scheduler = createScheduler({
     jobs: [{
       name: 'hold_expiry',
@@ -118,7 +127,14 @@ export const createApp = ({
       run: async () => {
         await ownershipRecheck();
       },
-    }],
+    }, ...depositWatcher ? [{
+      name: depositWatcherJobName,
+      lockId: depositWatcherLockId,
+      intervalMs: depositWatcherIntervalMs,
+      run: async () => {
+        await depositWatcher();
+      },
+    }] : []],
     locks: postgres,
     clock,
     timers,

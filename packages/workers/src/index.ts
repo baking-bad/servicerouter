@@ -8,3 +8,4 @@ export { createSettlementFollowUp, SettlementFollowUpError, settlementFollowUpIn
 export type { SettlementFollowUpOptions, SettlementFollowUpResult } from './settlementFollowUp.js';
 export type { Job, JobRunResult, Scheduler, SchedulerOptions } from './scheduler.js';
 export { createOwnershipRecheck, OwnershipRecheckFailedError, ownershipRecheckBatchSize, ownershipRecheckJobIntervalMs, ownershipRecheckJobName, ownershipRecheckLockId } from './ownershipRecheck.js';
+export { createDepositWatcherJob, DepositWatcherFailedError, depositWatcherBatchSize, depositWatcherIntervalMs, depositWatcherJobName, depositWatcherLockId } from './depositWatcher.js';
