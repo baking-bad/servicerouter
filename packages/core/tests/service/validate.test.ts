@@ -23,7 +23,7 @@ describe('validateServiceConfig', () => {
     expect(result.ok && result.config.service.id).toBe('my-app');
   });
 
-  it('accepts the same config as bytes, JSON text, and a JSON object', () => {
+  it('accepts the same config as bytes, JSON text, and a JSON object (SR-1)', () => {
     for (const source of [Buffer.from(exampleServiceConfig), JSON.stringify(exampleServiceObject()), exampleServiceObject()])
       expect(validateServiceConfig(source, exampleContext)).toMatchObject({ ok: true });
   });
@@ -36,7 +36,7 @@ describe('validateServiceConfig', () => {
     expect(Object.isFrozen(source)).toBe(false);
   });
 
-  it('reports a syntax error with its position, without echoing the source', () => {
+  it('reports a syntax error with its position, without echoing the source (SR-1)', () => {
     const errors = errorsOf('servicerouter:\n  version: "1"\nservice: [DO_NOT_ECHO');
 
     expect(errors).toHaveLength(1);
@@ -44,12 +44,12 @@ describe('validateServiceConfig', () => {
     expect(JSON.stringify(errors)).not.toContain('DO_NOT_ECHO');
   });
 
-  it('applies the strict loader to text', () => {
+  it('applies the strict loader to text (SR-1)', () => {
     expect(errorsOf(`${exampleServiceConfig}\nservice:\n  id: other\n`)[0]).toMatchObject({ message: 'duplicate key' });
     expect(errorsOf('servicerouter: &a { version: "1", self: *a }')[0]).toMatchObject({ message: 'the document must not contain cycles' });
   });
 
-  it('applies the same safety checks to objects', () => {
+  it('applies the same safety checks to objects (SR-1)', () => {
     const value: unknown = JSON.parse('{"service": {"__proto__": {"id": "x"}}}');
 
     expect(errorsOf(value as Record<string, unknown>)).toEqual([{ path: '/service/__proto__', message: 'the key "__proto__" is not allowed' }]);
