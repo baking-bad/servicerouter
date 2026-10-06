@@ -1,8 +1,8 @@
 import type { CatalogItem, CatalogRoute, CatalogService, CatalogStats, PaymentMethod } from '../api/types';
 import { formatMicroUsd, parseUsd } from '../money';
 
-// Sample data for the catalog until step 13 ships GET /v1/catalog (WB-10). Every service here is
-// invented: no real company, product, or API. The shapes are CI-5's.
+// Sample data for the catalog while the `catalog` group of WEB_MOCKS is on (WB-10). Every service here
+// is invented: no real company, product, or API. The shapes are CI-5's.
 
 export const sampleCategoryTitles: ReadonlyMap<string, string> = new Map([
   ['ai', 'AI'],

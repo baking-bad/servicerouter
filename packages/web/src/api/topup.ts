@@ -3,7 +3,7 @@ import { sampleTopup } from '../mocks/topup';
 import { ApiError, callApi } from './http';
 import type { Sourced, Topup } from './types';
 
-// The top-up data (DP-5): GET /v1/topup/{token}, or sample data until step 9 (WB-10).
+// The top-up data (DP-5): GET /v1/topup/{token}, or sample data while the `topup` group is on (WB-10).
 
 const tokenPattern = /^[A-Za-z0-9_-]{1,128}$/;
 

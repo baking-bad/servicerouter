@@ -31,6 +31,8 @@ export interface CatalogItem {
   // Registered and verified, as opposed to a routed endpoint (AR14)
   readonly verified: boolean;
   readonly updatedAt: string;
+  // A routed endpoint's routing link (CI-2). Its ID is `routed:<host><path>`, with no page of its own.
+  readonly link?: string;
 }
 
 export interface CatalogCategory {
@@ -83,12 +85,14 @@ export interface CatalogQuery {
   readonly cursor?: string;
 }
 
-export const depositStatuses = ['seen', 'confirming', 'credited'] as const;
+export const depositStatuses = ['confirming', 'credited', 'not_credited', 'dropped'] as const;
 export type DepositStatus = typeof depositStatuses[number];
 
 export interface Deposit {
   readonly transactionHash: string;
-  readonly amount: string;
+  readonly outputIndex: number;
+  // The USD it credits, or null for an output without the deposit asset
+  readonly amount: string | null;
   readonly status: DepositStatus;
   readonly confirmations: number;
   readonly confirmationsRequired: number;
@@ -100,6 +104,8 @@ export interface Deposit {
 export interface Topup {
   readonly address: string;
   readonly asset: { readonly name: string; readonly symbol: string; readonly network: string; readonly networkTitle: string };
+  readonly confirmationsRequired: number;
+  // The latest 20, newest first
   readonly deposits: readonly Deposit[];
 }
 

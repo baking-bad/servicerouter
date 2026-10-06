@@ -1,4 +1,5 @@
-import type { PaymentMethod } from './api/types';
+import type { DepositStatus, PaymentMethod } from './api/types';
+import { displayUsd } from './money';
 
 // The website's words, shared by each page and its Markdown version (WB-11), so the two never drift.
 
@@ -50,5 +51,15 @@ export const methodInfo: Readonly<Record<PaymentMethod, MethodInfo>> = {
     networks: 'Stablecoins on Tempo',
   },
 };
+
+export const depositStatusTitles: Readonly<Record<DepositStatus, string>> = {
+  confirming: 'Confirming',
+  credited: 'Credited',
+  not_credited: 'Not credited',
+  dropped: 'Dropped',
+};
+
+/** A deposit's amount in USD, or a dash for an output without the deposit asset (DP-5). */
+export const depositAmount = (amount: string | null): string => amount === null ? '—' : displayUsd(amount);
 
 export const sampleNotice = 'Sample data: shown until the Platform API serves it. These services and numbers aren\'t real.';

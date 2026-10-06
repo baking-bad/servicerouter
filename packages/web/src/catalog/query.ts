@@ -6,6 +6,8 @@ import { parseUsd } from '../money';
 export const defaultSort: CatalogSort = 'popular';
 export const defaultPageSize = 24;
 const maxQueryLength = 100;
+// GET /v1/catalog refuses a longer category
+const maxCategoryLength = 64;
 
 export type SearchParams = Readonly<Record<string, string | readonly string[] | undefined>>;
 
@@ -27,7 +29,7 @@ export const parseCatalogQuery = (params: SearchParams): CatalogQuery => {
   const cursor = first(params['cursor']);
 
   return {
-    ...(category && categoryPattern.test(category) ? { category } : {}),
+    ...(category && category.length <= maxCategoryLength && categoryPattern.test(category) ? { category } : {}),
     ...(q ? { q } : {}),
     ...(method && (paymentMethods as readonly string[]).includes(method) ? { method: method as PaymentMethod } : {}),
     ...(maxPrice && parseUsd(maxPrice) !== undefined ? { maxPrice } : {}),
@@ -49,6 +51,9 @@ export const catalogQueryParams = (query: CatalogQuery, changes: Partial<Record<
 
   return params;
 };
+
+/** Where a catalog entry leads: a registered service's page, or a routed endpoint's routing link (AR14). */
+export const serviceHref = (item: CatalogItem): string => item.verified || item.link === undefined ? `/discover/${item.id}` : item.link;
 
 /** A category, or one of its subcategories. */
 export const inCategory = (category: string, filter: string): boolean => category === filter || category.startsWith(`${filter}/`);

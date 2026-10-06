@@ -1,10 +1,10 @@
 import { isMocked, type SiteSettings } from '../config';
-import { catalogQueryParams, queryCatalog } from '../catalog/query';
+import { catalogQueryParams, defaultPageSize, queryCatalog } from '../catalog/query';
 import { sampleCategoryTitles, sampleServices, toCatalogItem, type SampleLinks } from '../mocks/catalog';
 import { ApiError, callApi } from './http';
 import type { CatalogPage, CatalogQuery, CatalogService, Sourced } from './types';
 
-// The catalog (CI-5): GET /v1/catalog and GET /v1/catalog/{id}, or sample data until step 13 (WB-10).
+// The catalog (CI-5): GET /v1/catalog and GET /v1/catalog/{id}, or sample data while the `catalog` group is on (WB-10).
 
 /**
  * A service's agent documents: served by the website from the catalog while `agent-docs` is sample
@@ -24,7 +24,8 @@ export const listCatalog = async (settings: SiteSettings, query: CatalogQuery): 
   if (isMocked(settings, 'catalog'))
     return { value: queryCatalog(sampleServices(sampleLinks(settings)).map(toCatalogItem), sampleCategoryTitles, query), sample: true };
 
-  const params = catalogQueryParams(query).toString();
+  // The sample's page size, not the API's default
+  const params = catalogQueryParams({ ...query, limit: query.limit ?? defaultPageSize }).toString();
 
   return { value: await callApi<CatalogPage>(settings.apiUrl, { path: `/v1/catalog${params ? `?${params}` : ''}` }), sample: false };
 };

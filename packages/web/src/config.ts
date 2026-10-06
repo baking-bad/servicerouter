@@ -21,8 +21,8 @@ export const defaultSettings = {
   siteUrl: 'https://servicerouter.ai',
   apiUrl: 'https://api.servicerouter.ai',
   payUrl: 'https://pay.servicerouter.ai',
-  // Everything the Platform API can't answer yet: catalog (step 13), agent docs (step 10),
-  // top-up data (step 9), and service status (step 8)
+  // Sample data while the platform fills up (owner, 2026-10-06T19:50:00+08:00): the catalog (CI-5), agent docs (AD-1),
+  // top-up data (DP-5), and service status (OV-7). The Platform API serves each; `none` reads them all.
   mocks: mockGroups.join(','),
 } as const;
 

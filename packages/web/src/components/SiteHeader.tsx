@@ -16,6 +16,7 @@ export const SiteHeader = () => (
       </a>
       <nav className="nav" aria-label="Main">
         {links.map(link => <a key={link.href} href={link.href}>{link.label}</a>)}
+        <a href="/console" className="nav-action">Console</a>
       </nav>
     </div>
   </header>
