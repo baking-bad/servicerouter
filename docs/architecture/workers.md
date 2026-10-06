@@ -16,7 +16,7 @@ Runs every background job.
 |---|---|---|---|
 | Hold expiry | Every minute | [Ledger](ledger.md) | 4 |
 | Settlement follow-up | Every 30 seconds | [Payment rails](payment-rails.md) | 5 |
-| Ownership re-check | Daily, spread over the day | [Ownership verification](ownership-verification.md) | 8 |
+| Ownership re-check | Each host daily: the job runs every 5 minutes and checks what is due | [Ownership verification](ownership-verification.md) | 8 |
 | Deposit watcher | Every few seconds | [Deposits](deposits.md) | 9 |
 | Payouts | The 1st of the month, UTC | [Payouts](payouts.md) | 11 |
 | Treasury balances | Every few minutes | [Treasury](treasury.md) | 11 |
@@ -33,6 +33,7 @@ Runs every background job.
   - `workers_job_last_success_timestamp_seconds{job}`, `workers_job_duration_seconds{job}`, and `workers_job_runs_total{job,result}` (`success`, `failure`, `skipped`). A failed run leaves the last success where it was.
   - A job runs one interval after the app starts, then one interval after each run ends, so its runs never overlap.
 - **WK-5** Only the jobs that sign transactions load signing keys.
+- **WK-7** The workers connect to Redis (`REDIS_URL`) to publish the invalidation events of service state changes (OV-5), and their readiness checks it.
 - **WK-6** Settlement follow-up: for each `settling` payment, repeat the identical `settle` call ([PR-12](payment-rails.md)). Settled → book the earnings, and flag the payment for review if the buyer got no response. Definitively failed or expired → mark it `failed`. Nothing is booked.
   - MPP payments ([PR-9](payment-rails.md)) have no settle to repeat. The job reads the transaction's receipt by its hash on the Tempo RPC. Succeeded with the expected transfer → book it, flagged for review if no receipt went out. Reverted → `failed`. Not found once the transaction's validity window has passed → `failed`. Otherwise → next run. The job never broadcasts.
   - It repeats the stored `settlement_request` through the network's facilitator. Still pending → next run.

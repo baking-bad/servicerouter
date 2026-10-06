@@ -132,7 +132,7 @@ credentials:                            # How the platform authenticates to upst
   - `POST /v1/services/{id}/rollback` with `{ "revision": n }` takes any stored revision, so it also rolls forward. The active one answers `changed: false`. An unknown one is `404 not_found`.
   - The event is published after the commit, with a 2 s deadline. A failure is logged, and the request still succeeds: caches expire on their own.
 - **SR-8** Service state: `pending` until every upstream host is verified, then `live`. `suspended` while any host is suspended ([Ownership verification](ownership-verification.md)). The proxy serves only `live` services.
-  - The `OwnershipStatus` port answers whether every upstream host of a service is verified. Until step 8, its adapter `assumeHostsVerified` says yes, so an activation is `live` (S2-D1).
+  - The `OwnershipStatus` port gives the state of each upstream host for the account. Activation is `suspended` while any host is, `live` while every host is verified or in its grace period, `pending` otherwise. Production reads `upstream_hosts` (step 8). The step 2 adapter `assumeHostsVerified` stays for tests that aren't about ownership.
 - **SR-9** Reserved fields fail validation with a clear "not supported yet" error. They are never silently ignored.
 - **SR-10** Price changes apply to new requests at once, unless the revision also changes `payouts` (SR-13).
 - **SR-11** Every submit, activation, and rollback writes the audit log.
@@ -152,11 +152,11 @@ credentials:                            # How the platform authenticates to upst
   - Media types: `application/json` (the config, or the envelope), and `application/yaml`, `application/x-yaml`, or `text/yaml`. The body may be up to 2 MiB; the config itself up to 1 MiB ([CK-8](common-kit.md)). The envelope takes only `config` and `secrets`.
   - Responses: `201` when the submit created the service, `200` otherwise, with `{ id, revision, changed, state, warnings }`. A service owned by another account is `403 forbidden` on every endpoint.
   - Config errors are `400 invalid_config`: `{ "error": { "code", "message", "details": [{ "path", "line", "column", "message" }], "warnings": [...] } }`. `line` and `column` are `null` when a problem has no position. Positions come for YAML, JSON, an envelope's YAML string, and an envelope's config object.
-- **SR-13** An activation that changes `payouts`, including a rollback, waits for a payout confirmation ([OV-10](ownership-verification.md)). Until then, the active revision keeps serving. The service's first activation needs no confirmation. Ownership verification arrives in step 8. Until then, payout changes activate at once.
+- **SR-13** An activation that changes `payouts`, including a rollback, waits for a payout confirmation ([OV-10](ownership-verification.md)). Until then, the active revision keeps serving. The service's first activation needs no confirmation. The response carries `payoutConfirmation` with the waiting revision and its token.
 
 ## Storage
 
-- `services`: the ID, the owning account, the state, and the active revision, a foreign key to `service_revisions`.
+- `services`: the ID, the owning account, the state, the active revision, a foreign key to `service_revisions`, and the active revision's upstream hosts (OV-5).
 - `service_revisions`: unique by service and number. The config as submitted with its media type, the parsed config, and the OpenAPI snapshots by link, as `json` so key order survives. No update or delete.
 - `service_secrets`: owned by [Secrets](secrets.md).
 - For the proxy, `loadForServing(id)` returns a `ServingService` read in one snapshot: the state, the active revision, the parsed config, the OpenAPI snapshots, and the sealed secrets.
