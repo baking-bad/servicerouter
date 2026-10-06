@@ -171,8 +171,8 @@ describe('the deposit watcher\'s lines (L-8)', () => {
 
     await watcher(logger)();
 
-    expect(lines.find(line => line['msg'] === 'A deposit was seen' && line['txHash'] === txHash)).toMatchObject({ level: 30, accountId, outputIndex: 0, status: 'pending' });
-    expect(lines.find(line => line['msg'] === 'A deposit was credited' && line['txHash'] === txHash)).toMatchObject({ level: 30, accountId, outputIndex: 0, amount: '7000000' });
+    expect(lines.find(line => line['msg'] === 'A deposit was seen' && line['txHash'] === txHash)).toMatchObject({ level: 30, accountId, outputIndex: 0, status: 'pending', amount: '7' });
+    expect(lines.find(line => line['msg'] === 'A deposit was credited' && line['txHash'] === txHash)).toMatchObject({ level: 30, accountId, outputIndex: 0, amount: '7' });
     expect(JSON.stringify(lines)).not.toContain('preprodTestProjectId');
   });
 });

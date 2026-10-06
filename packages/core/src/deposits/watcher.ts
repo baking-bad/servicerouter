@@ -1,7 +1,10 @@
-import type { Clock, Logger, MicroUsd } from '@servicerouter/common';
+import { formatUsd, type Clock, type Logger, type MicroUsd } from '@servicerouter/common';
 
 import type { Asset } from '../platform/config.js';
 import type { BlockfrostClient } from './blockfrost.js';
+
+// A deposit's USD amount for a log line, as the other lines write amounts: "25", not micro-USD
+const usdOf = (amount: MicroUsd | undefined): { readonly amount?: string } => amount === undefined ? {} : { amount: formatUsd(amount) };
 
 /** A deposit's state (DP-3, DP-4). */
 export const depositStatuses = ['pending', 'credited', 'not_credited', 'dropped'] as const;
@@ -123,7 +126,7 @@ export const createDepositWatcher = ({ store, blockfrost, clock, logger, asset, 
     }
     await store.recordDeposits(deposits);
     for (const deposit of deposits)
-      logger.info({ accountId: deposit.accountId, txHash: deposit.txHash, outputIndex: deposit.outputIndex, status: deposit.status }, 'A deposit was seen');
+      logger.info({ accountId: deposit.accountId, txHash: deposit.txHash, outputIndex: deposit.outputIndex, status: deposit.status, ...usdOf(deposit.usdAmount) }, 'A deposit was seen');
 
     let credited = 0;
     let dropped = 0;
@@ -146,7 +149,7 @@ export const createDepositWatcher = ({ store, blockfrost, clock, logger, asset, 
         waiting += 1;
       }
       else if (await store.credit({ txHash: deposit.txHash, outputIndex: deposit.outputIndex, now })) {
-        logger.info({ accountId: deposit.accountId, txHash: deposit.txHash, outputIndex: deposit.outputIndex, amount: deposit.usdAmount?.toString() }, 'A deposit was credited');
+        logger.info({ accountId: deposit.accountId, txHash: deposit.txHash, outputIndex: deposit.outputIndex, ...usdOf(deposit.usdAmount) }, 'A deposit was credited');
         credited += 1;
       }
     }
