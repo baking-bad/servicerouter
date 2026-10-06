@@ -2,9 +2,11 @@ import { constants, createCipheriv, createDecipheriv, privateDecrypt, publicEncr
 
 import { Secret } from '@servicerouter/common';
 
+import { assertValidBinding, findBindingProblem } from './binding.js';
 import { deriveKeyId, loadPrivateKey, loadPublicKey } from './keys.js';
 import {
-  SecretKeyInvalidError, SecretOpenFailedError, sealedSecretVersion, type OpenSecretInput, type SealedSecret, type SecretOpener, type SecretSealer,
+  SecretBindingInvalidError, SecretKeyInvalidError, SecretOpenFailedError, sealedSecretVersion, type OpenSecretInput, type SealedSecret,
+  type SecretOpener, type SecretSealer,
 } from './ports.js';
 
 const cipherName = 'aes-256-gcm';
@@ -21,8 +23,8 @@ const oaep = (key: KeyObject) => ({ key, padding: constants.RSA_PKCS1_OAEP_PADDI
 const loneSurrogate = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u;
 
 const field = (value: string): Buffer => {
-  if (loneSurrogate.test(value))
-    throw new TypeError('The service ID and secret name must be well-formed text');
+  if (typeof value !== 'string' || loneSurrogate.test(value))
+    throw new SecretBindingInvalidError('The associated data must be well-formed text');
 
   const bytes = Buffer.from(value, 'utf8');
   const length = Buffer.alloc(4);
@@ -31,14 +33,28 @@ const field = (value: string): Buffer => {
   return Buffer.concat([length, bytes]);
 };
 
+export interface AssociatedDataInput {
+  // One byte: 0 to 255
+  readonly version: number;
+  readonly keyId: string;
+  readonly serviceId: string;
+  readonly name: string;
+  readonly origin: string;
+}
+
 /**
- * Binds a ciphertext to its format version, key ID, service ID, and secret name (SC-3):
- * label ‖ version ‖ keyId ‖ serviceId ‖ name, where the version is one byte and every string is
- * a 4-byte big-endian UTF-8 length followed by its UTF-8 bytes. Lengths make it unambiguous:
- * service `a` with name `b:c` never matches service `a:b` with name `c`.
+ * Binds a ciphertext to its format version, key ID, service ID, secret name, and upstream origin
+ * (SC-3, SC-10): label ‖ version ‖ keyId ‖ serviceId ‖ name ‖ origin, where the version is one byte
+ * and every string is a 4-byte big-endian UTF-8 length followed by its UTF-8 bytes. Lengths make it
+ * unambiguous: service `a` with name `b-c` never matches service `a-b` with name `c`. Throws
+ * SecretBindingInvalidError for a version outside one byte or text that isn't well-formed.
  */
-export const encodeAssociatedData = (version: number, keyId: string, serviceId: string, name: string): Buffer =>
-  Buffer.concat([field(associatedDataLabel), Buffer.from([version]), field(keyId), field(serviceId), field(name)]);
+export const encodeAssociatedData = ({ version, keyId, serviceId, name, origin }: AssociatedDataInput): Buffer => {
+  if (!Number.isInteger(version) || version < 0 || version > 255)
+    throw new SecretBindingInvalidError('The version must be an integer from 0 to 255');
+
+  return Buffer.concat([field(associatedDataLabel), Buffer.from([version]), field(keyId), field(serviceId), field(name), field(origin)]);
+};
 
 // Owns its memory, unlike Buffer.from, so filling it with zeros reaches every copy we made
 const toOwnedBytes = (value: string): Buffer => {
@@ -48,6 +64,15 @@ const toOwnedBytes = (value: string): Buffer => {
   return bytes;
 };
 
+// A copy in memory of its own. Buffer.concat and friends may hand out a view into Node's shared pool,
+// and a sealed field must never carry unrelated process memory along when it's cloned or sent.
+const ownedCopy = (bytes: Uint8Array): Buffer => {
+  const copy = Buffer.alloc(bytes.byteLength);
+  copy.set(bytes);
+
+  return copy;
+};
+
 /** A sealer that holds only a public key (SC-2, SC-4). Throws SecretKeyInvalidError for a private, short, or non-RSA key. */
 export const createSecretSealer = (publicKeyPem: string): SecretSealer => {
   const publicKey = loadPublicKey(publicKeyPem);
@@ -55,8 +80,9 @@ export const createSecretSealer = (publicKeyPem: string): SecretSealer => {
 
   const sealer: SecretSealer = {
     keyId,
-    seal: ({ serviceId, name, value }) => {
-      const associatedData = encodeAssociatedData(sealedSecretVersion, keyId, serviceId, name);
+    seal: ({ serviceId, name, origin, value }) => {
+      assertValidBinding({ serviceId, name, origin });
+      const associatedData = encodeAssociatedData({ version: sealedSecretVersion, keyId, serviceId, name, origin });
       const dataKey = randomBytes(dataKeyBytes);
       const iv = randomBytes(ivBytes);
       // A string can't be wiped, but the bytes we make from it can
@@ -69,10 +95,10 @@ export const createSecretSealer = (publicKeyPem: string): SecretSealer => {
         return Object.freeze<SealedSecret>({
           version: sealedSecretVersion,
           keyId,
-          wrappedKey: publicEncrypt(oaep(publicKey), dataKey),
-          iv,
-          ciphertext,
-          tag: cipher.getAuthTag(),
+          wrappedKey: ownedCopy(publicEncrypt(oaep(publicKey), dataKey)),
+          iv: ownedCopy(iv),
+          ciphertext: ownedCopy(ciphertext),
+          tag: ownedCopy(cipher.getAuthTag()),
         });
       }
       finally {
@@ -99,15 +125,22 @@ export const createSecretOpener = (privateKeyPems: readonly Secret[]): SecretOpe
     keys.set(deriveKeyId(key), key);
   }
 
-  const open = ({ serviceId, name, sealed }: OpenSecretInput): Secret => {
-    const key = sealed.version === sealedSecretVersion ? keys.get(sealed.keyId) : undefined;
-    if (!key || sealed.iv.length !== ivBytes || sealed.tag.length !== tagBytes)
-      throw new SecretOpenFailedError();
-
+  const open = (input: OpenSecretInput): Secret => {
     let dataKey: Buffer | undefined;
+    let head: Buffer | undefined;
+    let tail: Buffer | undefined;
     let plaintext: Buffer | undefined;
     try {
-      const associatedData = encodeAssociatedData(sealed.version, sealed.keyId, serviceId, name);
+      // Everything is checked inside the try: a missing or malformed field fails like any other
+      const { serviceId, name, origin, sealed } = input;
+      if (findBindingProblem({ serviceId, name, origin }))
+        throw new SecretOpenFailedError();
+
+      const key = sealed.version === sealedSecretVersion ? keys.get(sealed.keyId) : undefined;
+      if (!key || sealed.iv.length !== ivBytes || sealed.tag.length !== tagBytes)
+        throw new SecretOpenFailedError();
+
+      const associatedData = encodeAssociatedData({ version: sealed.version, keyId: sealed.keyId, serviceId, name, origin });
       dataKey = privateDecrypt(oaep(key), sealed.wrappedKey);
       if (dataKey.length !== dataKeyBytes)
         throw new SecretOpenFailedError();
@@ -115,7 +148,10 @@ export const createSecretOpener = (privateKeyPems: readonly Secret[]): SecretOpe
       const decipher = createDecipheriv(cipherName, dataKey, sealed.iv, { authTagLength: tagBytes });
       decipher.setAAD(associatedData);
       decipher.setAuthTag(sealed.tag);
-      plaintext = Buffer.concat([decipher.update(sealed.ciphertext), decipher.final()]);
+      // Each output holds plaintext, so each is wiped below, not only the joined copy
+      head = decipher.update(sealed.ciphertext);
+      tail = decipher.final();
+      plaintext = Buffer.concat([head, tail]);
 
       return Secret.from(plaintext.toString('utf8'));
     }
@@ -125,6 +161,8 @@ export const createSecretOpener = (privateKeyPems: readonly Secret[]): SecretOpe
     }
     finally {
       dataKey?.fill(0);
+      head?.fill(0);
+      tail?.fill(0);
       plaintext?.fill(0);
     }
   };

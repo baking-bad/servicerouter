@@ -2,6 +2,7 @@ import type { SchemaObject } from 'ajv';
 
 import { serviceIdPattern } from '@servicerouter/common';
 
+import { secretNamePattern } from '../secrets/binding.js';
 import {
   array, boolean, constant, email, httpsUrl, map, object, oneOfValues, singleLine, text, usdAmount,
 } from '../validation/schema.js';
@@ -14,7 +15,7 @@ const name: SchemaObject = {
   errorMessage: 'must be 1–32 lowercase letters, digits, or hyphens, starting and ending with a letter or digit',
 };
 const secretName: SchemaObject = {
-  type: 'string', pattern: '^[a-z0-9](?:[a-z0-9_-]{0,62}[a-z0-9])?$',
+  type: 'string', pattern: secretNamePattern,
   errorMessage: 'must be a secret name: 1–64 lowercase letters, digits, hyphens, or underscores. Send the value in the request\'s secrets, never in the config',
 };
 // `{param}` segments allowed; no query or fragment

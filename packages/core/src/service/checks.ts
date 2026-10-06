@@ -10,6 +10,7 @@ import type { CredentialDocument, ServiceConfigDocument, UpstreamDocument } from
 import {
   normalizeTemplate, operationsFromDocument, operationsFromPaths, pathParameters, type Operation, type OperationsResult,
 } from './openapi.js';
+import { getSecretUses } from './secretUses.js';
 
 export interface ServiceConfigContext {
   readonly platform: PlatformConfig;
@@ -19,6 +20,10 @@ export interface ServiceConfigContext {
   // Secrets already set for the service plus those sent with the submit. When given, credentials
   // whose secret is missing get a warning.
   readonly secretNames?: ReadonlySet<string>;
+  // Secrets that stay stored through this submit, by name, with the origin each is sealed for
+  // (SC-10): those already stored, minus those the submit sends again or deletes. An upstream that
+  // sends one of them to another origin fails validation, naming it.
+  readonly storedSecretOrigins?: ReadonlyMap<string, string>;
 }
 
 export interface ServiceConfigChecks {
@@ -269,6 +274,33 @@ export const checkServiceConfig = (config: ServiceConfigDocument, context: Servi
       warn(['credentials', name], 'is not used by any upstream', true);
     else if (context.secretNames && !context.secretNames.has(credential.secret))
       warn(['credentials', name, 'secret'], `the secret ${quote(credential.secret)} is not set. Send it with the config or set it through the secrets API`);
+  }
+
+  // Host binding (SC-10): each secret is sealed for the origin of the upstreams that send it
+  const secretUses = getSecretUses(config);
+  for (const [secret, uses] of secretUses) {
+    const origins = [...new Set(uses.map(use => use.origin))];
+    if (origins.length < 2)
+      continue;
+
+    for (const use of uses) {
+      error(['upstreams', use.upstream, 'auth'], `sends the secret ${quote(secret)} to ${use.origin}, and other upstreams send it to `
+        + `${origins.filter(origin => origin !== use.origin).join(', ')}. A secret is bound to one host: give each host its own secret`);
+    }
+  }
+  const stored = context.storedSecretOrigins;
+  for (const [index, upstream] of stored ? config.upstreams.entries() : []) {
+    const origin = new URL(upstream.baseUrl).origin;
+    const moved = [...secretUses]
+      .filter(([secret, uses]) => stored!.has(secret) && stored!.get(secret) !== origin && uses.some(use => use.upstream === index))
+      .map(([secret]) => secret);
+    if (moved.length === 0)
+      continue;
+
+    const [noun, pronoun] = moved.length === 1 ? ['the secret', 'it'] : ['the secrets', 'them'];
+    const storedFor = [...new Set(moved.map(secret => stored!.get(secret)!))].join(', ');
+    error(['upstreams', index, 'baseUrl'], `moves ${noun} ${list(moved)} from ${storedFor} to ${origin}. A secret is bound to its host: `
+      + `send ${pronoun} again in this request's secrets`);
   }
 
   return { errors, warnings };

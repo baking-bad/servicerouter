@@ -120,16 +120,11 @@ export type CompiledServiceConfigResult =
   | { readonly ok: false; readonly errors: readonly ValidationIssue[]; readonly warnings: readonly ValidationIssue[] };
 
 /**
- * All three passes of SR-2: schema, semantic checks, and compiling (SR-5). Returns every problem of
- * the first failing pass, each with its path and, for text, its line and column. The runtime takes
- * its service ID from the config.
+ * Passes 2 and 3 of SR-2 on a parsed config: the semantic checks, then compiling (SR-5). Returns every
+ * problem of the first failing pass, each with its path and, for text, its line and column.
  */
-export const validateAndCompileServiceConfig = (source: ServiceConfigSource, context: ServiceRuntimeContext): CompiledServiceConfigResult => {
-  const parsed = parseServiceConfig(source);
-  if (!parsed.ok)
-    return { ok: false, errors: parsed.errors, warnings: [] };
-
-  const checked = checkParsedServiceConfig(parsed.parsed, context);
+export const checkAndCompileParsedServiceConfig = (parsed: ParsedServiceConfig, context: ServiceRuntimeContext): CompiledServiceConfigResult => {
+  const checked = checkParsedServiceConfig(parsed, context);
   if (!checked.ok)
     return checked;
 
@@ -144,5 +139,18 @@ export const validateAndCompileServiceConfig = (source: ServiceConfigSource, con
 
   return compiled.ok
     ? { ok: true, config: checked.config, runtime: compiled.runtime, warnings: checked.warnings }
-    : { ok: false, errors: toIssues(compiled.errors, locatorFor(parsed.parsed.document)), warnings: checked.warnings };
+    : { ok: false, errors: toIssues(compiled.errors, locatorFor(parsed.document)), warnings: checked.warnings };
+};
+
+/**
+ * All three passes of SR-2: schema, semantic checks, and compiling (SR-5). Returns every problem of
+ * the first failing pass, each with its path and, for text, its line and column. The runtime takes
+ * its service ID from the config.
+ */
+export const validateAndCompileServiceConfig = (source: ServiceConfigSource, context: ServiceRuntimeContext): CompiledServiceConfigResult => {
+  const parsed = parseServiceConfig(source);
+
+  return parsed.ok
+    ? checkAndCompileParsedServiceConfig(parsed.parsed, context)
+    : { ok: false, errors: parsed.errors, warnings: [] };
 };

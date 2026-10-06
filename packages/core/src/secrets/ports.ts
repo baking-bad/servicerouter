@@ -23,18 +23,23 @@ export interface SealedSecret {
 export interface SealSecretInput {
   readonly serviceId: ServiceId;
   readonly name: string;
+  // The origin of the upstream the secret is sent to, as `new URL(baseUrl).origin` gives it (SC-10)
+  readonly origin: string;
   readonly value: Secret;
 }
 
 export interface OpenSecretInput {
   readonly serviceId: ServiceId;
   readonly name: string;
+  // The origin of the runtime upstream that uses the secret, never one stored next to it (SC-10)
+  readonly origin: string;
   readonly sealed: SealedSecret;
 }
 
 /** Port: seals with a public key only, so its holder (the Platform API) can't open anything. */
 export interface SecretSealer {
   readonly keyId: string;
+  /** Throws SecretBindingInvalidError for a malformed service ID, secret name, or origin. */
   seal(input: SealSecretInput): SealedSecret;
 }
 
@@ -47,8 +52,9 @@ export interface SecretOpener {
 }
 
 /**
- * Anything that stops a secret from opening: tampering, another service ID or name, an unknown key
- * ID, or an unsupported version. One error, so a failure tells an attacker nothing.
+ * Anything that stops a secret from opening: tampering, another service ID, name, or origin, an
+ * unknown key ID, an unsupported version, or a malformed sealed value. One error, so a failure tells
+ * an attacker nothing.
  */
 export class SecretOpenFailedError extends ServiceRouterError {
   readonly code = 'secret_open_failed';
@@ -61,4 +67,12 @@ export class SecretOpenFailedError extends ServiceRouterError {
 /** A key the sealer or opener can't use. The reason never quotes the key. */
 export class SecretKeyInvalidError extends ServiceRouterError {
   readonly code = 'secret_key_invalid';
+}
+
+/**
+ * What a secret would be bound to isn't valid (SC-3, SC-10): a malformed service ID or secret name,
+ * an origin that isn't an HTTPS origin, or a version outside one byte. The reason never quotes a value.
+ */
+export class SecretBindingInvalidError extends ServiceRouterError {
+  readonly code = 'secret_binding_invalid';
 }

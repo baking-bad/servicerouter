@@ -19,3 +19,16 @@ export { compileServiceRuntime } from './compile.js';
 export type { CompileServiceRuntimeInput, CompileServiceRuntimeResult } from './compile.js';
 export { fetchOpenApiDocuments, openApiFetchLimits } from './fetch.js';
 export type { FetchOpenApiDocumentsOptions, FetchOpenApiDocumentsResult } from './fetch.js';
+export { checkAndCompileParsedServiceConfig } from './validate.js';
+export { findMovedSecrets, getSecretOrigins, getSecretUses } from './secretUses.js';
+export type { SecretUse } from './secretUses.js';
+export { assumeHostsVerified, getUpstreamHosts, stateForActivation } from './ownership.js';
+export type { OwnershipStatus, OwnershipStatusInput } from './ownership.js';
+export { canonicalJson, changesPayouts, isSameRevision } from './registry.js';
+export type {
+  NewService, NewServiceRevision, ServiceRecord, ServiceRepository, ServiceRevision, ServiceRevisionSummary, ServiceSecretRepository,
+  ServingService, StoredSecret, StoredSecretInfo, SubmittedConfig,
+} from './registry.js';
+export {
+  InvalidServiceConfigError, SecretOriginMismatchError, ServiceForbiddenError, ServiceIdMismatchError, ServiceNotFoundError, UnusedSecretError,
+} from './errors.js';
