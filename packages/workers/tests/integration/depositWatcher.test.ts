@@ -143,6 +143,10 @@ describe('the deposit watcher (DP-2, DP-3, DP-4)', () => {
         },
         transactionOutputs: async () => undefined,
         transactionHeight: async () => undefined,
+        addressAmounts: async () => new Map(),
+        submitTransaction: async () => {
+          throw new Error('Not used');
+        },
       },
       clock,
       logger: createLogger({ level: 'silent' }),
