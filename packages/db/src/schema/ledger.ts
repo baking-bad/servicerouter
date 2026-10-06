@@ -1,9 +1,9 @@
 import { sql } from 'drizzle-orm';
 import {
-  bigint, boolean, check, customType, date, index, integer, pgTable, primaryKey, text, timestamp, uniqueIndex,
+  bigint, boolean, check, customType, date, index, integer, jsonb, pgTable, primaryKey, text, timestamp, uniqueIndex,
 } from 'drizzle-orm/pg-core';
 
-import type { BillingDecision, PaymentKind, PaymentStatus, RailName } from '@servicerouter/core';
+import type { BillingDecision, JsonObject, PaymentKind, PaymentStatus, RailName } from '@servicerouter/core';
 
 import { accounts, apiKeys } from './accounts.js';
 import { services } from './services.js';
@@ -101,6 +101,8 @@ export const payments = pgTable('payments', {
   status: text('status').$type<PaymentStatus>().notNull(),
   transactionHash: text('transaction_hash'),
   receipt: text('receipt'),
+  // The settle request a rail repeats until the settlement is final (PR-12, WK-6). Cleared once it is.
+  settlementRequest: jsonb('settlement_request').$type<JsonObject>(),
   needsReview: boolean('needs_review').notNull(),
   ...timestamps,
   updatedAt: timestamp('updated_at', { withTimezone: true, precision: 3 }).notNull(),

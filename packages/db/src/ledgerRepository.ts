@@ -4,7 +4,7 @@ import { PgTransaction } from 'drizzle-orm/pg-core';
 import type { Clock, IdGenerator, MicroUsd } from '@servicerouter/common';
 import {
   CreditReferenceConflictError, InvalidPaymentStatusChangeError, splitFee, utcDay, type CaptureResult, type CreditsBalance, type HoldInput,
-  type HoldRefusal, type HoldResult, type KeySpend, type Payment,
+  type HoldRefusal, type HoldResult, type KeySpend, type Payment, type SettleInput,
 } from '@servicerouter/core';
 
 import { createPaymentRepository } from './paymentRepository.js';
@@ -18,6 +18,8 @@ export const ledgerAccountIds = {
   earned: (accountId: string) => `${accountId}:earned`,
   fees: 'platform:fees',
   depositsClearing: 'platform:deposits_clearing',
+  // The on-chain money of one asset, such as `platform:treasury:base-usdc`
+  treasury: (asset: string) => `platform:treasury:${asset}`,
 } as const;
 
 export interface LedgerOptions {
@@ -44,6 +46,12 @@ export interface Ledger {
   hold(input: HoldInput): Promise<HoldResult>;
   capture(input: { readonly paymentId: string; readonly feeBps: number }): Promise<CaptureResult>;
   release(input: { readonly paymentId: string }): Promise<{ readonly payment: Payment }>;
+  /**
+   * Books a settled on-chain payment (x402, MPP): the asset's treasury → seller earned plus platform
+   * fees (LG-4), with the status change to `settled` in the same transaction. From `verified` or
+   * `settling` (LG-8). A second settle moves nothing (LG-3). Clears the settle request.
+   */
+  settle(input: SettleInput): Promise<CaptureResult>;
   balance(accountId: string): Promise<CreditsBalance>;
   /** Each key's spend: on the given UTC day, and in total. Keys without spend aren't in the map. */
   keySpend(keyIds: readonly string[], day: string): Promise<ReadonlyMap<string, KeySpend>>;
@@ -285,6 +293,50 @@ export const createLedger = ({ db, clock, ids }: LedgerOptions): Ledger => {
         return { payment: captured, fee, sellerAmount };
       });
       // Committed: they exist from now on
+      for (const account of created)
+        known?.add(account.id);
+
+      return result;
+    },
+
+    settle: async ({ paymentId, feeBps, asset, transactionHash, receipt, needsReview }) => {
+      let created: readonly LedgerAccount[] = [];
+      const result = await withTransaction(db, async (tx): Promise<CaptureResult> => {
+        const payments = createPaymentRepository({ db: tx, clock });
+        const current = await payments.lock(paymentId);
+        // A second settle moves nothing (LG-3)
+        if (current?.status === 'settled')
+          return { payment: current, fee: current.fee ?? 0n, sellerAmount: current.amount - (current.fee ?? 0n) };
+        if (!current || (current.status !== 'verified' && current.status !== 'settling') || current.rail === 'credits' || !current.sellerAccountId)
+          throw new InvalidPaymentStatusChangeError(paymentId, current?.status, 'settled');
+
+        const now = clock.now();
+        const { fee, sellerAmount } = splitFee(current.amount, feeBps);
+        // Money arrives on chain, outside the ledger, so the treasury's balance is minus what it took in
+        const treasury: LedgerAccount = { id: ledgerAccountIds.treasury(asset), accountId: undefined, type: 'treasury', mayGoNegative: true };
+        created = [...accountsOf(current.sellerAccountId, 'earned'), platformFees, treasury].filter(account => !known?.has(account.id));
+        if (created.length > 0)
+          await ensureAccounts(tx, created, now);
+        const transactionId = await insertTransaction(tx, 'settle', paymentId, current.requestId, now);
+        if (!transactionId)
+          throw new Error('A settle transaction exists for a payment not settled');
+        const settled = await payments.changeStatus({
+          paymentId,
+          to: 'settled',
+          fee,
+          needsReview,
+          settlementRequest: null,
+          ...(transactionHash === undefined ? {} : { transactionHash }),
+          ...(receipt === undefined ? {} : { receipt }),
+        });
+        await post(tx, transactionId, [
+          { ledgerAccountId: treasury.id, amount: -current.amount },
+          { ledgerAccountId: ledgerAccountIds.earned(current.sellerAccountId), amount: sellerAmount },
+          { ledgerAccountId: platformFees.id, amount: fee },
+        ], now);
+
+        return { payment: settled, fee, sellerAmount };
+      });
       for (const account of created)
         known?.add(account.id);
 

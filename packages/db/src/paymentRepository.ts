@@ -2,8 +2,8 @@ import { and, asc, desc, eq, gt, inArray, lt, or, sql } from 'drizzle-orm';
 
 import type { Clock } from '@servicerouter/common';
 import {
-  InvalidPaymentStatusChangeError, PaymentFinalizedError, statusesBefore, type BillingDecision, type InitialPaymentStatus, type NewPayment, type Payment,
-  type PaymentPage, type PaymentStatus, type RailName, type ServiceEarnings,
+  InvalidPaymentStatusChangeError, PaymentFinalizedError, statusesBefore, type BillingDecision, type InitialPaymentStatus, type JsonObject,
+  type NewPayment, type Payment, type PaymentPage, type PaymentStatus, type RailName, type ServiceEarnings,
 } from '@servicerouter/core';
 
 import type { DatabaseExecutor } from './postgres.js';
@@ -22,6 +22,14 @@ export interface StatusChange {
   readonly transactionHash?: string;
   readonly receipt?: string;
   readonly needsReview?: boolean;
+  // The settle request to repeat while `settling` (PR-12, WK-6). Null clears it, as a final status should.
+  readonly settlementRequest?: JsonObject | null;
+}
+
+/** A payment still `settling`, with the settle request that a follow-up repeats as it was (WK-6). */
+export interface SettlingPayment {
+  readonly payment: Payment;
+  readonly settlementRequest: JsonObject | undefined;
 }
 
 /** The `payments` rows (LG-7, LG-8). Implements the rails' PaymentRecorder port (PR-10). */
@@ -51,6 +59,8 @@ export interface PaymentRepository {
     readonly limit: number;
     readonly after?: { readonly createdAt: Date; readonly id: string };
   }): Promise<readonly Payment[]>;
+  /** Payments still `settling`, oldest first, with their settle requests (WK-6). `after` is the last of the previous page. */
+  listSettling(input: { readonly limit: number; readonly after?: { readonly createdAt: Date; readonly id: string } }): Promise<readonly SettlingPayment[]>;
 }
 
 const optional = <TValue>(value: TValue | null): TValue | undefined => value ?? undefined;
@@ -140,7 +150,7 @@ export const createPaymentRepository = ({ db, clock }: PaymentRepositoryOptions)
 
       return toPayment(row);
     },
-    changeStatus: async ({ paymentId, to, fee, transactionHash, receipt, needsReview }) => {
+    changeStatus: async ({ paymentId, to, fee, transactionHash, receipt, needsReview, settlementRequest }) => {
       const [row] = await db.update(payments)
         .set({
           status: to,
@@ -149,6 +159,7 @@ export const createPaymentRepository = ({ db, clock }: PaymentRepositoryOptions)
           ...(transactionHash === undefined ? {} : { transactionHash }),
           ...(receipt === undefined ? {} : { receipt }),
           ...(needsReview === undefined ? {} : { needsReview }),
+          ...(settlementRequest === undefined ? {} : { settlementRequest }),
         })
         // LG-8: only from a status the change is allowed from, checked and written in one statement
         .where(and(eq(payments.id, paymentId), inArray(payments.status, [...statusesBefore(to)])))
@@ -210,6 +221,17 @@ export const createPaymentRepository = ({ db, clock }: PaymentRepositoryOptions)
         .limit(limit);
 
       return rows.map(toPayment);
+    },
+    listSettling: async ({ limit, after }) => {
+      const rows = await db.select().from(payments)
+        .where(and(
+          eq(payments.status, 'settling'),
+          after && or(gt(payments.createdAt, after.createdAt), and(eq(payments.createdAt, after.createdAt), gt(payments.id, after.id))),
+        ))
+        .orderBy(asc(payments.createdAt), asc(payments.id))
+        .limit(limit);
+
+      return rows.map(row => ({ payment: toPayment(row), settlementRequest: row.settlementRequest ?? undefined }));
     },
   };
 };

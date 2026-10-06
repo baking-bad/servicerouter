@@ -20,7 +20,7 @@ export type { ServiceRepositoryOptions } from './serviceRepository.js';
 export { createServiceSecretRepository } from './serviceSecretRepository.js';
 export type { ServiceSecretRepositoryOptions } from './serviceSecretRepository.js';
 export { createPaymentRepository } from './paymentRepository.js';
-export type { PaymentRepository, PaymentRepositoryOptions, StatusChange } from './paymentRepository.js';
+export type { PaymentRepository, PaymentRepositoryOptions, SettlingPayment, StatusChange } from './paymentRepository.js';
 export { createKeyStore, createPaymentKeyRepository } from './paymentKeyRepository.js';
 export type { PaymentKeyRepositoryOptions } from './paymentKeyRepository.js';
 export { createLedger, ledgerAccountIds } from './ledgerRepository.js';
