@@ -19,6 +19,7 @@
     "test:integration": "vitest run --project '*:integration'",
     "test:functional": "vitest run --project '*:functional'",
     "test:all": "vitest run",
+    "loadtest": "tsc -b && node --env-file-if-exists=.env scripts/loadtest.mjs",
     "db:generate": "npm run db:generate -w @servicerouter/db",
     "db:migrate": "tsc -b packages/db && node --env-file-if-exists=.env packages/db/dist/migrate.js"
   },
