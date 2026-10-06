@@ -14,7 +14,8 @@ const allowedImports: Readonly<Record<string, readonly string[]>> = {
   core: ['common'],
   db: ['core', 'common'],
   payments: ['core', 'common'],
-  signer: ['common'],
+  // B-3 (step 12): platform config and the asset registry from core, and its own tables through db
+  signer: ['common', 'core', 'db'],
   // WB-2: the website reads only the public Platform API, over HTTP
   web: [],
 };
@@ -256,7 +257,7 @@ describe('architecture rules', () => {
       ['core', 'core/src/a.ts', 'export { x } from "@servicerouter/db";'],
       ['db', 'db/src/a.ts', 'import type { X } from \'@servicerouter/payments\';'],
       ['payments', 'payments/src/a.ts', 'import {\n  x,\n} from \'@servicerouter/db\';'],
-      ['signer', 'signer/src/a.ts', 'const core = await import(\'@servicerouter/core\');'],
+      ['signer', 'signer/src/a.ts', 'const payments = await import(\'@servicerouter/payments\');'],
     ])('a forbidden import in %s', (_name, filePath, text) => {
       expect(check(filePath, text)).toEqual([expect.stringMatching(/ imports @servicerouter\/\w+: /)]);
     });

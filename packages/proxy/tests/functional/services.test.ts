@@ -653,7 +653,6 @@ describe('dispatch (PX-1)', () => {
     ['service without an ID', '/service', 404],
     ['an unknown platform path', '/_/nothing', 404],
     ['.well-known', '/.well-known/servicerouter.json', 404],
-    ['a hostname, payment routing later', '/api.example.com/v1/x', 404],
     ['anything else', '/v1/services', 400],
   ])('answers %s with %i', async (_case, path, status) => {
     const before = upstream.requests.length;
@@ -664,6 +663,16 @@ describe('dispatch (PX-1)', () => {
     expect(await response.json()).toEqual(status === 400
       ? { error: { code: 'invalid_target', message: 'The path must start with /service/<service-id>/' } }
       : { error: { code: 'not_found', message: 'Not found' } });
+    expect(upstream.requests.length).toBe(before);
+  });
+
+  it('routes a hostname (RT-1), but never to a registered service\'s upstream host: 400 host_not_allowed (RT-2)', async () => {
+    const before = upstream.requests.length;
+
+    const response = await fetch(`${proxyUrl}/api.example.com/v1/x`);
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({ error: { code: 'host_not_allowed' } });
     expect(upstream.requests.length).toBe(before);
   });
 });
