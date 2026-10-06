@@ -22,6 +22,13 @@
       "when": 1791287640000,
       "tag": "0002_services_and_secrets",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1791287760000,
+      "tag": "0003_payment_keys_and_ledger",
+      "breakpoints": true
     }
   ]
 }
