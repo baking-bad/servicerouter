@@ -99,6 +99,8 @@ export interface PlatformConfig {
     readonly signup: RateLimit;
     // GET /v1/topup/{token} per client IP (PA-5)
     readonly topup: RateLimit;
+    // A service's agent documents per client IP (PA-5, AD-4)
+    readonly documents: RateLimit;
   };
   readonly timeouts: {
     readonly connectMs: number;

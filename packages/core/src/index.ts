@@ -12,3 +12,4 @@ export * from './rateLimit.js';
 export * from './ledger/index.js';
 export * from './ownership/index.js';
 export * from './deposits/index.js';
+export * from './agentDocs/index.js';
