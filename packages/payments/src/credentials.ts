@@ -28,9 +28,13 @@ export interface X402Credential {
   readonly header: Secret;
 }
 
-/** `Authorization: Payment …`. The rail reads it when it lands (step 7). */
+/**
+ * `Authorization: Payment …` (MPP), as sent. It carries a signed transfer, so it stays in a Secret
+ * until the rail broadcasts or drops it.
+ */
 export interface MppCredential {
   readonly rail: 'mpp';
+  readonly header: Secret;
 }
 
 export type Credential = CreditsCredential | X402Credential | MppCredential;
@@ -78,8 +82,11 @@ export const detectX402: CredentialDetector = headers => {
 };
 
 /** MPP: `Authorization: Payment …`. */
-export const detectMpp: CredentialDetector = headers =>
-  paymentSchemePattern.test(single(headers['authorization']) ?? '') ? { rail: 'mpp' } : undefined;
+export const detectMpp: CredentialDetector = headers => {
+  const value = single(headers['authorization']);
+
+  return value !== undefined && paymentSchemePattern.test(value) ? { rail: 'mpp', header: Secret.from(value.trim()) } : undefined;
+};
 
 /**
  * The request's one payment credential, or undefined without one (PR-1). Throws

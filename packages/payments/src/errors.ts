@@ -31,6 +31,18 @@ export class PaymentInvalidError extends ServiceRouterError {
 }
 
 /**
+ * An MPP payment couldn't be checked before forwarding: the Tempo RPC didn't answer, or the replay
+ * store is down (PR-9). Nothing was paid, and the upstream wasn't called.
+ */
+export class PaymentUnavailableError extends ServiceRouterError {
+  readonly code = 'payment_unavailable';
+
+  constructor() {
+    super('The payment couldn\'t be checked right now. Nothing was paid. Retry the request.');
+  }
+}
+
+/**
  * The settlement failed, or its outcome is unknown, so the response isn't sent (PR-12). A failure
  * charges nothing. An unknown outcome is repeated by a worker, which flags it for review if it settles.
  */

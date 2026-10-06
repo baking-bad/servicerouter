@@ -1,3 +1,5 @@
+import type { Store } from 'mppx';
+
 import type { MicroUsd } from '@servicerouter/common';
 import type {
   BillingDecision, CaptureResult, HoldInput, HoldResult, InitialPaymentStatus, JsonObject, NewPayment, Payment, PaymentKey, PaymentStatus,
@@ -29,8 +31,11 @@ export interface CreditsLedger {
 
 /** Port: the `payments` rows (LG-7, PR-10). Only the status changes LG-8 allows go through. */
 export interface PaymentRecorder {
-  /** Records a payment a rail authorized without a hold, such as a verified x402 payment. */
-  create(payment: NewPayment & { readonly status: InitialPaymentStatus }): Promise<Payment>;
+  /**
+   * Records a payment a rail authorized without a hold, such as a verified x402 payment. An MPP payment
+   * knows its transaction hash before the broadcast (PR-9).
+   */
+  create(payment: NewPayment & { readonly status: InitialPaymentStatus; readonly transactionHash?: string }): Promise<Payment>;
   /** Records the billing decision before the payment is finalized (rule 5, PX-11). */
   recordDecision(input: {
     readonly paymentId: string;
@@ -64,3 +69,9 @@ export interface SettlementLedger {
 export interface KeyStore {
   findByHash(keyHash: string): Promise<PaymentKey | undefined>;
 }
+
+/**
+ * Port: the MPP replay store (PR-9), `mppx`'s atomic key-value store. Shared by every proxy replica,
+ * so a credential works once across all of them. `db` implements it on Redis.
+ */
+export type ReplayStore = Store.AtomicStore;
