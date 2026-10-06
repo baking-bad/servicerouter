@@ -2,8 +2,8 @@ import { getCatalogService } from '../api/catalog';
 import type { CatalogService } from '../api/types';
 import { isMocked, readSettings } from '../config';
 
-// The website serves a service's agent documents while they are sample data (WB-10). Once step 10
-// ships them, these URLs are 404 and every link points at the Platform API (AR1).
+// The website serves a service's agent documents while they are sample data (WB-10). With the
+// `agent-docs` group off, these URLs are 404 and every link points at the Platform API's (AR1).
 
 const notFound = (): Response => new Response('Not found\n', { status: 404, headers: { 'content-type': 'text/plain; charset=utf-8' } });
 

@@ -3,7 +3,7 @@ import { platformPrompt, sellerPrompt, servicePrompt } from '../agents/prompts';
 import type { CatalogItem, CatalogPage, CatalogQuery, CatalogService, Topup } from '../api/types';
 import { catalogQueryParams } from '../catalog/query';
 import type { SiteSettings } from '../config';
-import { buyerSteps, methodInfo, pitch, sampleNotice, sellerSteps, siteName, tagline } from '../content';
+import { buyerSteps, depositAmount, depositStatusTitles, methodInfo, pitch, sampleNotice, sellerSteps, siteName, tagline } from '../content';
 import { compactCount, latency, percent, shortDate } from '../format';
 import { displayUsd } from '../money';
 
@@ -13,8 +13,9 @@ const sampleLine = (sample: boolean): string => sample ? `\n> ${sampleNotice}\n`
 
 const methodList = (item: Pick<CatalogItem, 'methods'>): string => item.methods.map(method => methodInfo[method].short).join(', ');
 
-const serviceLine = (settings: SiteSettings, item: CatalogItem): string =>
-  `- [${item.title}](${settings.siteUrl}/discover/${item.id}.md): ${item.summary}. From ${displayUsd(item.priceFrom)} a call; ${methodList(item)}; ${compactCount(item.stats.calls30d)} calls in 30 days, ${percent(item.stats.successRate)} success.`;
+const serviceLine = (settings: SiteSettings, item: CatalogItem): string => item.verified || item.link === undefined
+  ? `- [${item.title}](${settings.siteUrl}/discover/${item.id}.md): ${item.summary}. From ${displayUsd(item.priceFrom)} a call; ${methodList(item)}; ${compactCount(item.stats.calls30d)} calls in 30 days, ${percent(item.stats.successRate)} success.`
+  : `- [${item.title}](${item.link}) (unverified): ${item.summary} From ${displayUsd(item.priceFrom)} a call; ${methodList(item)}.`;
 
 /** `/index.md`: the landing page. */
 export const landingMarkdown = (settings: SiteSettings, popular: { readonly services: readonly CatalogItem[]; readonly sample: boolean }): string => `# ${siteName}: ${tagline}
@@ -150,5 +151,5 @@ ${topup.asset.symbol} is credited 1:1 in USD once the deposit confirms. Send not
 
 ## Deposits
 
-${topup.deposits.length === 0 ? 'None yet.' : ['| Seen | Amount | Status | Confirmations | Transaction |', '|---|---|---|---|---|', ...topup.deposits.map(deposit => `| ${shortDate(deposit.seenAt)} | ${displayUsd(deposit.amount)} | ${deposit.status} | ${deposit.confirmations}/${deposit.confirmationsRequired} | \`${deposit.transactionHash}\` |`)].join('\n')}
+${topup.deposits.length === 0 ? 'None yet.' : ['| Seen | Amount | Status | Confirmations | Transaction |', '|---|---|---|---|---|', ...topup.deposits.map(deposit => `| ${shortDate(deposit.seenAt)} | ${depositAmount(deposit.amount)} | ${depositStatusTitles[deposit.status]} | ${deposit.confirmations}/${deposit.confirmationsRequired} | \`${deposit.transactionHash}\` |`)].join('\n')}
 `;

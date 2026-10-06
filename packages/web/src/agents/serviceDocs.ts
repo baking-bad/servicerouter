@@ -3,7 +3,7 @@ import { displayUsd } from '../money';
 import { servicePrompt } from './prompts';
 
 // A service's agent documents (AD-1, AD-2), built from its catalog entry. The website serves them while
-// the Platform API's (step 10) are sample data (WB-10). Like AD-1's: the server is the pay URL, every
+// the `agent-docs` group of WEB_MOCKS is on (WB-10). Like AD-1's: the server is the pay URL, every
 // operation has its price, the payment key is the security scheme, and no upstream URL appears.
 
 const methodNames: Readonly<Record<string, string>> = { credits: 'credits (payment key)', x402: 'x402', mpp: 'MPP' };
