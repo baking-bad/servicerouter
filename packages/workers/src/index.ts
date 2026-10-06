@@ -10,3 +10,5 @@ export type { Job, JobRunResult, Scheduler, SchedulerOptions } from './scheduler
 export { createOwnershipRecheck, OwnershipRecheckFailedError, ownershipRecheckBatchSize, ownershipRecheckJobIntervalMs, ownershipRecheckJobName, ownershipRecheckLockId } from './ownershipRecheck.js';
 export { createDepositWatcherJob, DepositWatcherFailedError, depositWatcherBatchSize, depositWatcherIntervalMs, depositWatcherJobName, depositWatcherLockId } from './depositWatcher.js';
 export { catalogIndexIntervalMs, catalogIndexJobName, createCatalogIndex, createServiceStats, serviceStatsIntervalMs, serviceStatsJobName } from './catalog.js';
+export { createRoutingLossMetrics, createRoutingLosses, RoutingLossesFailedError, routingLossesIntervalMs, routingLossesJobName, routingLossesLockId } from './routingLosses.js';
+export type { RoutingLossMetrics, RoutingLossesOptions, RoutingLossesResult } from './routingLosses.js';

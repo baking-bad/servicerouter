@@ -8,7 +8,7 @@ import {
 } from '@servicerouter/core';
 import {
   createCatalogRepository, createDepositRepository, createLedger, createOwnershipStore, createPaymentRepository, createPayoutRepository,
-  createRedisInvalidationBus, depositAddresses, type Postgres, type Redis,
+  createRedisInvalidationBus, createRoutingRepository, depositAddresses, type Postgres, type Redis,
 } from '@servicerouter/db';
 import { createAssetLookup, createFacilitatorLookup, type Facilitator, type MppSettlementCheck } from '@servicerouter/payments';
 
@@ -27,6 +27,7 @@ import {
 } from './treasury/jobs.js';
 import { readerFor } from './treasury/readers.js';
 import { createScheduler, type Scheduler } from './scheduler.js';
+import { createRoutingLossMetrics, createRoutingLosses, routingLossesIntervalMs, routingLossesJobName, routingLossesLockId } from './routingLosses.js';
 import { createSettlementFollowUp, settlementFollowUpIntervalMs, settlementFollowUpLockId } from './settlementFollowUp.js';
 
 export interface WorkersDependencies {
@@ -120,6 +121,9 @@ export const createApp = ({
     feeBps: config.feeBps,
     logger,
   });
+  const routingLosses = createRoutingLosses({
+    routing: createRoutingRepository({ db: postgres.db, clock }), ledger, metrics: createRoutingLossMetrics(server.registry), logger,
+  });
   const depositWatcher = config.deposits && blockfrost
     ? createDepositWatcherJob({ store: createDepositRepository({ db: postgres.db, clock, ids }), blockfrost, clock, logger, deposits: config.deposits })
     : undefined;
@@ -164,6 +168,13 @@ export const createApp = ({
       intervalMs: settlementFollowUpIntervalMs,
       run: async () => {
         await settlementFollowUp();
+      },
+    }, {
+      name: routingLossesJobName,
+      lockId: routingLossesLockId,
+      intervalMs: routingLossesIntervalMs,
+      run: async () => {
+        await routingLosses();
       },
     }, {
       name: ownershipRecheckJobName,

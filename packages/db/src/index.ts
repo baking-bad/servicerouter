@@ -40,6 +40,6 @@ export type {
 export { createTreasuryRepository } from './treasuryRepository.js';
 export type { TreasuryRepository, TreasuryTransferRecord } from './treasuryRepository.js';
 export { createRoutingRepository, maxRoutedEndpointsPerHost } from './routingRepository.js';
-export type { EndpointRegistration, NewSignature, NewTargetPayment, RoutingRepository, TargetPaymentRecord } from './routingRepository.js';
+export type { EndpointRegistration, NewSignature, NewTargetPayment, RoutingRepository, TargetPaymentRecord, UnbookedRoutingLoss } from './routingRepository.js';
 export { createCatalogRepository, emptyStats } from './catalogRepository.js';
 export type { CatalogListedEntry, CatalogListQuery, CatalogRepository, CatalogStatsRow, RoutedCatalogEntry } from './catalogRepository.js';

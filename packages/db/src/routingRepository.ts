@@ -1,8 +1,10 @@
-import { and, count, eq, sql } from 'drizzle-orm';
+import { and, asc, count, eq, inArray, sql } from 'drizzle-orm';
 
 import type { Clock } from '@servicerouter/common';
+import type { PaymentStatus } from '@servicerouter/core';
 
 import type { DatabaseExecutor } from './postgres.js';
+import { payments } from './schema/ledger.js';
 import { hostBlocklist, routedEndpoints, signatures, targetPayments, type TargetPaymentStatus } from './schema/routing.js';
 import { services } from './schema/services.js';
 
@@ -23,6 +25,19 @@ export interface NewTargetPayment {
 }
 
 export type TargetPaymentRecord = typeof targetPayments.$inferSelect;
+
+/** A routed call whose target kept our payment while its buyer paid nothing (RT-9). */
+export interface UnbookedRoutingLoss {
+  readonly paymentId: string;
+  // What the target was paid, in micro-USD
+  readonly amount: bigint;
+  readonly asset: string;
+  readonly targetHost: string | null;
+  readonly buyerStatus: PaymentStatus;
+}
+
+// The buyer's payment ended without charging them
+const unchargedStatuses = ['failed', 'released', 'cancelled'] as const satisfies readonly PaymentStatus[];
 export type NewSignature = typeof signatures.$inferInsert;
 
 /** The `routed_endpoints`, `host_blocklist`, and `target_payments` tables (Payment routing), and the Signer's `signatures`. */
@@ -41,6 +56,12 @@ export interface RoutingRepository {
   recordTargetPayment(payment: NewTargetPayment): Promise<void>;
   updateTargetPayment(paymentId: string, change: { readonly status: TargetPaymentStatus; readonly receipt?: string; readonly transactionHash?: string }): Promise<void>;
   findTargetPayment(paymentId: string): Promise<TargetPaymentRecord | undefined>;
+  /**
+   * Routing losses not booked yet, oldest first: the target leg settled, and the buyer's payment
+   * failed, was released, or was cancelled, such as an x402 or MPP settlement that failed after the
+   * target was paid (RT-9).
+   */
+  listUnbookedLosses(limit: number): Promise<readonly UnbookedRoutingLoss[]>;
   recordSignature(signature: NewSignature): Promise<void>;
 }
 
@@ -101,6 +122,18 @@ export const createRoutingRepository = ({ db, clock }: { readonly db: DatabaseEx
 
     return row;
   },
+
+  listUnbookedLosses: async limit => db.select({
+    paymentId: targetPayments.paymentId,
+    amount: targetPayments.amount,
+    asset: targetPayments.asset,
+    targetHost: payments.targetHost,
+    buyerStatus: payments.status,
+  }).from(targetPayments)
+    .innerJoin(payments, eq(payments.id, targetPayments.paymentId))
+    .where(and(eq(targetPayments.status, 'settled'), eq(targetPayments.lossBooked, false), inArray(payments.status, [...unchargedStatuses])))
+    .orderBy(asc(targetPayments.createdAt), asc(targetPayments.paymentId))
+    .limit(limit),
 
   recordSignature: async signature => {
     await db.insert(signatures).values(signature);

@@ -270,7 +270,16 @@ export const createRouting = ({ config, http, redis, payments, routing, ledger, 
       const buffered = bodyless ? undefined : await response.bytes();
       if (bodyless)
         response.dispose();
-      const buyerReceipt = await payments.settleNow(call);
+      let buyerReceipt;
+      try {
+        buyerReceipt = await payments.settleNow(call);
+      }
+      catch (error) {
+        // The target is paid and the buyer isn't: the workers book the routing loss once the buyer's
+        // payment is final (RT-9). The owner accepts this risk for the MVP, capped by the Signer's limits.
+        logger.warn({ error, paymentId, host: target.host, rail: call.rail.name }, 'A routed buyer\'s settlement failed after the target was paid');
+        throw error;
+      }
 
       return reply.status(response.status).headers({ ...answerHeaders, ...buyerReceipt.headers }).send(buffered);
     }

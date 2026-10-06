@@ -4,6 +4,7 @@ import {
 } from '@x402/core/http';
 import type { PaymentRequirements } from '@x402/core/types';
 import { ExactEvmScheme } from '@x402/evm/exact/client';
+import { Registry } from '@prometheus-io/client';
 import { eq } from 'drizzle-orm';
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -11,9 +12,10 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createApp as createApi, type ApiServer } from '@servicerouter/api';
 import { createAddressPolicy, createLogger, OutboundHttp, randomIdGenerator, Secret, type Server } from '@servicerouter/common';
 import { assumeHostsVerified, findAsset, loadPlatformConfig, type PlatformConfig } from '@servicerouter/core';
-import { createLedger, ledgerAccountIds, payments, routedEndpoints, signatures, targetPayments } from '@servicerouter/db';
+import { createLedger, createRoutingRepository, ledgerAccountIds, payments, routedEndpoints, signatures, targetPayments } from '@servicerouter/db';
 import { createFacilitators, initializeX402 } from '@servicerouter/payments';
 import { createApp as createSigner } from '@servicerouter/signer';
+import { createRoutingLossMetrics, createRoutingLosses } from '@servicerouter/workers';
 import {
   createFakeOwnershipFiles, createFakeResolver, createTestDatabase, createTestRedis, createTestSecretKeys, encodeBase58, startFakeFacilitator,
   startFakeUpstream, type FakeFacilitator, type FakeOwnershipFiles, type FakeUpstream, type TestDatabase, type TestRedis,
@@ -230,6 +232,44 @@ describe('payment routing (RT-1 to RT-12, SG-2, SG-3, SG-7, step 12)', () => {
     expect(await balance(paying.id)).toBe(1_000_000n);
     const after = await platformBalances();
     expect(after[ledgerAccountIds.routingLosses]! - (before[ledgerAccountIds.routingLosses] ?? 0n)).toBe(-1_000n);
+  });
+
+  it('books a routing loss once when an x402 buyer\'s settlement fails after the target was paid, and sends the buyer no answer (RT-9, P-9)', async () => {
+    const link = `${proxyUrl}/${at('api.target.dev')}/v1/drained`;
+    const required = decodePaymentRequiredHeader((await fetch(link)).headers.get('payment-required')!);
+    const payer = privateKeyToAccount(generatePrivateKey());
+    const client = new x402Client().register(base, new ExactEvmScheme(payer));
+    const signature = encodePaymentSignatureHeader(await client.createPaymentPayload({ ...required, accepts: required.accepts.filter(option => option.network === base) }));
+    const before = await platformBalances();
+    // The buyer emptied its wallet while the target answered: verified before, refused at settlement
+    facilitator.handle('/settle', () => ({ status: 200, body: { success: false, errorReason: 'insufficient_funds', transaction: '', network: base } }));
+    let response: Response;
+    try {
+      response = await fetch(link, { headers: { 'payment-signature': signature } });
+    }
+    finally {
+      facilitator.reset();
+    }
+
+    expect(response.status).toBe(502);
+    expect(await response.json()).toMatchObject({ error: { code: 'settlement_failed' } });
+    const [buyerLeg] = await database.db.select().from(payments).where(eq(payments.targetPath, '/v1/drained'));
+    expect(buyerLeg).toMatchObject({ kind: 'routed', rail: 'x402', status: 'failed' });
+    const [targetLeg] = await database.db.select().from(targetPayments).where(eq(targetPayments.paymentId, buyerLeg!.id));
+    expect(targetLeg).toMatchObject({ status: 'settled', lossBooked: false, amount: 1_000n });
+
+    // The workers' job books it once, and alerts
+    const book = createRoutingLosses({
+      routing: createRoutingRepository({ db: database.db, clock: { now: () => new Date() } }),
+      ledger: createLedger({ db: database.db, clock: { now: () => new Date() }, ids: randomIdGenerator }),
+      metrics: createRoutingLossMetrics(new Registry()),
+      logger: createLogger({ level: 'silent' }),
+    });
+    expect(await book()).toEqual({ booked: 1, failed: 0 });
+    expect(await book()).toEqual({ booked: 0, failed: 0 });
+    const after = await platformBalances();
+    expect(after[ledgerAccountIds.routingLosses]! - (before[ledgerAccountIds.routingLosses] ?? 0n)).toBe(-1_000n);
+    expect((await database.db.select().from(targetPayments).where(eq(targetPayments.paymentId, buyerLeg!.id)))[0]?.lossBooked).toBe(true);
   });
 
   it('refuses a target that asks more on the paid retry with 502 quote_exceeded, and charges nothing (RT-8)', async () => {
