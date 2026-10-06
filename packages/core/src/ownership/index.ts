@@ -9,7 +9,7 @@ export {
 export type { HostCheckOutcome, HostProblem, HostRecord, HostState } from './state.js';
 export { confirmationTokenPrefix, generateConfirmationToken, generateVerificationToken, verificationTokenPrefix } from './tokens.js';
 export type {
-  ConfirmationOutcome, HostChange, HostCheckRecorded, HostStatus, OwnedService, OwnershipActor, OwnershipStore, PayoutConfirmation,
+  ConfirmationOutcome, HostChange, HostCheckRecorded, HostStatus, OwnershipSubject, OwnershipActor, OwnershipStore, PayoutConfirmation,
   ServiceStateChange,
 } from './ports.js';
 export { createOwnershipVerifier } from './verifier.js';

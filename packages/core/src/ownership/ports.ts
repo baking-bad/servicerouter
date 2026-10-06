@@ -65,7 +65,7 @@ export type ConfirmationOutcome =
   | { readonly kind: 'activated'; readonly revision: number; readonly state: ServiceState };
 
 /** What ownership verification reads about a service: its owner, state, and active hosts. */
-export interface OwnedService {
+export interface OwnershipSubject {
   readonly id: ServiceId;
   readonly ownerAccountId: string;
   readonly state: ServiceState;
@@ -83,7 +83,7 @@ export interface OwnershipStore {
   verificationToken(accountId: string): Promise<string>;
   /** The stored state of each host that has one. A host without a record is `unverified`. */
   hostStatuses(accountId: string, hosts: readonly string[]): Promise<ReadonlyMap<string, HostStatus>>;
-  findService(serviceId: string): Promise<OwnedService | undefined>;
+  findService(serviceId: string): Promise<OwnershipSubject | undefined>;
   findConfirmation(serviceId: string): Promise<PayoutConfirmation | undefined>;
   /**
    * Applies a check of one host (OV-4): its next state, and the state of every service of the account
