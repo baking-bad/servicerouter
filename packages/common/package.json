@@ -17,5 +17,9 @@
     "build": "tsc -b",
     "typecheck": "tsc -p tsconfig.check.json",
     "test": "vitest run --root ../.. --project common"
+  },
+  "dependencies": {
+    "pino": "^10.4.0",
+    "yaml": "^2.9.1"
   }
 }
