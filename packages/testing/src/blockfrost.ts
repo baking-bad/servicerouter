@@ -24,6 +24,16 @@ export interface FakeBlockfrost {
   readonly requests: readonly BlockfrostRequest[];
   /** Gives an address one more UTxO. Returns its reference, `<transaction hash>#<index>`. */
   fund(address: string, value: FundedValue): string;
+  /**
+   * A transaction in the block at the chain's tip that pays each output, for the deposit watcher
+   * (DP-2): it shows in the addresses' transactions and in `/txs/<hash>/utxos`. Returns its hash.
+   */
+  send(outputs: readonly { readonly address: string; readonly value: FundedValue }[]): string;
+  /** The chain grows by this many blocks. */
+  addBlocks(count: number): void;
+  /** A re-org drops the transaction: Blockfrost no longer knows it. */
+  dropTransaction(txHash: string): void;
+  readonly tipHeight: number;
   close(): Promise<void>;
 }
 
@@ -60,6 +70,18 @@ interface Utxo {
   readonly reference_script_hash: null;
 }
 
+interface ChainTransaction {
+  readonly hash: string;
+  readonly blockHeight: number;
+  readonly outputs: readonly { readonly address: string; readonly amount: readonly { readonly unit: string; readonly quantity: string }[] }[];
+}
+
+// Blockfrost writes a native asset's unit as the policy ID and asset name, joined
+const amountsOf = ({ lovelace, assets = {} }: FundedValue) => [
+  { unit: 'lovelace', quantity: lovelace.toString() },
+  ...Object.entries(assets).map(([asset, quantity]) => ({ unit: asset.replace('.', ''), quantity: quantity.toString() })),
+];
+
 const send = (response: ServerResponse, status: number, body: unknown): void => {
   response.writeHead(status, { 'content-type': 'application/json' }).end(JSON.stringify(body));
 };
@@ -72,6 +94,9 @@ const send = (response: ServerResponse, status: number, body: unknown): void => 
 export const startFakeBlockfrost = async (): Promise<FakeBlockfrost> => {
   const requests: BlockfrostRequest[] = [];
   const utxos = new Map<string, Utxo[]>();
+  const transactions = new Map<string, ChainTransaction>();
+  let tipHeight = 1_000;
+  const notFound = (response: ServerResponse) => send(response, 404, { status_code: 404, error: 'Not Found', message: 'The requested component has not been found.' });
 
   const server = createServer((request: IncomingMessage, response: ServerResponse) => {
     const path = request.url ?? '/';
@@ -81,6 +106,46 @@ export const startFakeBlockfrost = async (): Promise<FakeBlockfrost> => {
     if (request.method === 'GET' && url.pathname === '/epochs/latest/parameters')
       return send(response, 200, protocolParameters);
 
+    if (request.method === 'GET' && url.pathname === '/blocks/latest')
+      return send(response, 200, { height: tipHeight, slot: tipHeight * 20, time: 1_791_287_400 + tipHeight * 20 });
+
+    const history = /^\/addresses\/([^/]+)\/transactions$/.exec(url.pathname);
+    if (request.method === 'GET' && history) {
+      const address = decodeURIComponent(history[1]!);
+      const from = Number(url.searchParams.get('from') ?? '0');
+      const count = Number(url.searchParams.get('count') ?? '100');
+      const page = Number(url.searchParams.get('page') ?? '1');
+      const items = [...transactions.values()]
+        .filter(transaction => transaction.blockHeight >= from && transaction.outputs.some(output => output.address === address))
+        .sort((a, b) => a.blockHeight - b.blockHeight)
+        .map(transaction => ({ tx_hash: transaction.hash, tx_index: 0, block_height: transaction.blockHeight, block_time: 1_791_287_400 + transaction.blockHeight * 20 }));
+      // An address the chain never saw is a 404, as on Blockfrost
+      if (items.length === 0 && ![...transactions.values()].some(transaction => transaction.outputs.some(output => output.address === address)))
+        return notFound(response);
+
+      return send(response, 200, items.slice((page - 1) * count, page * count));
+    }
+
+    const transactionUtxos = /^\/txs\/([0-9a-f]{64})\/utxos$/.exec(url.pathname);
+    if (request.method === 'GET' && transactionUtxos) {
+      const transaction = transactions.get(transactionUtxos[1]!);
+      if (!transaction)
+        return notFound(response);
+
+      return send(response, 200, {
+        hash: transaction.hash,
+        inputs: [],
+        outputs: transaction.outputs.map((output, index) => ({ address: output.address, amount: output.amount, output_index: index, data_hash: null })),
+      });
+    }
+
+    const transactionInfo = /^\/txs\/([0-9a-f]{64})$/.exec(url.pathname);
+    if (request.method === 'GET' && transactionInfo) {
+      const transaction = transactions.get(transactionInfo[1]!);
+
+      return transaction ? send(response, 200, { hash: transaction.hash, block_height: transaction.blockHeight }) : notFound(response);
+    }
+
     const owned = /^\/addresses\/([^/]+)\/utxos$/.exec(url.pathname);
     if (request.method === 'GET' && owned) {
       const page = Number(url.searchParams.get('page') ?? '1');
@@ -89,7 +154,7 @@ export const startFakeBlockfrost = async (): Promise<FakeBlockfrost> => {
       return send(response, 200, page === 1 ? all : []);
     }
 
-    send(response, 404, { status_code: 404, error: 'Not Found', message: 'The requested component has not been found.' });
+    notFound(response);
   });
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
   const { port } = server.address() as AddressInfo;
@@ -105,8 +170,7 @@ export const startFakeBlockfrost = async (): Promise<FakeBlockfrost> => {
         tx_hash: transaction,
         tx_index: 0,
         output_index: 0,
-        // Blockfrost writes a native asset's unit as the policy ID and asset name, joined
-        amount: [{ unit: 'lovelace', quantity: lovelace.toString() }, ...Object.entries(assets).map(([asset, quantity]) => ({ unit: asset.replace('.', ''), quantity: quantity.toString() }))],
+        amount: amountsOf({ lovelace, assets }),
         block: randomBytes(32).toString('hex'),
         data_hash: null,
         inline_datum: null,
@@ -115,6 +179,21 @@ export const startFakeBlockfrost = async (): Promise<FakeBlockfrost> => {
       utxos.set(address, owned);
 
       return `${transaction}#0`;
+    },
+    send: outputs => {
+      const hash = randomBytes(32).toString('hex');
+      transactions.set(hash, { hash, blockHeight: tipHeight, outputs: outputs.map(({ address, value }) => ({ address, amount: amountsOf(value) })) });
+
+      return hash;
+    },
+    addBlocks: count => {
+      tipHeight += count;
+    },
+    dropTransaction: txHash => {
+      transactions.delete(txHash);
+    },
+    get tipHeight() {
+      return tipHeight;
     },
     close: async () => {
       server.closeAllConnections();

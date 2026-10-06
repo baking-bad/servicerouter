@@ -29,4 +29,6 @@ export {
 export type { FakeTempoRpc, FakeTempoRpcOptions, TempoBroadcast, TempoRpcCall, TempoSimulation, TestTempoPayer, TestTempoPayerOptions } from './tempoRpc.js';
 export { createFakeOwnershipFiles } from './ownership.js';
 export type { FakeOwnershipFiles } from './ownership.js';
+export { createTestDepositWallet } from './depositWallet.js';
+export type { TestDepositWallet } from './depositWallet.js';
 export { fixtureInstant, fixtureTime, fixtureDay, fixtureRun } from './dateFixtures.js';
