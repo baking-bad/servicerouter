@@ -13,3 +13,5 @@ export * from './ledger/index.js';
 export * from './ownership/index.js';
 export * from './deposits/index.js';
 export * from './agentDocs/index.js';
+export * from './payouts/index.js';
+export * from './treasury/index.js';

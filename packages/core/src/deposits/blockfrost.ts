@@ -5,6 +5,11 @@ export class BlockfrostError extends ServiceRouterError {
   readonly code = 'blockfrost_unavailable';
 }
 
+/** The chain refused a transaction: it will never land as it is. */
+export class TransactionRejectedError extends ServiceRouterError {
+  readonly code = 'transaction_rejected';
+}
+
 export interface AddressTransaction {
   readonly txHash: string;
   readonly blockHeight: number;
@@ -28,6 +33,10 @@ export interface BlockfrostClient {
   transactionOutputs(txHash: string): Promise<readonly TransactionOutput[] | undefined>;
   /** The transaction's block height, or undefined when the chain doesn't know it (any more). */
   transactionHeight(txHash: string): Promise<number | undefined>;
+  /** What the address holds, by unit. Empty for an address never used. */
+  addressAmounts(address: string): Promise<ReadonlyMap<string, bigint>>;
+  /** Submits a signed transaction (CBOR in hex). Returns its hash. Throws TransactionRejectedError when the chain refuses it. */
+  submitTransaction(cborHex: string): Promise<string>;
 }
 
 export interface BlockfrostClientOptions {
@@ -136,6 +145,50 @@ export const createBlockfrostClient = ({ url, projectId, timeoutMs, fetch = glob
           }),
         };
       });
+    },
+
+    addressAmounts: async address => {
+      const found = await get(`/addresses/${encodeURIComponent(address)}`, 'an address');
+      if (found === undefined)
+        return new Map();
+      if (!isRecord(found) || !Array.isArray(found['amount']))
+        throw new BlockfrostError('Blockfrost answered an address without its amounts');
+
+      return new Map(found['amount'].map((amount: unknown) => {
+        if (!isRecord(amount) || typeof amount['unit'] !== 'string' || typeof amount['quantity'] !== 'string' || !/^\d+$/.test(amount['quantity']))
+          throw new BlockfrostError('Blockfrost answered an address with an invalid amount');
+
+        return [amount['unit'], BigInt(amount['quantity'])] as const;
+      }));
+    },
+
+    submitTransaction: async cborHex => {
+      let response: Response;
+      try {
+        response = await fetch(`${base}/tx/submit`, {
+          method: 'POST',
+          headers: { project_id: projectId.expose(), 'content-type': 'application/cbor' },
+          body: Buffer.from(cborHex, 'hex'),
+          signal: AbortSignal.timeout(timeoutMs),
+        });
+      }
+      catch (error) {
+        throw new BlockfrostError('Blockfrost didn\'t answer a transaction submission', { cause: error });
+      }
+      // 400: the node refused it, such as spent inputs or a passed validity window
+      if (response.status === 400) {
+        await response.body?.cancel();
+        throw new TransactionRejectedError('The chain refused the transaction');
+      }
+      if (!response.ok) {
+        await response.body?.cancel();
+        throw new BlockfrostError(`Blockfrost answered a transaction submission with status ${response.status}`);
+      }
+      const hash = await response.json() as unknown;
+      if (typeof hash !== 'string' || !/^[0-9a-f]{64}$/.test(hash))
+        throw new BlockfrostError('Blockfrost answered a transaction submission without a hash');
+
+      return hash;
     },
 
     transactionHeight: async txHash => {
