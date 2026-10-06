@@ -3,8 +3,14 @@ import { ServiceRouterError, type ErrorStatusTable } from '@servicerouter/common
 // Every ServiceRouterError code the proxy answers with, and its status (CK-2). A code missing here
 // answers an opaque 500. The proxy's codes arrive with its features.
 export const errorStatuses = {
-  // PX-1
+  // PX-1, RT-1
   invalid_target: 400,
+  // Payment routing: a host we don't route to, a target that asks for no payment (RT-2, RT-3)
+  host_not_allowed: 400,
+  not_payable: 400,
+  // Payment routing: no option we pay, or a retry above the quote. The buyer pays nothing (RT-4, RT-8).
+  unsupported_payment: 502,
+  quote_exceeded: 502,
   // Dot segments, raw or encoded (PX-4)
   invalid_path: 400,
   // Two or more payment credentials (PR-1)

@@ -8,6 +8,7 @@ import { createFacilitators, initializeMpp, initializeX402, type MppSetup } from
 import { createApp } from './app.js';
 import { readSecretsOpener } from './keys.js';
 import { readBuyerHeaderKey } from './payments/buyer.js';
+import { createSignerClient } from './routing/support.js';
 import { readMppSecretKey } from './payments/mpp.js';
 
 export const defaultPort = 8080;
@@ -30,6 +31,16 @@ export const startProxy = async ({ env, logger }: AppContext): Promise<RunningAp
   const opener = readSecretsOpener(env);
   // The buyer header's HMAC key (PX-15)
   const buyerHeaderKey = readBuyerHeaderKey(env);
+  // Payment routing (RT-7, RT-12): the Signer and the internal API, on the internal network. Without
+  // the Signer, routed calls answer 503 and nobody pays.
+  const signerUrl = env['SIGNER_URL']?.trim();
+  const signer = signerUrl
+    ? createSignerClient({ url: signerUrl, secret: readSecret('SIGNER_SECRET', env), timeoutMs: config.timeouts.connectMs })
+    : undefined;
+  const internalApiUrl = env['INTERNAL_API_URL']?.trim();
+  const internalApi = internalApiUrl ? { url: internalApiUrl, secret: readSecret('INTERNAL_API_SECRET', env) } : undefined;
+  if (!signer)
+    logger.warn('Payment routing pays no targets: SIGNER_URL is not set');
   // Traefik's addresses or CIDR ranges, comma-separated, so the unpaid limit sees the client IP (PX-13)
   const trustProxy = env['TRUST_PROXY']?.trim() || undefined;
   // The MPP challenges' HMAC key (PR-9). Not read while MPP is off.
@@ -66,7 +77,9 @@ export const startProxy = async ({ env, logger }: AppContext): Promise<RunningAp
     await closeConnections();
     throw error;
   }
-  const server = createApp({ config, logger, postgres, redis, opener, buyerHeaderKey, trustProxy, x402, mpp });
+  const server = createApp({
+    config, logger, postgres, redis, opener, buyerHeaderKey, trustProxy, x402, mpp, ...signer ? { signer } : {}, ...internalApi ? { internalApi } : {},
+  });
   try {
     await server.listen(listen);
   }

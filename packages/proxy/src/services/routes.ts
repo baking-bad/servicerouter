@@ -28,6 +28,11 @@ export interface ProxyRoutesOptions {
   readonly metrics: ProxyMetrics;
   // Runs the payment rails around the forward, for an operation with a price (rule 5)
   readonly payments: PaymentStep;
+  // Payment routing (RT-1): paths whose first segment is a hostname. Without it, they get 404.
+  readonly routing?: {
+    serve(request: FastifyRequest, reply: FastifyReply): Promise<FastifyReply>;
+    check(request: FastifyRequest<{ Querystring: { readonly url?: string } }>): Promise<Record<string, unknown>>;
+  };
 }
 
 interface Prepared {
@@ -70,8 +75,11 @@ const withReceipt = (headers: Record<string, string | string[]>, receipt: Readon
  * link checker, later), a platform path, or a hostname (payment routing, later) get `404`. Anything
  * else is `400 invalid_target`.
  */
-const dispatch = async (request: FastifyRequest): Promise<never> => {
+const createDispatch = (routing: ProxyRoutesOptions['routing']) => async (request: FastifyRequest, reply: FastifyReply): Promise<FastifyReply> => {
   const first = normalizePathText((request.raw.url ?? '/').split('?', 1)[0]!.split('/')[1] ?? '');
+  // RT-1: a hostname first is a routing link
+  if (routing && first.includes('.') && !platformSegments.has(first))
+    return routing.serve(request, reply);
   if (first === '' || first === 'service' || platformSegments.has(first) || first.includes('.'))
     throw new NotFoundError();
 
@@ -83,7 +91,11 @@ const dispatch = async (request: FastifyRequest): Promise<never> => {
  * operation, takes the payment for a priced one, and forwards to its upstream with the seller's
  * credentials. An operation priced at 0 is free: no payment step.
  */
-export const registerProxyRoutes = (app: FastifyInstance, { cache, http, payUrl, metrics, payments }: ProxyRoutesOptions): void => {
+export const registerProxyRoutes = (app: FastifyInstance, { cache, http, payUrl, metrics, payments, routing }: ProxyRoutesOptions): void => {
+  const dispatch = createDispatch(routing);
+  // RT-19: the link checker's endpoint
+  if (routing)
+    app.get<{ Querystring: { readonly url?: string } }>('/_/check', async request => routing.check(request));
   // Everything up to the request to the upstream, while the runtime's secrets are leased (SC-5)
   const prepare = async (request: FastifyRequest): Promise<Prepared> => {
     // Dot segments are refused before anything is matched

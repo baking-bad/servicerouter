@@ -29,6 +29,7 @@
   },
   "devDependencies": {
     "@servicerouter/api": "0.1.0",
+    "@servicerouter/signer": "0.1.0",
     "@servicerouter/testing": "0.1.0",
     "@servicerouter/workers": "0.1.0",
     "@x402/cardano": "2.28.0",

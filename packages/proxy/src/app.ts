@@ -6,8 +6,8 @@ import {
 } from '@servicerouter/common';
 import { RateLimitedError, type InvalidationBus, type PlatformConfig, type RateLimiter, type SecretOpener } from '@servicerouter/core';
 import {
-  createKeyStore, createLedger, createPaymentRepository, createRedisInvalidationBus, createRedisRateLimiter, createServiceRepository,
-  type Postgres, type Redis,
+  createKeyStore, createLedger, createPaymentRepository, createRedisInvalidationBus, createRedisRateLimiter, createRoutingRepository,
+  createServiceRepository, type Postgres, type Redis,
 } from '@servicerouter/db';
 import {
   createCreditsRail, createMppRail, createX402Rail, detectMpp, detectX402, type MppSetup, type PaymentRail, type X402Setup,
@@ -19,6 +19,8 @@ import { createBuyerHeaderValue } from './payments/buyer.js';
 import { createKeyCache, type KeyCacheSettings } from './payments/keyCache.js';
 import { createProxyLimits } from './payments/limits.js';
 import { createPaymentStep } from './payments/step.js';
+import { createRouting } from './routing/routes.js';
+import { createEndpointRegistrar, createOptOutCheck, type SignerClient } from './routing/support.js';
 import { registerKeyRoute } from './platform/key.js';
 import { createRuntimeCache } from './services/cache.js';
 import { createServiceLoader, disposeService, type ServiceLoad } from './services/loader.js';
@@ -78,6 +80,12 @@ export interface ProxyDependencies {
   readonly x402?: X402Setup;
   // MPP on Tempo (PR-9), from `initializeMpp`. Without it, an MPP credential gets the 402.
   readonly mpp?: MppSetup;
+  // The Signer that pays routed targets (SG-2). Without it, routed calls answer 503 and nobody pays.
+  readonly signer?: SignerClient;
+  // The internal API, for routed endpoints (RT-12). Without it, nothing is registered.
+  readonly internalApi?: { readonly url: string; readonly secret: Secret };
+  // The ownership file's URL for a host, for the routing opt-out (RT-2). Tests point it at a fake.
+  readonly ownershipFileUrl?: (host: string) => string;
 }
 
 export interface ProxyServer extends Server {
@@ -153,6 +161,9 @@ export const createApp = ({
   trustProxy,
   x402,
   mpp,
+  signer,
+  internalApi,
+  ownershipFileUrl,
 }: ProxyDependencies): ProxyServer => {
   const server = createServer({
     logger,
@@ -239,7 +250,22 @@ export const createApp = ({
     metrics,
   });
   registerKeyRoute(app, { credits, limits, ledger, clock });
-  registerProxyRoutes(app, { cache, http: upstreams, payUrl: config.urls.pay, metrics, payments });
+  // Payment routing (RT-1 to RT-19)
+  const registrar = createEndpointRegistrar({ url: internalApi?.url, secret: internalApi?.secret, logger });
+  const routing = createRouting({
+    config,
+    http: upstreams,
+    redis,
+    payments,
+    routing: createRoutingRepository({ db: postgres.db, clock }),
+    ledger,
+    signer,
+    optedOut: createOptOutCheck({ http: upstreams, redis, logger, ...ownershipFileUrl ? { fileUrl: ownershipFileUrl } : {} }),
+    registrar,
+    limitIp: ip => limits.unpaid(ip),
+    logger,
+  });
+  registerProxyRoutes(app, { cache, http: upstreams, payUrl: config.urls.pay, metrics, payments, routing });
   // Shutdown finishes or releases the holds of the last responses (PX-18)
   app.addHook('onClose', async () => payments.drain());
 

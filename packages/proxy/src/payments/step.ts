@@ -1,4 +1,4 @@
-import type { IdGenerator, Logger } from '@servicerouter/common';
+import type { IdGenerator, Logger, MicroUsd } from '@servicerouter/common';
 import type { BillingDecision, RuntimeOperation } from '@servicerouter/core';
 import {
   billingDecision, buildPaymentRequired, detectCredential, PaymentInvalidError, type Authorization, type CredentialDetector,
@@ -36,8 +36,23 @@ export interface PaymentCallInput {
   readonly path: string;
 }
 
+/** A routed call's buyer side (RT-6): the quote for the target, paid like a registered service's call. */
+export interface RoutedCallInput {
+  readonly headers: RequestHeaders;
+  readonly ip: string;
+  readonly requestId: string;
+  readonly host: string;
+  readonly path: string;
+  // The routing link, such as https://pay.servicerouter.ai/api.example.com/v1/pools
+  readonly resource: string;
+  // The target's price plus the routing fee (RT-5)
+  readonly quote: MicroUsd;
+}
+
 /** The proxy's payment step (rule 5): authorize before forwarding, then decide, record, and finalize. */
 export interface PaymentStep {
+  /** Like `begin`, for a routed call at its quote (RT-6). The per-service limit counts per target host (RT-15). */
+  beginRouted(input: RoutedCallInput): Promise<PaymentStart>;
   /**
    * Detects the credential (PR-1), checks the limits (PX-13), and authorizes it, or returns the
    * combined 402. Throws a coded error for two credentials, a bad key, a refused hold, or a limit.
@@ -104,18 +119,9 @@ export const createPaymentStep = ({
     }
   };
 
-  return {
-    begin: async ({ headers, ip, requestId, serviceId, ownerAccountId, operation, path }) => {
+  // Detects the credential, checks the limits, and authorizes it, or answers with the combined 402
+  const start = async ({ headers, ip }: { readonly headers: RequestHeaders; readonly ip: string }, quote: Quote, scope: string): Promise<PaymentStart> => {
       const credential = detectCredential(detectors, headers);
-      const quote: Quote = {
-        paymentId: `${paymentIdPrefix}${ids.next()}`,
-        requestId,
-        resource: `${payUrl.replace(/\/+$/, '')}/service/${serviceId}${path}`,
-        priceMicroUsd: operation.price,
-        description: describe(operation),
-        subject: { kind: 'service', serviceId, routeKey: operation.routeKey, sellerAccountId: ownerAccountId },
-        feeBps,
-      };
       const rail = credential && rails.find(candidate => candidate.name === credential.rail);
       if (!credential || !rail) {
         await limits.unpaid(ip);
@@ -126,7 +132,7 @@ export const createPaymentStep = ({
 
       if (credential.rail === 'credits' && credential.key.kind === 'payment')
         await limits.paymentKey(credential.key.hash);
-      await limits.service(serviceId);
+      await limits.service(scope);
       let authorization: Authorization;
       try {
         authorization = await rail.authorize(credential, quote);
@@ -140,9 +146,30 @@ export const createPaymentStep = ({
       return {
         kind: 'paid',
         call: { rail, authorization },
-        upstreamHeaders: { [buyerHeader]: buyerHeaderValue(authorization.buyer, serviceId) },
+        upstreamHeaders: { [buyerHeader]: buyerHeaderValue(authorization.buyer, scope) },
       };
-    },
+  };
+
+  return {
+    begin: async ({ headers, ip, requestId, serviceId, ownerAccountId, operation, path }) => start({ headers, ip }, {
+      paymentId: `${paymentIdPrefix}${ids.next()}`,
+      requestId,
+      resource: `${payUrl.replace(/\/+$/, '')}/service/${serviceId}${path}`,
+      priceMicroUsd: operation.price,
+      description: describe(operation),
+      subject: { kind: 'service', serviceId, routeKey: operation.routeKey, sellerAccountId: ownerAccountId },
+      feeBps,
+    }, serviceId),
+    beginRouted: async ({ headers, ip, requestId, host, path, resource, quote }) => start({ headers, ip }, {
+      paymentId: `${paymentIdPrefix}${ids.next()}`,
+      requestId,
+      resource,
+      priceMicroUsd: quote,
+      description: `${host}${path}, through Service Router`,
+      subject: { kind: 'routed', targetHost: host, targetPath: path },
+      // The routing fee is in the quote: the ledger splits it from the target's price (RT-5)
+      feeBps: 0,
+    }, `host:${host}`),
     decide: async ({ authorization }, { status, latencyMs }) => {
       const decision = billingDecision(status);
       try {
