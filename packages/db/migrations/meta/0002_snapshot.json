@@ -1,0 +1,609 @@
+{
+  "id": "ccdb2f8d-02a2-4faf-8fbf-b694362828fa",
+  "prevId": "c7552ef5-06b0-4359-9da7-2db59bee76c4",
+  "version": "7",
+  "dialect": "postgresql",
+  "tables": {
+    "public.audit_log": {
+      "name": "audit_log",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "occurred_at": {
+          "name": "occurred_at",
+          "type": "timestamp (3) with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "actor_kind": {
+          "name": "actor_kind",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "actor_id": {
+          "name": "actor_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "action": {
+          "name": "action",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "subject_kind": {
+          "name": "subject_kind",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "subject_id": {
+          "name": "subject_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "request_id": {
+          "name": "request_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "details": {
+          "name": "details",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {
+        "audit_log_subject_idx": {
+          "name": "audit_log_subject_idx",
+          "columns": [
+            {
+              "expression": "subject_kind",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "subject_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "occurred_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "audit_log_actor_idx": {
+          "name": "audit_log_actor_idx",
+          "columns": [
+            {
+              "expression": "actor_kind",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "actor_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "occurred_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.accounts": {
+      "name": "accounts",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "email": {
+          "name": "email",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "email_confirmed_at": {
+          "name": "email_confirmed_at",
+          "type": "timestamp (3) with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp (3) with time zone",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.api_keys": {
+      "name": "api_keys",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "account_id": {
+          "name": "account_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "kind": {
+          "name": "kind",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "key_hash": {
+          "name": "key_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "label": {
+          "name": "label",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp (3) with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "revoked_at": {
+          "name": "revoked_at",
+          "type": "timestamp (3) with time zone",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {
+        "api_keys_key_hash_idx": {
+          "name": "api_keys_key_hash_idx",
+          "columns": [
+            {
+              "expression": "key_hash",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "api_keys_account_idx": {
+          "name": "api_keys_account_idx",
+          "columns": [
+            {
+              "expression": "account_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "kind",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "api_keys_active_master_idx": {
+          "name": "api_keys_active_master_idx",
+          "columns": [
+            {
+              "expression": "account_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "kind = 'master' and revoked_at is null",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "api_keys_account_id_accounts_id_fk": {
+          "name": "api_keys_account_id_accounts_id_fk",
+          "tableFrom": "api_keys",
+          "tableTo": "accounts",
+          "columnsFrom": [
+            "account_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "api_keys_kind_check": {
+          "name": "api_keys_kind_check",
+          "value": "\"api_keys\".\"kind\" in ('master', 'payment')"
+        },
+        "api_keys_key_hash_check": {
+          "name": "api_keys_key_hash_check",
+          "value": "\"api_keys\".\"key_hash\" ~ '^[0-9a-f]{64}$'"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.service_revisions": {
+      "name": "service_revisions",
+      "schema": "",
+      "columns": {
+        "service_id": {
+          "name": "service_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "number": {
+          "name": "number",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "config_text": {
+          "name": "config_text",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "config_media_type": {
+          "name": "config_media_type",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "config": {
+          "name": "config",
+          "type": "json",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "openapi_documents": {
+          "name": "openapi_documents",
+          "type": "json",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_by": {
+          "name": "created_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp (3) with time zone",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "service_revisions_service_id_services_id_fk": {
+          "name": "service_revisions_service_id_services_id_fk",
+          "tableFrom": "service_revisions",
+          "tableTo": "services",
+          "columnsFrom": [
+            "service_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "service_revisions_created_by_accounts_id_fk": {
+          "name": "service_revisions_created_by_accounts_id_fk",
+          "tableFrom": "service_revisions",
+          "tableTo": "accounts",
+          "columnsFrom": [
+            "created_by"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "service_revisions_pkey": {
+          "name": "service_revisions_pkey",
+          "columns": [
+            "service_id",
+            "number"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "service_revisions_number_check": {
+          "name": "service_revisions_number_check",
+          "value": "\"service_revisions\".\"number\" >= 1"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.services": {
+      "name": "services",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "owner_account_id": {
+          "name": "owner_account_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "state": {
+          "name": "state",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "active_revision": {
+          "name": "active_revision",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp (3) with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp (3) with time zone",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {
+        "services_owner_idx": {
+          "name": "services_owner_idx",
+          "columns": [
+            {
+              "expression": "owner_account_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "services_owner_account_id_accounts_id_fk": {
+          "name": "services_owner_account_id_accounts_id_fk",
+          "tableFrom": "services",
+          "tableTo": "accounts",
+          "columnsFrom": [
+            "owner_account_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "services_active_revision_fk": {
+          "name": "services_active_revision_fk",
+          "tableFrom": "services",
+          "tableTo": "service_revisions",
+          "columnsFrom": [
+            "id",
+            "active_revision"
+          ],
+          "columnsTo": [
+            "service_id",
+            "number"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "services_state_check": {
+          "name": "services_state_check",
+          "value": "\"services\".\"state\" in ('pending', 'live', 'suspended')"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.service_secrets": {
+      "name": "service_secrets",
+      "schema": "",
+      "columns": {
+        "service_id": {
+          "name": "service_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "name": {
+          "name": "name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "version": {
+          "name": "version",
+          "type": "smallint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "key_id": {
+          "name": "key_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "wrapped_key": {
+          "name": "wrapped_key",
+          "type": "bytea",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "iv": {
+          "name": "iv",
+          "type": "bytea",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "ciphertext": {
+          "name": "ciphertext",
+          "type": "bytea",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "tag": {
+          "name": "tag",
+          "type": "bytea",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "origin": {
+          "name": "origin",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp (3) with time zone",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "service_secrets_service_id_services_id_fk": {
+          "name": "service_secrets_service_id_services_id_fk",
+          "tableFrom": "service_secrets",
+          "tableTo": "services",
+          "columnsFrom": [
+            "service_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "service_secrets_pkey": {
+          "name": "service_secrets_pkey",
+          "columns": [
+            "service_id",
+            "name"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "service_secrets_origin_check": {
+          "name": "service_secrets_origin_check",
+          "value": "\"service_secrets\".\"origin\" like 'https://%'"
+        }
+      },
+      "isRLSEnabled": false
+    }
+  },
+  "enums": {},
+  "schemas": {},
+  "sequences": {},
+  "roles": {},
+  "policies": {},
+  "views": {},
+  "_meta": {
+    "columns": {},
+    "schemas": {},
+    "tables": {}
+  }
+}

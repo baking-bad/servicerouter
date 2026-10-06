@@ -15,6 +15,13 @@
       "when": 1791287520000,
       "tag": "0001_accounts_and_api_keys",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1791287640000,
+      "tag": "0002_services_and_secrets",
+      "breakpoints": true
     }
   ]
 }
