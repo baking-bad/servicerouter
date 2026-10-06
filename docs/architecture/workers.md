@@ -17,7 +17,7 @@ Runs every background job.
 | Hold expiry | Every minute | [Ledger](ledger.md) | 4 |
 | Settlement follow-up | Every 30 seconds | [Payment rails](payment-rails.md) | 5 |
 | Ownership re-check | Each host daily: the job runs every 5 minutes and checks what is due | [Ownership verification](ownership-verification.md) | 8 |
-| Deposit watcher | Every few seconds | [Deposits](deposits.md) | 9 |
+| Deposit watcher | Every 20 seconds, a batch of due addresses | [Deposits](deposits.md) | 9 |
 | Payouts | The 1st of the month, UTC | [Payouts](payouts.md) | 11 |
 | Treasury balances | Every few minutes | [Treasury](treasury.md) | 11 |
 | Reconciliation | Daily | [Treasury](treasury.md) | 11 |

@@ -18,11 +18,12 @@ Everything about a deployment that isn't a seller config or a secret.
   - canonical public URLs and the hosts we own;
   - the asset registry (PC-6);
   - the facilitator registry: name, URL, networks, auth reference, and `enabled` (default true: a disabled one isn't checked, and its networks aren't offered);
+  - deposits ([DP-1](deposits.md)), optional: `asset` (a Cardano asset of the registry), `confirmations` (default 15), `enabled` (default true), and `blockfrostUrl` (default Blockfrost's for the asset's network);
   - `payTo` addresses per network and the MPP recipient on Tempo;
   - `feeBps` (registered services) and `routingFeeBps` (payment routing);
   - the minimum payout;
   - the category list;
-  - rate limits, including the signup limit per client IP (`rateLimits.signup`, [PA-5](platform-api.md)), and timeouts;
+  - rate limits, including the signup limit per client IP (`rateLimits.signup`, [PA-5](platform-api.md)) and the top-up data's (`rateLimits.topup`, default 60 a minute), and timeouts;
   - Signer limits;
   - key prefixes (PC-7) and the default limits for new payment keys ([AR4](README.md#8-open-questions));
   - the SMTP relay: host, port, sender address, and credentials by name, after the MVP ([AR19](README.md#8-open-questions)).

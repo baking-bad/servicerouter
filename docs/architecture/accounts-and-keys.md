@@ -76,6 +76,7 @@ The person keeps the master key. Each agent that spends gets only a payment key 
 - **AK-13** Notices go to the confirmed email: a master key rotation, a recovery, an email change, and payout changes ([OV-10](ownership-verification.md)). A notice never contains a key or a link that acts on the account.
 - **AK-14** Email goes out through the SMTP relay in platform config ([AR19](README.md#8-open-questions)), from `api` and `workers`, through a `Mailer` port. Tests use a fake mailer.
 - **AK-15** The top-up link uses its own random token. It isn't derived from any key, and it reveals only the deposit address and deposit status.
+  - 24 random bytes, base64url. The link is `<urls.website>/topup/<token>`. Signup and `GET /v1/account` answer with `topupUrl` and `depositAddress: { address, network, asset }`, both `null` while deposits are off.
 - **AK-16** Every key creation, rotation, revocation, limit change, email change, and recovery writes the audit log, without the key.
   - Actions so far: `account.create`, `master_key.rotate`, `payment_key.create`, `payment_key.update`, and `payment_key.revoke`, with key IDs in the details, in the same transaction as the change. Limits are recorded in micro-USD.
 - **AK-17** Later: register both key prefixes with GitHub secret scanning. A key that GitHub reports in a public repository is revoked at once, and the owner gets a notice.
