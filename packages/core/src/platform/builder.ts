@@ -232,6 +232,7 @@ export const buildPlatformConfig = (document: PlatformConfigDocument, locator?: 
       signup: { ...document.rateLimits.signup },
       topup: { ...document.rateLimits.topup ?? platformDefaults.topupRateLimit },
       documents: { ...document.rateLimits.documents ?? platformDefaults.documentsRateLimit },
+      assistant: { ...document.rateLimits.assistant ?? platformDefaults.assistantRateLimit },
     },
     timeouts: { ...timeouts, ...document.timeouts },
     sizeLimits: { ...sizeLimits, ...document.sizeLimits },

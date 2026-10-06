@@ -68,7 +68,7 @@ export const platformConfigSchema: SchemaObject = {
     payouts: object({ assets: array(assetName, { minItems: 1, uniqueItems: true }), minimum: usdAmount }, ['assets']),
     categories: array(object({ id: categoryId, title: text(60) }, ['id', 'title']), { minItems: 1 }),
     rateLimits: object(
-      { paymentKey: rateLimit, service: rateLimit, unpaidIp: rateLimit, signup: rateLimit, topup: rateLimit, documents: rateLimit },
+      { paymentKey: rateLimit, service: rateLimit, unpaidIp: rateLimit, signup: rateLimit, topup: rateLimit, documents: rateLimit, assistant: rateLimit },
       ['paymentKey', 'service', 'unpaidIp', 'signup'],
     ),
     timeouts: object({ connectMs: positive, requestMs: positive, settleMs: positive }),

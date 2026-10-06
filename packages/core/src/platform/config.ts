@@ -101,6 +101,8 @@ export interface PlatformConfig {
     readonly topup: RateLimit;
     // A service's agent documents per client IP (PA-5, AD-4)
     readonly documents: RateLimit;
+    // Config assistant drafts per account (CA-1)
+    readonly assistant: RateLimit;
   };
   readonly timeouts: {
     readonly connectMs: number;

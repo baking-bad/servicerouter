@@ -85,6 +85,7 @@ export interface RateLimitsDocument {
   readonly signup: RateLimitDocument;
   readonly topup?: RateLimitDocument;
   readonly documents?: RateLimitDocument;
+  readonly assistant?: RateLimitDocument;
 }
 
 export interface TimeoutsDocument {

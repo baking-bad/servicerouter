@@ -22,6 +22,8 @@ export const platformDefaults = {
   topupRateLimit: { requests: 60, windowSeconds: 60 },
   // PA-5: a service's agent documents (AD-4) per client IP
   documentsRateLimit: { requests: 120, windowSeconds: 60 },
+  // CA-1: drafts per account: each may cost a model call
+  assistantRateLimit: { requests: 30, windowSeconds: 3600 },
   // DP-2: Blockfrost's base URL per network
   blockfrostUrls: {
     'cardano:mainnet': 'https://cardano-mainnet.blockfrost.io/api/v0',
