@@ -8,7 +8,7 @@ import {
 } from '@servicerouter/common';
 import {
   createOwnershipFileFetcher, createOwnershipVerifier, cryptoRandomSource, openApiFetchLimits, ownershipFileLimits, type ApiKeyRepository,
-  type DepositAddressDeriver, type InvalidationBus, type OwnershipStatus, type PlatformConfig, type RandomSource, type SecretSealer,
+  createDefaultDrafter, type DepositAddressDeriver, type InvalidationBus, type LlmDrafter, type OwnershipStatus, type PlatformConfig, type RandomSource, type SecretSealer,
 } from '@servicerouter/core';
 import {
   createApiKeyRepository, createOwnershipStatus, createOwnershipStore, createRedisInvalidationBus, createRedisRateLimiter, type Postgres,
@@ -20,6 +20,7 @@ import { registerAccountRoutes } from './accounts/routes.js';
 import { createAccountService } from './accounts/service.js';
 import { createIpLimit, createSignupLimit } from './accounts/signupLimit.js';
 import { registerAgentDocRoutes } from './agentDocs/routes.js';
+import { registerAssistantRoutes } from './assistant/routes.js';
 import { registerCatalogRoutes } from './catalog/routes.js';
 import { createAgentDocsService } from './agentDocs/service.js';
 import { registerDepositRoutes } from './deposits/routes.js';
@@ -72,6 +73,9 @@ export interface ApiDependencies {
   readonly depositAddresses?: DepositAddressDeriver;
   // Browser origins that may call the API (PA-7). Default: the website's.
   readonly corsOrigins?: readonly string[];
+  // The model that fills a draft's description, category, tags, and prices (CA-2). Default: none, the
+  // document's own words and the default price, for the seller to review.
+  readonly drafter?: LlmDrafter;
 }
 
 export interface ApiListenOptions extends ListenOptions {
@@ -123,6 +127,7 @@ export const createApp = ({
   internalSecret,
   depositAddresses,
   corsOrigins = [new URL(config.urls.website).origin],
+  drafter = createDefaultDrafter(),
 }: ApiDependencies): ApiServer => {
   const server = createServer({
     logger,
@@ -175,6 +180,7 @@ export const createApp = ({
     invalidation,
     logger,
   });
+  registerAssistantRoutes(app, { http, platform: config, drafter, limiter, authenticate });
   registerServiceRoutes(app, {
     registry: createServiceRegistry({
       db: postgres.db, platform: config, clock, ids, logger, sealer, http, ownership, verifier, random, invalidation,
