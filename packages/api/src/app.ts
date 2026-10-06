@@ -1,18 +1,23 @@
 import type { FastifyInstance } from 'fastify';
 
 import {
-  createServer, randomIdGenerator, systemClock, type Clock, type IdGenerator, type Logger, type Server,
+  createServer, OutboundHttp, randomIdGenerator, systemClock, type Clock, type IdGenerator, type Logger, type Server,
 } from '@servicerouter/common';
 import {
-  cryptoRandomSource, type ApiKeyRepository, type PlatformConfig, type RandomSource,
+  assumeHostsVerified, cryptoRandomSource, openApiFetchLimits, type ApiKeyRepository, type InvalidationBus, type OwnershipStatus,
+  type PlatformConfig, type RandomSource, type SecretSealer,
 } from '@servicerouter/core';
-import { createApiKeyRepository, createRedisRateLimiter, type Postgres, type Redis } from '@servicerouter/db';
+import {
+  createApiKeyRepository, createRedisInvalidationBus, createRedisRateLimiter, type Postgres, type Redis,
+} from '@servicerouter/db';
 
 import { createMasterKeyAuth, decorateAccount } from './accounts/auth.js';
 import { registerAccountRoutes } from './accounts/routes.js';
 import { createAccountService } from './accounts/service.js';
 import { createSignupLimit } from './accounts/signupLimit.js';
 import { errorStatuses } from './errors.js';
+import { registerServiceRoutes } from './services/routes.js';
+import { createServiceRegistry } from './services/service.js';
 
 export interface ApiDependencies {
   readonly config: PlatformConfig;
@@ -31,6 +36,15 @@ export interface ApiDependencies {
   readonly trustProxy?: string;
   // Master key lookups. Default: the api_keys repository.
   readonly apiKeys?: Pick<ApiKeyRepository, 'findActiveByHash'>;
+  // Seals seller secrets with the proxy's public key (SC-2). See `readSecretsSealer`.
+  readonly sealer: SecretSealer;
+  // Fetches sellers' OpenAPI documents (SR-3). Default: Outbound HTTP with the production address
+  // policy, the platform's own hosts refused (OH-5), and the S2-D2 connect timeout. Closed with the app.
+  readonly openApiHttp?: Pick<OutboundHttp, 'request'>;
+  // Whether a service's hosts are verified (SR-8). Default: the step 2 adapter, every host verified (S2-D1).
+  readonly ownership?: OwnershipStatus;
+  // Where activations and secret writes are announced (SR-7, SC-7). Default: the Redis channel.
+  readonly invalidation?: Pick<InvalidationBus, 'publish'>;
 }
 
 // A POST with `Content-Type: application/json` and no body has no body, rather than invalid JSON
@@ -58,6 +72,10 @@ export const createApp = ({
   requestIds,
   trustProxy,
   apiKeys = createApiKeyRepository({ db: postgres.db }),
+  sealer,
+  openApiHttp,
+  ownership = assumeHostsVerified,
+  invalidation = createRedisInvalidationBus({ redis, logger }),
 }: ApiDependencies): Server => {
   const server = createServer({
     logger,
@@ -73,10 +91,22 @@ export const createApp = ({
   decorateAccount(app);
   acceptEmptyJson(app);
 
+  const authenticate = createMasterKeyAuth({ keyPrefixes: config.keyPrefixes, apiKeys });
   registerAccountRoutes(app, {
     accounts: createAccountService({ db: postgres.db, clock, ids, random, keyPrefixes: config.keyPrefixes }),
-    authenticate: createMasterKeyAuth({ keyPrefixes: config.keyPrefixes, apiKeys }),
+    authenticate,
     signupLimit: createSignupLimit({ limiter: createRedisRateLimiter({ redis }), limit: config.rateLimits.signup }),
+  });
+
+  let http = openApiHttp;
+  if (!http) {
+    const outbound = new OutboundHttp({ ownHosts: config.ownHosts, connectTimeoutMs: openApiFetchLimits.connectTimeoutMs });
+    app.addHook('onClose', async () => outbound.close());
+    http = outbound;
+  }
+  registerServiceRoutes(app, {
+    registry: createServiceRegistry({ db: postgres.db, platform: config, clock, ids, logger, sealer, http, ownership, invalidation }),
+    authenticate,
   });
 
   return server;

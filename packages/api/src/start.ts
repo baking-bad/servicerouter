@@ -5,6 +5,7 @@ import { loadPlatformConfig } from '@servicerouter/core';
 import { createPostgres, createRedis } from '@servicerouter/db';
 
 import { createApp } from './app.js';
+import { readSecretsSealer } from './services/keys.js';
 
 export const defaultPort = 8081;
 export const defaultMetricsPort = 9081;
@@ -22,13 +23,15 @@ export const startApi = async ({ env, logger }: AppContext): Promise<RunningApp>
   const trustProxy = env['TRUST_PROXY']?.trim() || undefined;
   const databaseUrl = readSecret('DATABASE_URL', env);
   const redisUrl = readSecret('REDIS_URL', env);
+  // Missing or unusable, the app stops here with the reason (S2-D4)
+  const sealer = readSecretsSealer(env);
 
   const postgres = createPostgres({ url: databaseUrl, logger });
   const redis = createRedis({ url: redisUrl, logger });
   const closeConnections = async () => {
     await Promise.all([postgres.close(), redis.close()]);
   };
-  const server = createApp({ config, logger, postgres, redis, trustProxy });
+  const server = createApp({ config, logger, postgres, redis, trustProxy, sealer });
   try {
     await server.listen(listen);
   }

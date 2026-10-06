@@ -6,3 +6,6 @@ export { authenticatedAccount, createMasterKeyAuth } from './accounts/auth.js';
 export type { AuthenticatedAccount, MasterKeyAuthOptions } from './accounts/auth.js';
 export { createAccountService } from './accounts/service.js';
 export type { AccountService, AccountServiceOptions, CreatedAccount } from './accounts/service.js';
+export { createServiceRegistry } from './services/service.js';
+export type { ServiceRegistry, ServiceRegistryOptions, SubmitResult } from './services/service.js';
+export { readSecretsSealer, secretsPublicKeyVariable } from './services/keys.js';
