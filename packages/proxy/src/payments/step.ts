@@ -2,10 +2,10 @@ import type { IdGenerator, Logger } from '@servicerouter/common';
 import type { BillingDecision, RuntimeOperation } from '@servicerouter/core';
 import {
   billingDecision, buildPaymentRequired, detectCredential, type Authorization, type CredentialDetector, type PaymentRail,
-  type PaymentRecorder, type PaymentRequired, type Quote, type RequestHeaders,
+  type PaymentRecorder, type PaymentRequired, type Quote, type Receipt, type RequestHeaders,
 } from '@servicerouter/payments';
 
-import type { ProxyMetrics } from '../metrics.js';
+import type { PaymentOutcome, ProxyMetrics } from '../metrics.js';
 import { buyerHeader, type BuyerHeaderValue } from './buyer.js';
 import type { ProxyLimits } from './limits.js';
 
@@ -50,6 +50,11 @@ export interface PaymentStep {
    * hold expiry worker finishes the payment from its recorded decision (LG-9).
    */
   finish(call: PaidCall, decision: BillingDecision): Promise<void>;
+  /**
+   * Finalizes a rail that settles before the response (x402, PX-12) and returns its receipt. Throws
+   * SettlementFailedError when the response must not go out (PR-12).
+   */
+  settleNow(call: PaidCall): Promise<Receipt>;
   /** Waits for every finish in flight, so shutdown finishes or releases its holds (PX-18). */
   drain(): Promise<void>;
 }
@@ -71,6 +76,11 @@ export interface PaymentStepOptions {
   readonly metrics: ProxyMetrics;
 }
 
+// Credits holds and captures; x402 verifies and settles
+const outcomes = (rail: PaymentRail): Readonly<Record<'authorized' | 'finalized' | 'aborted', PaymentOutcome>> => rail.settlesBeforeResponse
+  ? { authorized: 'verified', finalized: 'settled', aborted: 'cancelled' }
+  : { authorized: 'held', finalized: 'captured', aborted: 'released' };
+
 const describe = (operation: RuntimeOperation): string =>
   operation.docs.summary ?? operation.routeKey ?? `${operation.method.toUpperCase()} ${operation.path}`;
 
@@ -86,7 +96,7 @@ export const createPaymentStep = ({
         await rail.finalize(authorization);
       else
         await rail.abort(authorization);
-      metrics.payment(rail.name, decision === 'billable' ? 'captured' : 'released');
+      metrics.payment(rail.name, outcomes(rail)[decision === 'billable' ? 'finalized' : 'aborted']);
     }
     catch (error) {
       metrics.payment(rail.name, 'finalize_failed');
@@ -111,7 +121,7 @@ export const createPaymentStep = ({
         await limits.unpaid(ip);
         metrics.payment(credential?.rail ?? 'none', 'challenged');
 
-        return { kind: 'challenge', response: buildPaymentRequired(rails, quote) };
+        return { kind: 'challenge', response: await buildPaymentRequired(rails, quote) };
       }
 
       if (credential.rail === 'credits' && credential.key.kind === 'payment')
@@ -125,7 +135,7 @@ export const createPaymentStep = ({
         metrics.payment(rail.name, 'refused');
         throw error;
       }
-      metrics.payment(rail.name, 'held');
+      metrics.payment(rail.name, outcomes(rail).authorized);
 
       return {
         kind: 'paid',
@@ -154,6 +164,18 @@ export const createPaymentStep = ({
       }
       finally {
         finishing.delete(finished);
+      }
+    },
+    settleNow: async ({ rail, authorization }) => {
+      try {
+        const receipt = await rail.finalize(authorization);
+        metrics.payment(rail.name, 'settled');
+
+        return receipt;
+      }
+      catch (error) {
+        metrics.payment(rail.name, 'settlement_failed');
+        throw error;
       }
     },
     drain: async () => {

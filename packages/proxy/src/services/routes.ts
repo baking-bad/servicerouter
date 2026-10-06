@@ -1,9 +1,11 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 
-import { isServiceId, OutboundHttpError, type OutboundHttp, type OutboundResponse } from '@servicerouter/common';
+import {
+  isServiceId, OutboundHttpError, ResponseTooLargeError as OutboundResponseTooLargeError, type OutboundHttp, type OutboundResponse,
+} from '@servicerouter/common';
 import { declaresStatus, normalizePathText, type RuntimeOperation } from '@servicerouter/core';
 
-import { InvalidTargetError, NotFoundError, ServiceSuspendedError, UpstreamUnavailableError } from '../errors.js';
+import { InvalidTargetError, NotFoundError, ResponseTooLargeError, ServiceSuspendedError, UpstreamUnavailableError } from '../errors.js';
 import type { ProxyMetrics } from '../metrics.js';
 import type { PaidCall, PaymentStep } from '../payments/step.js';
 import type { RuntimeCache } from './cache.js';
@@ -96,11 +98,53 @@ export const registerProxyRoutes = (app: FastifyInstance, { cache, http, payUrl,
     }
   };
 
+  /**
+   * x402 (PX-12, PR-12): no upstream byte reaches the buyer before the money moves. A billable answer
+   * is buffered up to the limit (AR3), settled, then sent with its receipt. Anything else is cancelled
+   * and passes as it is: nothing was paid for it.
+   */
+  const settleThenSend = async (
+    reply: FastifyReply,
+    call: PaidCall,
+    response: OutboundResponse,
+    answer: { readonly headers: Record<string, string | string[]>; readonly bodyless: boolean; readonly latencyMs: number },
+  ): Promise<FastifyReply> => {
+    const decision = await payments.decide(call, { status: response.status, latencyMs: answer.latencyMs });
+    if (decision !== 'billable') {
+      await payments.finish(call, decision);
+      reply.status(response.status).headers(answer.headers);
+      if (answer.bodyless) {
+        response.dispose();
+        return reply.send();
+      }
+
+      return reply.send(response.body);
+    }
+
+    let body: Buffer | undefined;
+    if (answer.bodyless)
+      response.dispose();
+    else {
+      try {
+        body = await response.bytes();
+      }
+      catch (error) {
+        // Too large to buffer, or the upstream broke off: cancel, nothing settles
+        await payments.finish(call, 'not_billable');
+        throw error instanceof OutboundResponseTooLargeError ? new ResponseTooLargeError() : new UpstreamUnavailableError();
+      }
+    }
+    // Throws SettlementFailedError (502) when the response must not go out
+    const receipt = await payments.settleNow(call);
+
+    return reply.status(response.status).headers(answer.headers).headers(receipt.headers).send(body);
+  };
+
   const serve = async (request: FastifyRequest, reply: FastifyReply): Promise<FastifyReply> => {
     const { serviceId, ownerAccountId, operation, path, upstreamRequest } = await prepare(request);
     // Rule 5: authorize before forwarding. No credential gets the combined 402 (PR-2).
     let paid: PaidCall | undefined;
-    let headers = upstreamRequest.headers;
+    let forwardHeaders = upstreamRequest.headers;
     if (operation.price > 0n) {
       const payment = await payments.begin({
         headers: request.headers, ip: request.ip, requestId: request.id, serviceId, ownerAccountId, operation, path,
@@ -109,7 +153,7 @@ export const registerProxyRoutes = (app: FastifyInstance, { cache, http, payUrl,
         return reply.status(payment.response.status).headers(payment.response.headers).send(payment.response.body);
 
       paid = payment.call;
-      headers = { ...headers, ...payment.upstreamHeaders };
+      forwardHeaders = { ...forwardHeaders, ...payment.upstreamHeaders };
     }
 
     // A client that goes away stops the upstream call too
@@ -129,7 +173,7 @@ export const registerProxyRoutes = (app: FastifyInstance, { cache, http, payUrl,
       response = await http.request({
         url: upstreamRequest.url,
         method: request.method,
-        headers,
+        headers: forwardHeaders,
         body: request.body as Buffer | undefined,
         // Forward, never redirect (PX-2, OH-3)
         redirect: 'none',
@@ -151,8 +195,16 @@ export const registerProxyRoutes = (app: FastifyInstance, { cache, http, payUrl,
     }
 
     metrics.upstream(serviceId, { status: response.status }, seconds());
+    // The body can fail while the decision is recorded, before anyone reads it: past the size limit,
+    // or cut off. Unheard, that error would crash the process. Whoever reads the body still gets it.
+    response.body.on('error', () => undefined);
     const rewrite = createSelfLinkRewriter({ payUrl, serviceId, upstream: operation.upstream, requestUrl: response.url });
-    reply.status(response.status).headers(filterResponseHeaders(response.headers, rewrite));
+    const headers = filterResponseHeaders(response.headers, rewrite);
+    const bodyless = request.method === 'HEAD' || response.status === 204 || response.status === 304;
+    if (paid?.rail.settlesBeforeResponse)
+      return settleThenSend(reply, paid, response, { headers, bodyless, latencyMs: Math.round(seconds() * 1_000) });
+
+    reply.status(response.status).headers(headers);
     if (paid) {
       // Decide and record (rule 5, PX-11), then finalize once the response is out or the client has
       // gone, even while the decision is still being written. A client that leaves after the decision
@@ -166,7 +218,7 @@ export const registerProxyRoutes = (app: FastifyInstance, { cache, http, payUrl,
       if (decision === 'billable')
         reply.headers(call.authorization.receipt?.headers ?? {});
     }
-    if (request.method === 'HEAD' || response.status === 204 || response.status === 304) {
+    if (bodyless) {
       response.dispose();
       return reply.send();
     }

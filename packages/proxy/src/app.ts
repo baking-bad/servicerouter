@@ -9,7 +9,7 @@ import {
   createKeyStore, createLedger, createPaymentRepository, createRedisInvalidationBus, createRedisRateLimiter, createServiceRepository,
   type Postgres, type Redis,
 } from '@servicerouter/db';
-import { createCreditsRail, detectMpp, detectX402 } from '@servicerouter/payments';
+import { createCreditsRail, createX402Rail, detectMpp, detectX402, type PaymentRail, type X402Setup } from '@servicerouter/payments';
 
 import { errorStatuses } from './errors.js';
 import { createProxyMetrics } from './metrics.js';
@@ -72,6 +72,8 @@ export interface ProxyDependencies {
   readonly rateLimiter?: RateLimiter;
   // The proxies in front, such as Traefik, whose X-Forwarded-For gives the client IP for the unpaid limit
   readonly trustProxy?: string;
+  // x402 on Base and Solana (PR-5), from `initializeX402`. Without it, an x402 payment gets the 402.
+  readonly x402?: X402Setup;
 }
 
 export interface ProxyServer extends Server {
@@ -145,6 +147,7 @@ export const createApp = ({
   ids = randomIdGenerator,
   rateLimiter = createRedisRateLimiter({ redis }),
   trustProxy,
+  x402,
 }: ProxyDependencies): ProxyServer => {
   const server = createServer({
     logger,
@@ -155,6 +158,13 @@ export const createApp = ({
     readinessChecks: [
       { name: 'postgres', check: () => postgres.ping() },
       { name: 'redis', check: () => redis.ping() },
+      // PX-17: every enabled facilitator answers /supported
+      ...(x402?.facilitators ?? []).map(facilitator => ({
+        name: `facilitator:${facilitator.name}`,
+        check: async () => {
+          await facilitator.getSupported();
+        },
+      })),
     ],
   });
   const { app } = server;
@@ -204,11 +214,14 @@ export const createApp = ({
     guideUrl: `${config.urls.website.replace(/\/+$/, '')}/llms.txt`,
   });
   const limits = createProxyLimits({ limiter: rateLimiter, limits: config.rateLimits, logger, metrics });
+  const recorder = createPaymentRepository({ db: postgres.db, clock });
+  const x402Rail = x402 ? createX402Rail({ setup: x402, recorder, ledger, logger }) : undefined;
+  const rails: PaymentRail[] = x402Rail ? [credits, x402Rail] : [credits];
   const payments = createPaymentStep({
-    rails: [credits],
-    // x402 (step 5) and MPP (step 7) are detected already, so two credentials of any kind get 400
-    detectors: [credits.detect, detectX402, detectMpp],
-    recorder: createPaymentRepository({ db: postgres.db, clock }),
+    rails,
+    // MPP (step 7) is detected already, and x402 without its rail, so two credentials of any kind get 400
+    detectors: [credits.detect, x402Rail?.detect ?? detectX402, detectMpp],
+    recorder,
     limits,
     buyerHeaderValue: createBuyerHeaderValue(buyerHeaderKey),
     ids,

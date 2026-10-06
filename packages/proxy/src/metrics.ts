@@ -1,7 +1,11 @@
 import { Counter, Histogram, type Registry } from '@prometheus-io/client';
 
-/** What happened to a paid call's payment (XC-2: holds, captures, and releases). */
-export type PaymentOutcome = 'challenged' | 'held' | 'refused' | 'captured' | 'released' | 'finalize_failed';
+/**
+ * What happened to a paid call's payment (XC-2). Credits: held, then captured or released. x402:
+ * verified, then settled (or settling) or cancelled, or settlement_failed.
+ */
+export type PaymentOutcome =
+  | 'challenged' | 'held' | 'verified' | 'refused' | 'captured' | 'released' | 'settled' | 'cancelled' | 'settlement_failed' | 'finalize_failed';
 
 export interface ProxyMetrics {
   cacheLookup(result: 'hit' | 'miss'): void;
@@ -52,7 +56,7 @@ export const createProxyMetrics = (registry: Registry): ProxyMetrics => {
   });
   const payments = new Counter({
     name: 'proxy_payments_total',
-    help: 'Paid calls by rail and outcome: challenged (402), held, refused, captured, released, or finalize_failed',
+    help: 'Paid calls by rail and outcome: challenged (402), held or verified, refused, captured or settled, released or cancelled, settlement_failed, finalize_failed',
     labelNames: ['rail', 'outcome'] as const,
     registers: [registry],
   });
