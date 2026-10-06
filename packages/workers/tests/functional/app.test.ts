@@ -57,6 +57,17 @@ describe('the hold expiry job (LG-9, WK-1, WK-4)', () => {
   });
 });
 
+describe('the ownership re-check job (OV-6, WK-1, WK-4)', () => {
+  it('runs under its advisory lock, and exports its last success time and duration on the metrics port', async () => {
+    const result = await server.scheduler.runNow('ownership_recheck');
+
+    const text = await (await fetch(`${url}/metrics`)).text();
+    expect(result).toBe('success');
+    expect(text).toMatch(/^workers_job_last_success_timestamp_seconds\{job="ownership_recheck"\} \d+/m);
+    expect(text).toContain('workers_job_runs_total{job="ownership_recheck",result="success"} 1');
+  });
+});
+
 describe('startup (PC-1)', () => {
   it('exits with 1 and logs the reason when the platform config is invalid', async () => {
     const lines: Record<string, unknown>[] = [];
@@ -86,6 +97,7 @@ describe('the facilitators at startup (PR-6, step 6)', () => {
       mpp: { enabled: false },
     })).toString('base64'),
     DATABASE_URL: database.url.expose(),
+    REDIS_URL: process.env['TEST_REDIS_URL']!,
     HOST: '127.0.0.1',
     METRICS_PORT: '0',
   });
@@ -138,6 +150,7 @@ describe('the Tempo RPC at startup (PR-9, WK-6)', () => {
       mpp,
     })).toString('base64'),
     DATABASE_URL: database.url.expose(),
+    REDIS_URL: process.env['TEST_REDIS_URL']!,
     HOST: '127.0.0.1',
     METRICS_PORT: '0',
   });

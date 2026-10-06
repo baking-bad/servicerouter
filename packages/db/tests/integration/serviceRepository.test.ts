@@ -56,7 +56,7 @@ const newService = async (): Promise<{ readonly id: ServiceId; readonly owner: s
     const repository = createServiceRepository({ db: tx });
     await repository.createIfMissing({ id, ownerAccountId: owner, state: 'live', createdAt: at(0) });
     await repository.insertRevision(revision(id, 1, owner));
-    await repository.activate({ id, revision: 1, state: 'live', updatedAt: at(0) });
+    await repository.activate({ id, revision: 1, hosts: ['api.example.com'], state: 'live', updatedAt: at(0) });
   });
 
   return { id, owner };
@@ -87,7 +87,7 @@ describe('services and revisions (SR-4, SR-7)', () => {
     const { id, owner } = await newService();
     const services = createServiceRepository({ db: database.db });
 
-    expect(await services.find(id)).toEqual({ id, ownerAccountId: owner, state: 'live', activeRevision: 1, createdAt: at(0), updatedAt: at(0) });
+    expect(await services.find(id)).toEqual({ id, ownerAccountId: owner, state: 'live', activeRevision: 1, hosts: ['api.example.com'], createdAt: at(0), updatedAt: at(0) });
     expect(await services.find('missing')).toBeUndefined();
     expect(await services.createIfMissing({ id, ownerAccountId: 'acc_other', state: 'pending', createdAt: at(9) })).toBe(false);
     expect((await services.find(id))?.ownerAccountId).toBe(owner);
@@ -108,7 +108,7 @@ describe('services and revisions (SR-4, SR-7)', () => {
     const services = createServiceRepository({ db: database.db });
 
     await services.insertRevision(revision(id, 2, owner, '0.002'));
-    await services.activate({ id, revision: 2, state: 'pending', updatedAt: at(5) });
+    await services.activate({ id, revision: 2, hosts: [], state: 'pending', updatedAt: at(5) });
 
     expect(await services.latestRevisionNumber(id)).toBe(2);
     expect(await services.latestRevisionNumber('missing')).toBe(0);
@@ -131,7 +131,7 @@ describe('services and revisions (SR-4, SR-7)', () => {
   it('refuses to point a service at a revision it doesn\'t have', async () => {
     const { id } = await newService();
 
-    const error = await pgError(createServiceRepository({ db: database.db }).activate({ id, revision: 7, state: 'live', updatedAt: at(5) }));
+    const error = await pgError(createServiceRepository({ db: database.db }).activate({ id, revision: 7, hosts: [], state: 'live', updatedAt: at(5) }));
 
     expect(error).toMatchObject({ code: '23503', constraint: 'services_active_revision_fk' });
   });
@@ -218,7 +218,7 @@ describe('loadForServing (SR-5, SC-5, SC-10)', () => {
     const services = createServiceRepository({ db: database.db });
     const secret = sealed();
     await services.insertRevision(revision(id, 2, owner, '0.002'));
-    await services.activate({ id, revision: 2, state: 'live', updatedAt: at(3) });
+    await services.activate({ id, revision: 2, hosts: [], state: 'live', updatedAt: at(3) });
     await createServiceSecretRepository({ db: database.db }).put({ serviceId: id, name: 'main-key', origin: 'https://api.example.com', sealed: secret, updatedAt: at(3) });
 
     expect(await services.loadForServing(id)).toEqual({

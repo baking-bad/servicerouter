@@ -5,7 +5,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { createApp as createApi, type ApiServer } from '@servicerouter/api';
 import { createAddressPolicy, createLogger, OutboundHttp, Secret, type ServiceId } from '@servicerouter/common';
-import { loadPlatformConfig, type Payment, type PlatformConfig } from '@servicerouter/core';
+import { assumeHostsVerified, loadPlatformConfig, type Payment, type PlatformConfig } from '@servicerouter/core';
 import { createPaymentRepository } from '@servicerouter/db';
 import {
   createFakeResolver, createTestDatabase, createTestRedis, createTestSecretKeys, startFakeUpstream, type FakeUpstream, type TestDatabase,
@@ -110,7 +110,7 @@ beforeAll(async () => {
   });
 
   const logger = createLogger({ level: 'silent' });
-  api = createApi({ config, logger, postgres: database.postgres, redis, sealer: keys.sealer, openApiHttp: apiHttp, internalSecret: Secret.from(internalSecret) });
+  api = createApi({ config, logger, postgres: database.postgres, redis, sealer: keys.sealer, openApiHttp: apiHttp, ownership: assumeHostsVerified, internalSecret: Secret.from(internalSecret) });
   const proxyDependencies = { logger, postgres: database.postgres, opener: keys.opener, http: proxyHttp, buyerHeaderKey: Secret.from(buyerHeaderKey) };
   proxy = createApp({ ...proxyDependencies, config, redis });
   limitedProxy = createApp({ ...proxyDependencies, config: limitedConfig, redis: limitsRedis });

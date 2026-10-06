@@ -4,7 +4,7 @@ import type { ValidationIssue } from '@servicerouter/common';
 
 import {
   assumeHostsVerified, changesPayouts, findMovedSecrets, getSecretOrigins, getSecretUses, getUpstreamHosts, isSameRevision, parseServiceConfig,
-  stateForActivation, validateServiceConfig, type OwnershipStatus, type ServiceConfigContext, type ServiceConfigDocument,
+  stateForActivation, validateServiceConfig, type HostState, type OwnershipStatus, type ServiceConfigContext, type ServiceConfigDocument,
 } from '../../src/index.js';
 import { exampleContext, exampleServiceConfig, exampleServiceObject, patch } from '../fixtures.js';
 
@@ -123,19 +123,21 @@ describe('service state (SR-8, S2-D1)', () => {
     expect(config.ok && getUpstreamHosts(config.parsed.config)).toEqual(['api.example.com']);
   });
 
-  it('activates live once every host is verified, and pending until then', async () => {
+  it('activates live once every host is verified, pending until then, and suspended while a host is (SR-8, OV-5)', async () => {
     const asked: unknown[] = [];
-    const unverified: OwnershipStatus = {
-      allHostsVerified: async input => {
+    const statesOf = (states: Record<string, HostState>): OwnershipStatus => ({
+      hostStates: async input => {
         asked.push(input);
 
-        return false;
+        return new Map(Object.entries(states));
       },
-    };
+    });
 
-    expect(await stateForActivation(assumeHostsVerified, 'my-app', configOf())).toBe('live');
-    expect(await stateForActivation(unverified, 'my-app', configOf())).toBe('pending');
-    expect(asked).toEqual([{ serviceId: 'my-app', hosts: ['api.example.com', 'files.example.com'] }]);
+    expect(await stateForActivation(assumeHostsVerified, 'acct-1', configOf())).toBe('live');
+    expect(await stateForActivation(statesOf({ 'api.example.com': 'verified' }), 'acct-1', configOf())).toBe('pending');
+    expect(await stateForActivation(statesOf({ 'api.example.com': 'verified', 'files.example.com': 'missing' }), 'acct-1', configOf())).toBe('live');
+    expect(await stateForActivation(statesOf({ 'api.example.com': 'suspended', 'files.example.com': 'verified' }), 'acct-1', configOf())).toBe('suspended');
+    expect(asked[0]).toEqual({ accountId: 'acct-1', hosts: ['api.example.com', 'files.example.com'] });
   });
 });
 

@@ -6,7 +6,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { createApp as createApi, type ApiServer } from '@servicerouter/api';
 import { createAddressPolicy, createLogger, OutboundHttp, Secret, type ServiceId } from '@servicerouter/common';
-import { loadPlatformConfig, type Payment, type PlatformConfig } from '@servicerouter/core';
+import { assumeHostsVerified, loadPlatformConfig, type Payment, type PlatformConfig } from '@servicerouter/core';
 import { createLedger, createPaymentRepository, createRedis, createRedisReplayStore, type Redis, type RedisReplayStore } from '@servicerouter/db';
 import {
   createAssetLookup, createFacilitators, createMppRail, createMppSettlementCheck, initializeMpp, initializeX402, type MppSetup, type Quote,
@@ -158,7 +158,7 @@ beforeAll(async () => {
   const [first, second] = await Promise.all([mppOn(stores[0]!), mppOn(stores[1]!)]);
   mpp = first;
 
-  api = createApi({ config, logger, postgres: database.postgres, redis, sealer: keys.sealer, openApiHttp: apiHttp, internalSecret: Secret.from('internal-secret-0123456789abcdef-xyz') });
+  api = createApi({ config, logger, postgres: database.postgres, redis, sealer: keys.sealer, openApiHttp: apiHttp, ownership: assumeHostsVerified, internalSecret: Secret.from('internal-secret-0123456789abcdef-xyz') });
   const proxyOf = (setup: MppSetup | undefined, connection: Redis) => createApp({
     config, logger, postgres: database.postgres, redis: connection, opener: keys.opener, http: proxyHttp, buyerHeaderKey: Secret.from(buyerHeaderKey), x402,
     ...(setup ? { mpp: setup } : {}),

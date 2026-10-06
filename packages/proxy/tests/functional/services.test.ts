@@ -5,7 +5,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { createApp as createApi } from '@servicerouter/api';
 import { createAddressPolicy, createLogger, OutboundHttp, Secret, type Server, type ServiceId } from '@servicerouter/common';
-import { loadPlatformConfig, openApiFetchLimits, type PlatformConfig } from '@servicerouter/core';
+import { assumeHostsVerified, loadPlatformConfig, openApiFetchLimits, type PlatformConfig } from '@servicerouter/core';
 import {
   createRedisInvalidationBus, createServiceRepository, createServiceSecretRepository, services, type RedisInvalidationBus,
 } from '@servicerouter/db';
@@ -123,7 +123,7 @@ beforeAll(async () => {
     maxResponseBytes: config.sizeLimits.bufferedResponseBytes,
   });
 
-  api = createApi({ config, logger, postgres: database.postgres, redis, sealer: keys.sealer, openApiHttp: apiHttp });
+  api = createApi({ config, logger, postgres: database.postgres, redis, sealer: keys.sealer, openApiHttp: apiHttp, ownership: assumeHostsVerified });
   proxy = createApp({
     config, logger, postgres: database.postgres, redis, opener: keys.opener, http: proxyHttp, buyerHeaderKey: Secret.from('buyer-header-key-for-the-services-tests'),
   });
@@ -364,7 +364,7 @@ describe('forwarding to the upstream (PX-5, step 3)', () => {
   });
 
   it('never fetches an OpenAPI document while serving, and serves with the Platform API stopped (PX-14, rule 1)', async () => {
-    const separateApi = createApi({ config, logger, postgres: database.postgres, redis, sealer: keys.sealer, openApiHttp: apiHttp });
+    const separateApi = createApi({ config, logger, postgres: database.postgres, redis, sealer: keys.sealer, openApiHttp: apiHttp, ownership: assumeHostsVerified });
     const { port } = await separateApi.listen({ host: '127.0.0.1', port: 0, metricsPort: 0 });
     const id = nextId();
     const created = await fetch(`http://127.0.0.1:${port}/v1/services/${id}`, {
@@ -556,7 +556,7 @@ describe('changes reach the proxy without a restart (SR-7, SC-7, step 3)', () =>
     expect((await fetch(`${proxyUrl}/service/${id}/admin/reset`, { method: 'POST' })).status).toBe(404);
     // A Platform API whose events are lost, as they are while the proxy's subscriber is disconnected
     const silentApi = createApi({
-      config, logger, postgres: database.postgres, redis, sealer: keys.sealer, openApiHttp: apiHttp, invalidation: { publish: async () => undefined },
+      config, logger, postgres: database.postgres, redis, sealer: keys.sealer, openApiHttp: apiHttp, ownership: assumeHostsVerified, invalidation: { publish: async () => undefined },
     });
     const { port } = await silentApi.listen({ host: '127.0.0.1', port: 0, metricsPort: 0 });
     try {
@@ -592,7 +592,7 @@ describe('host binding in the proxy (SC-10, SC-5)', () => {
     config.upstreams[1]!.baseUrl = upstream.url('moved.example.com', '');
     await repository.insertRevision({ ...active, number: 2, config: config as never });
     await andInvalidated(async () => {
-      await repository.activate({ id, revision: 2, state: 'live', updatedAt: new Date() });
+      await repository.activate({ id, revision: 2, hosts: [], state: 'live', updatedAt: new Date() });
       await observer.publish({ kind: 'service', id });
     });
     const before = upstream.requests.length;

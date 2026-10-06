@@ -7,7 +7,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { createApp as createApi, type ApiServer } from '@servicerouter/api';
 import { createAddressPolicy, createLogger, OutboundHttp, Secret, type ServiceId } from '@servicerouter/common';
-import { loadPlatformConfig, type Payment, type PlatformConfig } from '@servicerouter/core';
+import { assumeHostsVerified, loadPlatformConfig, type Payment, type PlatformConfig } from '@servicerouter/core';
 import { createLedger, createPaymentRepository } from '@servicerouter/db';
 import { createAssetLookup, createFacilitatorLookup, createFacilitators, initializeX402, type X402Setup } from '@servicerouter/payments';
 import {
@@ -135,7 +135,7 @@ beforeAll(async () => {
   setup = await initializeX402({ config, facilitators: createFacilitators({ config, cdpApiKey: () => { throw new Error('No CDP auth here'); }, clock }), timeoutMs: 5_000 });
 
   const logger = createLogger({ level: 'silent' });
-  api = createApi({ config, logger, postgres: database.postgres, redis, sealer: keys.sealer, openApiHttp: apiHttp, internalSecret: Secret.from('internal-secret-0123456789abcdef-xyz') });
+  api = createApi({ config, logger, postgres: database.postgres, redis, sealer: keys.sealer, openApiHttp: apiHttp, ownership: assumeHostsVerified, internalSecret: Secret.from('internal-secret-0123456789abcdef-xyz') });
   proxy = createApp({ config, logger, postgres: database.postgres, redis, opener: keys.opener, http: proxyHttp, buyerHeaderKey: Secret.from(buyerHeaderKey), x402: setup });
   const [apiPorts, proxyPorts] = await Promise.all([
     api.listen({ host: '127.0.0.1', port: 0, metricsPort: 0, internalPort: 0 }),

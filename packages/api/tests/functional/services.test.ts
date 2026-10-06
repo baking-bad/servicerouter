@@ -5,7 +5,8 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { createAddressPolicy, createLogger, OutboundHttp, parseStrictYaml, type Clock, type Server } from '@servicerouter/common';
 import {
-  compileServiceRuntime, loadPlatformConfig, openApiFetchLimits, type InvalidationEvent, type OwnershipStatus, type PlatformConfig,
+  assumeHostsVerified, compileServiceRuntime, loadPlatformConfig, openApiFetchLimits, type InvalidationEvent, type OwnershipStatus,
+  type PlatformConfig,
 } from '@servicerouter/core';
 import {
   auditLog, createRedisInvalidationBus, createServiceRepository, serviceRevisions, services, serviceSecrets, type RedisInvalidationBus,
@@ -54,7 +55,8 @@ let counter = 0;
 let tick = Date.parse(fixtureTime(-4, 1, 0, 0, 0, 0));
 const clock: Clock = { now: () => new Date(tick++) };
 
-const startApp = async (ownership?: OwnershipStatus): Promise<string> => {
+// These tests are about the registry, so every host counts as verified. Ownership has its own tests.
+const startApp = async (ownership: OwnershipStatus = assumeHostsVerified): Promise<string> => {
   const logger = createLogger({}, { write: (line: string) => logs.push(line) });
   const server = createApp({ config, logger, postgres: database.postgres, redis, clock, sealer: keys.sealer, openApiHttp: http, ownership });
   servers.push(server);
@@ -515,22 +517,25 @@ describe('PUT /v1/services/{id}: submit (SR-3, SR-4, SR-11, SR-12, PA-1)', () =>
     expect(upstream.requests.length).toBe(fetchesBefore + 1);
   });
 
-  it('activates a payout change at once until step 8, and records it on the activation (SR-13)', async () => {
+  it('stores a payout change but keeps the active revision serving until it is confirmed (SR-13, OV-10)', async () => {
     const key = await signup();
     const id = nextId();
     await submitYaml(key, id, serviceYaml({ id }));
 
     const changed = await submitYaml(key, id, serviceYaml({ id, address: otherPayoutAddress }));
 
-    expect(changed.body).toMatchObject({ revision: 2, changed: true });
-    expect((await serviceRow(id))?.activeRevision).toBe(2);
-    const [activation] = await database.db.select().from(auditLog)
+    expect(changed.body).toMatchObject({
+      revision: 1, changed: true, state: 'live',
+      payoutConfirmation: { revision: 2, token: expect.stringMatching(/^sr-confirm=[0-9a-f]{32}$/) },
+    });
+    expect((await serviceRow(id))?.activeRevision).toBe(1);
+    const activations = await database.db.select().from(auditLog)
       .where(and(eq(auditLog.subjectId, id), eq(auditLog.action, 'service.activate'), sql`(${auditLog.details}->>'revision')::int = 2`));
-    expect(activation?.details).toMatchObject({ payoutsChanged: true });
+    expect(activations).toEqual([]);
   });
 
   it('activates pending while a host is unverified (SR-8)', async () => {
-    const pendingUrl = await startApp({ allHostsVerified: async () => false });
+    const pendingUrl = await startApp({ hostStates: async () => new Map() });
     const key = await signup();
     const id = nextId();
 
