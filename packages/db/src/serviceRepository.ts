@@ -1,4 +1,4 @@
-import { and, arrayContains, asc, desc, eq, max } from 'drizzle-orm';
+import { and, arrayContains, asc, desc, eq, max, sql } from 'drizzle-orm';
 
 import type { ServiceId } from '@servicerouter/common';
 import type { ServiceRecord, ServiceRepository, ServiceRevision } from '@servicerouter/core';
@@ -101,6 +101,15 @@ export const createServiceRepository = ({ db }: ServiceRepositoryOptions): Servi
       const [row] = await db.select({ latest: max(serviceRevisions.number) }).from(serviceRevisions).where(eq(serviceRevisions.serviceId, id));
 
       return row?.latest ?? 0;
+    },
+    listByOwner: async ownerAccountId => {
+      const rows = await db.select({ service: services, title: sql<string | null>`${serviceRevisions.config} -> 'service' ->> 'title'` })
+        .from(services)
+        .leftJoin(serviceRevisions, and(eq(serviceRevisions.serviceId, services.id), eq(serviceRevisions.number, services.activeRevision)))
+        .where(eq(services.ownerAccountId, ownerAccountId))
+        .orderBy(desc(services.createdAt), desc(services.id));
+
+      return rows.map(row => ({ ...toRecord(row.service), title: row.title ?? undefined }));
     },
     loadForServing: id => withSnapshot(db, async tx => {
       const [row] = await tx.select({ service: services, revision: serviceRevisions })
