@@ -42,6 +42,30 @@ interface Prepared {
 const reasonOf = (error: unknown): string => error instanceof OutboundHttpError ? error.code : 'other';
 
 /**
+ * The upstream's headers with a receipt's (PX-6). A receipt's `Cache-Control`, such as MPP's `private`
+ * (PR-9), joins the upstream's directives instead of replacing them, and `private` drops `public`.
+ */
+const withReceipt = (headers: Record<string, string | string[]>, receipt: Readonly<Record<string, string>>): Record<string, string | string[]> => {
+  const extra = receipt['cache-control'];
+  if (extra === undefined)
+    return { ...headers, ...receipt };
+
+  const upstream = headers['cache-control'];
+  const directives = [...(Array.isArray(upstream) ? upstream : upstream === undefined ? [] : [upstream]), extra]
+    .flatMap(value => value.split(','))
+    .map(directive => directive.trim())
+    .filter(directive => directive !== '');
+  const isPrivate = directives.some(directive => directive.toLowerCase() === 'private');
+  const kept = new Map<string, string>();
+  for (const directive of directives) {
+    if (!(isPrivate && directive.toLowerCase() === 'public'))
+      kept.set(directive.toLowerCase(), directive);
+  }
+
+  return { ...headers, ...receipt, 'cache-control': [...kept.values()].join(', ') };
+};
+
+/**
  * PX-1 for every path that isn't a registered service's or a platform route: no first segment (the
  * link checker, later), a platform path, or a hostname (payment routing, later) get `404`. Anything
  * else is `400 invalid_target`.
@@ -99,9 +123,9 @@ export const registerProxyRoutes = (app: FastifyInstance, { cache, http, payUrl,
   };
 
   /**
-   * x402 (PX-12, PR-12): no upstream byte reaches the buyer before the money moves. A billable answer
-   * is buffered up to the limit (AR3), settled, then sent with its receipt. Anything else is cancelled
-   * and passes as it is: nothing was paid for it.
+   * x402 and MPP (PX-12, PR-12, PR-9): no upstream byte reaches the buyer before the money moves. A
+   * billable answer is buffered up to the limit (AR3), settled, then sent with its receipt. Anything
+   * else is cancelled and passes as it is: nothing was paid for it.
    */
   const settleThenSend = async (
     reply: FastifyReply,
@@ -137,7 +161,7 @@ export const registerProxyRoutes = (app: FastifyInstance, { cache, http, payUrl,
     // Throws SettlementFailedError (502) when the response must not go out
     const receipt = await payments.settleNow(call);
 
-    return reply.status(response.status).headers(answer.headers).headers(receipt.headers).send(body);
+    return reply.status(response.status).headers(withReceipt(answer.headers, receipt.headers)).send(body);
   };
 
   const serve = async (request: FastifyRequest, reply: FastifyReply): Promise<FastifyReply> => {

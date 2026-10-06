@@ -9,7 +9,9 @@ import {
   createKeyStore, createLedger, createPaymentRepository, createRedisInvalidationBus, createRedisRateLimiter, createServiceRepository,
   type Postgres, type Redis,
 } from '@servicerouter/db';
-import { createCreditsRail, createX402Rail, detectMpp, detectX402, type PaymentRail, type X402Setup } from '@servicerouter/payments';
+import {
+  createCreditsRail, createMppRail, createX402Rail, detectMpp, detectX402, type MppSetup, type PaymentRail, type X402Setup,
+} from '@servicerouter/payments';
 
 import { errorStatuses } from './errors.js';
 import { createProxyMetrics } from './metrics.js';
@@ -74,6 +76,8 @@ export interface ProxyDependencies {
   readonly trustProxy?: string;
   // x402 on Base and Solana (PR-5), from `initializeX402`. Without it, an x402 payment gets the 402.
   readonly x402?: X402Setup;
+  // MPP on Tempo (PR-9), from `initializeMpp`. Without it, an MPP credential gets the 402.
+  readonly mpp?: MppSetup;
 }
 
 export interface ProxyServer extends Server {
@@ -128,7 +132,7 @@ const registerResponseHeaders = (app: FastifyInstance): void => {
 
 /**
  * The proxy on pay.servicerouter.ai (PX-1 to PX-16). Readiness covers Postgres and Redis.
- * Facilitators join it with x402 (PX-17).
+ * Facilitators join it with x402 (PX-17), and the Tempo RPC with MPP.
  */
 export const createApp = ({
   config,
@@ -148,6 +152,7 @@ export const createApp = ({
   rateLimiter = createRedisRateLimiter({ redis }),
   trustProxy,
   x402,
+  mpp,
 }: ProxyDependencies): ProxyServer => {
   const server = createServer({
     logger,
@@ -165,6 +170,8 @@ export const createApp = ({
           await facilitator.getSupported();
         },
       })),
+      // PR-9: the Tempo RPC answers with mpp.network's chain ID
+      ...(mpp ? [{ name: 'mpp', check: () => mpp.check(config.timeouts.connectMs) }] : []),
     ],
   });
   const { app } = server;
@@ -216,11 +223,12 @@ export const createApp = ({
   const limits = createProxyLimits({ limiter: rateLimiter, limits: config.rateLimits, logger, metrics });
   const recorder = createPaymentRepository({ db: postgres.db, clock });
   const x402Rail = x402 ? createX402Rail({ setup: x402, recorder, ledger, logger }) : undefined;
-  const rails: PaymentRail[] = x402Rail ? [credits, x402Rail] : [credits];
+  const mppRail = mpp ? createMppRail({ setup: mpp, recorder, ledger, logger, clock, settleTimeoutMs: config.timeouts.settleMs }) : undefined;
+  const rails: PaymentRail[] = [credits, ...(x402Rail ? [x402Rail] : []), ...(mppRail ? [mppRail] : [])];
   const payments = createPaymentStep({
     rails,
-    // MPP (step 7) is detected already, and x402 without its rail, so two credentials of any kind get 400
-    detectors: [credits.detect, x402Rail?.detect ?? detectX402, detectMpp],
+    // A rail that is off is still detected, so two credentials of any kind get 400 (PR-1)
+    detectors: [credits.detect, x402Rail?.detect ?? detectX402, mppRail?.detect ?? detectMpp],
     recorder,
     limits,
     buyerHeaderValue: createBuyerHeaderValue(buyerHeaderKey),

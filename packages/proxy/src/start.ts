@@ -2,16 +2,17 @@ import {
   readHost, readPort, readSecret, systemClock, type AppContext, type RunningApp,
 } from '@servicerouter/common';
 import { loadPlatformConfig } from '@servicerouter/core';
-import { createPostgres, createRedis } from '@servicerouter/db';
-import { createFacilitators, initializeX402 } from '@servicerouter/payments';
+import { createPostgres, createRedis, createRedisReplayStore } from '@servicerouter/db';
+import { createFacilitators, initializeMpp, initializeX402, type MppSetup } from '@servicerouter/payments';
 
 import { createApp } from './app.js';
 import { readSecretsOpener } from './keys.js';
 import { readBuyerHeaderKey } from './payments/buyer.js';
+import { readMppSecretKey } from './payments/mpp.js';
 
 export const defaultPort = 8080;
 export const defaultMetricsPort = 9080;
-// How long the facilitators get to answer /supported at startup (PR-6)
+// How long the facilitators get to answer /supported at startup (PR-6), and the Tempo RPC its chain ID (PR-9)
 export const facilitatorStartupTimeoutMs = 10_000;
 
 /** Wires the production dependencies from platform config and the environment, then listens. */
@@ -31,6 +32,8 @@ export const startProxy = async ({ env, logger }: AppContext): Promise<RunningAp
   const buyerHeaderKey = readBuyerHeaderKey(env);
   // Traefik's addresses or CIDR ranges, comma-separated, so the unpaid limit sees the client IP (PX-13)
   const trustProxy = env['TRUST_PROXY']?.trim() || undefined;
+  // The MPP challenges' HMAC key (PR-9). Not read while MPP is off.
+  const mppSecretKey = config.mpp.enabled ? readMppSecretKey(env) : undefined;
   // x402 (PR-6): every enabled facilitator answers /supported, or the proxy doesn't start
   const x402 = config.facilitators.some(facilitator => facilitator.enabled)
     ? await initializeX402({
@@ -47,10 +50,23 @@ export const startProxy = async ({ env, logger }: AppContext): Promise<RunningAp
 
   const postgres = createPostgres({ url: databaseUrl, logger });
   const redis = createRedis({ url: redisUrl, logger });
+  // The MPP replay store, shared by every replica (section 5)
+  const replayStore = createRedisReplayStore({ redis });
   const closeConnections = async () => {
+    await replayStore.close();
     await Promise.all([postgres.close(), redis.close()]);
   };
-  const server = createApp({ config, logger, postgres, redis, opener, buyerHeaderKey, trustProxy, x402 });
+  // MPP (PR-9): the Tempo RPC answers with mpp.network's chain ID, or the proxy doesn't start
+  let mpp: MppSetup | undefined;
+  try {
+    if (mppSecretKey)
+      mpp = await initializeMpp({ config, secretKey: mppSecretKey, store: replayStore, timeoutMs: facilitatorStartupTimeoutMs });
+  }
+  catch (error) {
+    await closeConnections();
+    throw error;
+  }
+  const server = createApp({ config, logger, postgres, redis, opener, buyerHeaderKey, trustProxy, x402, mpp });
   try {
     await server.listen(listen);
   }

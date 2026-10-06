@@ -19,28 +19,31 @@ export const errorStatuses = {
   key_budget_exceeded: 402,
   key_allowance_exceeded: 402,
   key_price_limit: 402,
-  // An x402 payment that doesn't match the price, or that the facilitator rejected (PR-5)
+  // An x402 payment that doesn't match the price, or that the facilitator rejected (PR-5). An MPP
+  // credential that doesn't match, was used before, or that the Tempo node refuses (PR-9).
   payment_invalid: 402,
   // PX-4
   service_suspended: 403,
   not_found: 404,
   // PX-13
   rate_limited: 429,
-  // x402: the settlement failed or its outcome is unknown (PR-12), or the response is over the buffer limit (PX-12, AR3)
+  // x402 and MPP: the settlement failed or its outcome is unknown (PR-12, PR-9), or the response is over the buffer limit (PX-12, AR3)
   settlement_failed: 502,
   response_too_large: 502,
   // PX-7
   upstream_unavailable: 503,
   // A facilitator didn't answer a verify: nothing was paid (PR-5)
   facilitator_unavailable: 503,
+  // MPP: the Tempo RPC or the replay store couldn't check the credential: nothing was paid (PR-9)
+  payment_unavailable: 503,
 } as const satisfies ErrorStatusTable;
 
-/** An x402 response over the buffer limit (PX-12, AR3). It isn't sent, and the payment is cancelled. */
+/** An x402 or MPP response over the buffer limit (PX-12, AR3). It isn't sent, and the payment is cancelled. */
 export class ResponseTooLargeError extends ServiceRouterError {
   readonly code = 'response_too_large';
 
   constructor() {
-    super('The response is over the size an x402 payment can wait for, so it wasn\'t sent. Nothing was charged.');
+    super('The response is over the size a payment can wait for, so it wasn\'t sent. Nothing was charged.');
   }
 }
 

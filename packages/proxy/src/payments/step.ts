@@ -1,8 +1,8 @@
 import type { IdGenerator, Logger } from '@servicerouter/common';
 import type { BillingDecision, RuntimeOperation } from '@servicerouter/core';
 import {
-  billingDecision, buildPaymentRequired, detectCredential, type Authorization, type CredentialDetector, type PaymentRail,
-  type PaymentRecorder, type PaymentRequired, type Quote, type Receipt, type RequestHeaders,
+  billingDecision, buildPaymentRequired, detectCredential, PaymentInvalidError, type Authorization, type CredentialDetector,
+  type PaymentRail, type PaymentRecorder, type PaymentRequired, type Quote, type Receipt, type RequestHeaders,
 } from '@servicerouter/payments';
 
 import type { PaymentOutcome, ProxyMetrics } from '../metrics.js';
@@ -51,8 +51,8 @@ export interface PaymentStep {
    */
   finish(call: PaidCall, decision: BillingDecision): Promise<void>;
   /**
-   * Finalizes a rail that settles before the response (x402, PX-12) and returns its receipt. Throws
-   * SettlementFailedError when the response must not go out (PR-12).
+   * Finalizes a rail that settles before the response (x402 and MPP, PX-12) and returns its receipt.
+   * Throws SettlementFailedError when the response must not go out (PR-12).
    */
   settleNow(call: PaidCall): Promise<Receipt>;
   /** Waits for every finish in flight, so shutdown finishes or releases its holds (PX-18). */
@@ -76,7 +76,7 @@ export interface PaymentStepOptions {
   readonly metrics: ProxyMetrics;
 }
 
-// Credits holds and captures; x402 verifies and settles
+// Credits holds and captures; x402 and MPP verify and settle
 const outcomes = (rail: PaymentRail): Readonly<Record<'authorized' | 'finalized' | 'aborted', PaymentOutcome>> => rail.settlesBeforeResponse
   ? { authorized: 'verified', finalized: 'settled', aborted: 'cancelled' }
   : { authorized: 'held', finalized: 'captured', aborted: 'released' };
@@ -132,7 +132,7 @@ export const createPaymentStep = ({
         authorization = await rail.authorize(credential, quote);
       }
       catch (error) {
-        metrics.payment(rail.name, 'refused');
+        metrics.payment(rail.name, error instanceof PaymentInvalidError ? 'payment_invalid' : 'refused');
         throw error;
       }
       metrics.payment(rail.name, outcomes(rail).authorized);
