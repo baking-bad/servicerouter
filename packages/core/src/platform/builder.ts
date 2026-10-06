@@ -104,9 +104,18 @@ export const checkPlatformConfig = (document: PlatformConfigDocument): readonly 
         facilitatorByNetwork.set(networkId, facilitator.name);
     }
   }
+  // PC-6: a Tempo asset serves MPP, on its network and paid to its recipient. It needs no facilitator.
   for (const [index, asset] of document.assets.entries()) {
-    if (!facilitatorByNetwork.has(asset.network))
-      add(['assets', index, 'network'], 'no facilitator serves this network');
+    const path = ['assets', index];
+    if (findNetwork(asset.network)?.chain !== 'tempo') {
+      if (!facilitatorByNetwork.has(asset.network))
+        add([...path, 'network'], 'no facilitator serves this network');
+      continue;
+    }
+    if (asset.network !== document.mpp.network)
+      add([...path, 'network'], `is a Tempo network other than mpp.network (${document.mpp.network}). Tempo assets serve MPP, on its network only`);
+    else if (asset.payTo.toLowerCase() !== document.mpp.recipient.toLowerCase())
+      add([...path, 'payTo'], 'must be the MPP recipient (mpp.recipient): Tempo assets are paid through MPP');
   }
 
   const mppNetwork = checkNetwork(['mpp', 'network'], document.mpp.network);
@@ -183,7 +192,12 @@ export const buildPlatformConfig = (document: PlatformConfigDocument, locator?: 
       auth: facilitator.auth ? { ...facilitator.auth } : undefined,
       enabled: facilitator.enabled ?? true,
     })),
-    mpp: { network: network(document.mpp.network), recipient: document.mpp.recipient },
+    mpp: {
+      network: network(document.mpp.network),
+      recipient: document.mpp.recipient,
+      enabled: document.mpp.enabled ?? true,
+      rpcUrl: document.mpp.rpcUrl,
+    },
     payouts: {
       assets: [...document.payouts.assets],
       minimum: usd(document.payouts.minimum, platformDefaults.minimumPayout),

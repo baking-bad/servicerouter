@@ -74,6 +74,10 @@ export interface PlatformConfig {
   readonly mpp: {
     readonly network: NetworkInfo;
     readonly recipient: string;
+    // A disabled MPP isn't offered or checked, and its RPC isn't called (PR-9)
+    readonly enabled: boolean;
+    // The Tempo RPC the proxy and workers use. Undefined: the chain's public RPC.
+    readonly rpcUrl: string | undefined;
   };
   readonly payouts: {
     readonly assets: readonly AssetName[];

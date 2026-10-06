@@ -46,6 +46,10 @@ export interface FacilitatorDocument {
 export interface MppDocument {
   readonly network: string;
   readonly recipient: string;
+  // Default: true. A disabled MPP isn't offered, and its RPC isn't checked.
+  readonly enabled?: boolean;
+  // The Tempo RPC, without credentials. Default: the chain's public RPC.
+  readonly rpcUrl?: string;
 }
 
 export interface PayoutsDocument {
