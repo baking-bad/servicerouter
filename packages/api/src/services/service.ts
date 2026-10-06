@@ -6,7 +6,7 @@ import {
   generateConfirmationToken, getSecretOrigins, getSecretUses, getUpstreamHosts, InvalidServiceConfigError, isSameRevision,
   ownershipRecheckIntervalMs, parseServiceConfig, payoutConfirmationTtlMs, SecretOriginMismatchError, ServiceForbiddenError,
   ServiceIdMismatchError, ServiceNotFoundError, stateForActivation, UnusedSecretError, type AuditEntry, type AuditLog, type InvalidationBus,
-  type OwnershipServiceStatus, type OwnershipStatus, type OwnershipVerifier, type ParsedServiceConfig, type PlatformConfig, type RandomSource,
+  type OwnershipServiceStatus, type OwnershipStatus, type OwnershipVerifier, type OwnedService, type ParsedServiceConfig, type PlatformConfig, type RandomSource,
   type SealedSecret, type SecretSealer, type ServiceConfigDocument, type ServiceRecord, type ServiceRevisionSummary, type ServiceState,
   type StoredSecretInfo, type SubmittedConfig,
 } from '@servicerouter/core';
@@ -91,6 +91,8 @@ export interface ServiceRegistry {
    */
   submit(input: Change & { readonly body: SubmitBody }): Promise<SubmitResult>;
   get(input: Caller): Promise<ServiceView>;
+  /** The account's services, newest first, with their active revision's title (WB-8). */
+  list(accountId: string): Promise<readonly OwnedService[]>;
   /** Every revision, newest first, and which one is active. */
   listRevisions(input: Caller): Promise<{ readonly activeRevision: number; readonly revisions: readonly ServiceRevisionSummary[] }>;
   /** Activates another stored revision (SR-7). Refuses one whose upstreams use other origins than the stored secrets (SC-10). */
@@ -361,6 +363,8 @@ export const createServiceRegistry = ({
         secrets: (await secrets.list(service.id)).map(({ name, updatedAt }) => ({ name, updatedAt })),
       };
     },
+
+    list: accountId => services.listByOwner(accountId),
 
     listRevisions: async caller => {
       const service = await owned(caller);

@@ -24,6 +24,7 @@ import { registerCatalogRoutes } from './catalog/routes.js';
 import { createAgentDocsService } from './agentDocs/service.js';
 import { registerDepositRoutes } from './deposits/routes.js';
 import { createDepositService } from './deposits/service.js';
+import { registerCors } from './cors.js';
 import { errorStatuses } from './errors.js';
 import { registerInternalRoutes } from './internal/routes.js';
 import { registerKeyRoutes } from './keys/routes.js';
@@ -69,6 +70,8 @@ export interface ApiDependencies {
   readonly internalSecret?: Secret;
   // Derives deposit addresses from DEPOSIT_ACCOUNT_PUBLIC_KEY (DP-1). Without it, signup creates no deposit address.
   readonly depositAddresses?: DepositAddressDeriver;
+  // Browser origins that may call the API (PA-7). Default: the website's.
+  readonly corsOrigins?: readonly string[];
 }
 
 export interface ApiListenOptions extends ListenOptions {
@@ -119,6 +122,7 @@ export const createApp = ({
   invalidation = createRedisInvalidationBus({ redis, logger }),
   internalSecret,
   depositAddresses,
+  corsOrigins = [new URL(config.urls.website).origin],
 }: ApiDependencies): ApiServer => {
   const server = createServer({
     logger,
@@ -131,6 +135,7 @@ export const createApp = ({
     ],
   });
   const { app } = server;
+  registerCors(app, corsOrigins);
   decorateAccount(app);
   acceptEmptyJson(app);
 

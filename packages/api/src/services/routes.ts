@@ -75,7 +75,7 @@ const toStatus = (status: OwnershipServiceStatus) => ({
 });
 
 /**
- * Behind the master key: `PUT /v1/services/{id}` (SR-12), `GET /v1/services/{id}`,
+ * Behind the master key: `GET /v1/services` (WB-8), `PUT /v1/services/{id}` (SR-12), `GET /v1/services/{id}`,
  * `GET /v1/services/{id}/revisions`, `POST /v1/services/{id}/rollback` (SR-7),
  * `GET /v1/services/{id}/status` and `POST /v1/services/{id}/verify` (OV-6, OV-7), and
  * `PUT /v1/services/{id}/secrets/{name}` (SC-1). No response carries a secret value, hash, or length.
@@ -111,6 +111,22 @@ export const registerServiceRoutes = (app: FastifyInstance, { registry, authenti
           ...toWaiting(result.payoutConfirmation),
         });
       });
+    });
+
+    // The account's services, newest first, for the console (WB-8)
+    scope.get('/v1/services', async request => {
+      const services = await registry.list(authenticatedAccount(request).accountId);
+
+      return {
+        services: services.map(service => ({
+          id: service.id,
+          state: service.state,
+          revision: service.activeRevision ?? null,
+          title: service.title ?? null,
+          createdAt: service.createdAt.toISOString(),
+          updatedAt: service.updatedAt.toISOString(),
+        })),
+      };
     });
 
     scope.get<{ Params: ServiceParams }>('/v1/services/:id', async request => {
