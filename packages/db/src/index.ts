@@ -1,5 +1,5 @@
 export * from './schema/index.js';
-export { createPostgres, withTransaction } from './postgres.js';
+export { createPostgres, defaultConnectTimeoutMs, withSnapshot, withTransaction } from './postgres.js';
 export type { Database, DatabaseExecutor, DatabaseTransaction, Postgres, PostgresOptions } from './postgres.js';
 export { migrateDatabase, migrationsFolder } from './migrations.js';
 export type { MigrateDatabaseOptions } from './migrations.js';
@@ -15,3 +15,7 @@ export { createApiKeyRepository } from './apiKeyRepository.js';
 export type { ApiKeyRepositoryOptions } from './apiKeyRepository.js';
 export { createRedisRateLimiter, rateLimitKeyPrefix } from './rateLimiter.js';
 export type { RedisRateLimiterOptions } from './rateLimiter.js';
+export { createServiceRepository } from './serviceRepository.js';
+export type { ServiceRepositoryOptions } from './serviceRepository.js';
+export { createServiceSecretRepository } from './serviceSecretRepository.js';
+export type { ServiceSecretRepositoryOptions } from './serviceSecretRepository.js';
