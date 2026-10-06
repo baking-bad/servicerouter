@@ -7,3 +7,4 @@ export { createScheduler } from './scheduler.js';
 export { createSettlementFollowUp, SettlementFollowUpError, settlementFollowUpIntervalMs, settlementFollowUpLockId } from './settlementFollowUp.js';
 export type { SettlementFollowUpOptions, SettlementFollowUpResult } from './settlementFollowUp.js';
 export type { Job, JobRunResult, Scheduler, SchedulerOptions } from './scheduler.js';
+export { createOwnershipRecheck, OwnershipRecheckFailedError, ownershipRecheckBatchSize, ownershipRecheckJobIntervalMs, ownershipRecheckJobName, ownershipRecheckLockId } from './ownershipRecheck.js';

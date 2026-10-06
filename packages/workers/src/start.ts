@@ -2,7 +2,7 @@ import {
   readHost, readPort, readSecret, systemClock, type AppContext, type RunningApp,
 } from '@servicerouter/common';
 import { loadPlatformConfig } from '@servicerouter/core';
-import { createPostgres } from '@servicerouter/db';
+import { createPostgres, createRedis } from '@servicerouter/db';
 import { checkFacilitators, createFacilitators, createMppSettlementCheck, createTempoRpc, type MppSettlementCheck } from '@servicerouter/payments';
 
 import { createApp } from './app.js';
@@ -21,6 +21,8 @@ export const startWorkers = async ({ env, logger }: AppContext): Promise<Running
     port: readPort(env, 'METRICS_PORT', defaultMetricsPort),
   };
   const databaseUrl = readSecret('DATABASE_URL', env);
+  // The invalidation channel, for services an ownership check changes (OV-5)
+  const redisUrl = readSecret('REDIS_URL', env);
   // The settlement follow-up repeats settles through the enabled facilitators (WK-6)
   const facilitators = createFacilitators({
     config,
@@ -39,19 +41,23 @@ export const startWorkers = async ({ env, logger }: AppContext): Promise<Running
   }
 
   const postgres = createPostgres({ url: databaseUrl, logger });
-  const server = createApp({ config, logger, postgres, facilitators, ...(mppCheck ? { mppCheck } : {}) });
+  const redis = createRedis({ url: redisUrl, logger });
+  const closeConnections = async () => {
+    await Promise.all([postgres.close(), redis.close()]);
+  };
+  const server = createApp({ config, logger, postgres, redis, facilitators, ...(mppCheck ? { mppCheck } : {}) });
   try {
     await server.listen(listen);
   }
   catch (error) {
-    await postgres.close();
+    await closeConnections();
     throw error;
   }
 
   return {
     close: async () => {
       await server.close();
-      await postgres.close();
+      await closeConnections();
     },
   };
 };
