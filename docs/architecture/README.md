@@ -110,7 +110,7 @@ Dependency rules:
 | Metrics | `@prometheus-io/client`, the successor of `prom-client` |
 | Tests | vitest: unit, integration, functional |
 
-Don't add a second HTTP framework, ORM, logger, or validator. The website's stack is an open question ([AR11](#8-open-questions)).
+Don't add a second HTTP framework, ORM, logger, or validator. The website is the exception: its frontend framework builds separately ([AR11](#8-open-questions)).
 
 ### 1.5 Components
 
@@ -394,7 +394,7 @@ The implementing agent uses these defaults until the product owner answers. Keep
 | AR8 | What are the Signer's limits? | $1 per call. $100 a day per network. Operators change them in platform config. |
 | AR9 | What prefixes do keys use? | Master keys: `srm_live_…`, and `srm_test_…` in staging. Payment keys: `sr_live_…`, and `sr_test_…` in staging. Set in platform config ([PC-7](platform-config.md)). |
 | AR10 | Does an operator approve mainnet payouts? | Yes, every run. |
-| AR11 | Which stack does the website use? | Decide with the frontend team. Static pages over the public API are enough for v1. If it doesn't build with the workspace, it gets its own image ([section 1.3](#13-deployables)). |
+| AR11 | Which stack does the website use? | **Answered (product owner, 2026-10-06T19:50:00+08:00):** a frontend framework, built separately, with its own image ([section 1.3](#13-deployables)). Which framework is decided before step 9, the first web work. The website also gets a console for people, signed in with a master key ([WB-8](website-and-link-checker.md)). |
 | AR12 | How many Cardano confirmations make a payment settled? | `0`: block inclusion. The facilitator's default is `1`. Measure latency on preprod before changing it. |
 | AR13 | Do we pay routed targets on Cardano too? | No. Base, Solana, and Tempo. |
 | AR14 | Where does the catalog list routed endpoints? | A filter on `/discover`, labeled "Unverified". |

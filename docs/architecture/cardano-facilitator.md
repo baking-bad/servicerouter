@@ -48,7 +48,7 @@ This is the image's "light" deployment profile: Postgres plus the facilitator, w
 | `POSTGRES_ADMIN_PASSWORD` | From the stack's secrets | The image's default, `postgres`, is for development only. |
 | `x402.networks[].id` | `cardano:preprod` or `cardano:mainnet` | One entry per network. |
 | `x402.settle.accept-mempool` | `false` | Mempool presence is not payment. Always `false`. |
-| `x402.settle.confirmation-timeout` | `75s` (default) | How long `/settle` waits for confirmation. |
+| `x402.settle.confirmation-timeout` | `10s` | How long `/settle` waits for confirmation. The default, `75s`, is past the proxy's settle timeout (`timeouts.settleMs`, 30 s), and the SDK repeats a pending answer once. At 10 s, a slow block answers `settlement_pending`, the response goes out, and the workers finish the settlement ([PR-12](payment-rails.md)). Measure on preprod. |
 | `x402.settle.poll-interval` | `5s` (default) | |
 | `x402.settle.stability-window` | `10m` (default) | Watches for rollbacks after confirmation. |
 | `x402.chain.max-tip-age` | `5m` (default) | A stale chain backend fails closed. Nothing is submitted. |
@@ -82,7 +82,9 @@ x402:
   - `/settle` confirmed: `success: true`, `transaction`, `extra.status: confirmed`, `extra.confirmations`.
   - `/settle` pending: `success: false`, `errorReason: settlement_pending`, a non-empty `transaction`, `extra.status: pending`. The transaction was broadcast. This is not a failure. Retry the identical payload later.
   - `/settle` failed: `success: false`, `errorReason` such as `exact_cardano_settlement_failed` or `exact_cardano_settlement_definitively_rejected`. `transaction: ""` means nothing was submitted.
-  - `503`: the chain backend is unhealthy. Treat the outcome as unknown.
+  - `/settle` expired: `exact_cardano_settlement_failed` with `extra.status: expired`. The claim stays reserved: final, never resubmitted.
+  - `/settle` `duplicate_settlement`: the same payment was already claimed. Final: nothing new moved.
+  - `503`: the chain backend is unhealthy, with `errorReason: exact_cardano_facilitator_chain_lookup_failed`. Treat the outcome as unknown, as for a timeout. The facilitator's journal makes the repeat safe.
   - An expired transaction is never resubmitted.
 - **CF-7** Keep the versions compatible. The image targets `@x402/cardano` 2.26.0. Pin our `@x402/cardano` to a version the pinned image supports. Upgrade both together, and run the staging check from build step 6 after every upgrade.
 - **CF-8** Before mainnet, all of these hold:

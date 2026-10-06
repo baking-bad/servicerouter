@@ -31,5 +31,6 @@ The public pages for people, and the page that checks whether an x402 or MPP lin
   - edges are inset rings of 5–10 % white, not solid borders. Resting cards have no shadow;
   - cards have a 12 px radius and 16 px padding. Buttons and inputs have a 6 px radius;
   - tabular numbers for amounts and counters.
-- **WB-6** The stack is an open question ([AR11](README.md#8-open-questions)).
+- **WB-6** The stack is a frontend framework, built separately, with its own image ([AR11](README.md#8-open-questions)). The framework is chosen before step 9.
 - **WB-7** The recovery page shows the new master key once, with a copy button and a warning that it won't be shown again. It lists the account's payment keys, so the owner can revoke any they don't recognize ([AK-11](accounts-and-keys.md)). It stores nothing in the browser.
+- **WB-8** A console for people, signed in with a master key: payment keys, balance, payments, services, and earnings. The owner asked for it on 2026-10-06T19:50:00+08:00. Its requirements, including where the master key lives in the browser, are written and approved before step 9.
