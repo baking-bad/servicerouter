@@ -3,17 +3,25 @@ import {
   type MetricsServer, type Timers,
 } from '@servicerouter/common';
 import {
-  createOwnershipFileFetcher, createOwnershipVerifier, cryptoRandomSource, ownershipFileLimits, type BlockfrostClient, type InvalidationBus,
-  type PlatformConfig, type RandomSource,
+  createOwnershipFileFetcher, createOwnershipVerifier, cryptoRandomSource, findAsset, ownershipFileLimits, treasuryWallets, type BalanceReader,
+  type BlockfrostClient, type InvalidationBus, type PlatformConfig, type RandomSource,
 } from '@servicerouter/core';
 import {
-  createDepositRepository, createLedger, createOwnershipStore, createPaymentRepository, createRedisInvalidationBus, type Postgres, type Redis,
+  createDepositRepository, createLedger, createOwnershipStore, createPaymentRepository, createPayoutRepository, createRedisInvalidationBus,
+  depositAddresses, type Postgres, type Redis,
 } from '@servicerouter/db';
 import { createAssetLookup, createFacilitatorLookup, type Facilitator, type MppSettlementCheck } from '@servicerouter/payments';
 
 import { createDepositWatcherJob, depositWatcherIntervalMs, depositWatcherJobName, depositWatcherLockId } from './depositWatcher.js';
 import { createHoldExpiry, holdExpiryIntervalMs, holdExpiryLockId, holdTtlMs } from './holdExpiry.js';
 import { createOwnershipRecheck, ownershipRecheckJobIntervalMs, ownershipRecheckJobName, ownershipRecheckLockId } from './ownershipRecheck.js';
+import { createPayoutsJob, payoutsIntervalMs, payoutsJobName, payoutsLockId } from './payouts/job.js';
+import type { PayoutWallet } from './payouts/wallet.js';
+import {
+  createReconciliationJob, createTreasuryBalancesJob, createTreasuryMetrics, reconciliationIntervalMs, reconciliationJobName, reconciliationLockId,
+  treasuryBalancesIntervalMs, treasuryBalancesJobName, treasuryBalancesLockId,
+} from './treasury/jobs.js';
+import { readerFor } from './treasury/readers.js';
 import { createScheduler, type Scheduler } from './scheduler.js';
 import { createSettlementFollowUp, settlementFollowUpIntervalMs, settlementFollowUpLockId } from './settlementFollowUp.js';
 
@@ -42,8 +50,12 @@ export interface WorkersDependencies {
   readonly ownershipFileUrl?: (host: string) => string;
   // Randomness for verification tokens. Default: node:crypto.
   readonly random?: RandomSource;
-  // Reads deposit addresses' transactions (DP-2). The deposit watcher runs only with it, while deposits are on.
+  // Reads deposit addresses' transactions (DP-2) and submits payouts (PO-3). The deposit watcher runs only with it, while deposits are on.
   readonly blockfrost?: BlockfrostClient;
+  // The payout wallet, with the payout key (PO-8). The payouts job runs only with it and Blockfrost.
+  readonly payoutWallet?: PayoutWallet;
+  // Balance readers per chain (TR-3, TR-5). The treasury jobs run only with one.
+  readonly balanceReaders?: { readonly cardano?: BalanceReader; readonly evm?: BalanceReader };
 }
 
 export interface WorkersServer extends MetricsServer {
@@ -70,6 +82,8 @@ export const createApp = ({
   ownershipFileUrl,
   random = cryptoRandomSource,
   blockfrost,
+  payoutWallet,
+  balanceReaders,
 }: WorkersDependencies): WorkersServer => {
   const server = createMetricsServer({
     logger,
@@ -105,6 +119,30 @@ export const createApp = ({
   const depositWatcher = config.deposits && blockfrost
     ? createDepositWatcherJob({ store: createDepositRepository({ db: postgres.db, clock, ids }), blockfrost, clock, logger, deposits: config.deposits })
     : undefined;
+  const payoutAsset = config.payouts.assets[0] === undefined ? undefined : findAsset(config, config.payouts.assets[0]);
+  const payoutRepository = createPayoutRepository({ db: postgres.db, clock, ids });
+  const payoutsJob = payoutWallet && blockfrost && payoutAsset
+    ? createPayoutsJob({
+      repository: payoutRepository, wallet: payoutWallet, blockfrost, clock, ids, logger, asset: payoutAsset, minimum: config.payouts.minimum,
+      // PO-6, AR10: mainnet runs wait for an operator
+      needsApproval: config.environment === 'production',
+    })
+    : undefined;
+  const pickReader = readerFor(balanceReaders ?? {});
+  const wallets = async () => treasuryWallets(config, {
+    ...payoutWallet ? { payoutAddress: payoutWallet.address } : {},
+    depositAddresses: (await postgres.db.select({ address: depositAddresses.address }).from(depositAddresses)).map(row => row.address),
+  });
+  const treasuryJobs = balanceReaders && (balanceReaders.cardano || balanceReaders.evm)
+    ? (() => {
+      const metrics = createTreasuryMetrics(server.registry);
+
+      return {
+        balances: createTreasuryBalancesJob({ wallets, readerFor: pickReader, payouts: payoutRepository, metrics, logger }),
+        reconciliation: createReconciliationJob({ db: postgres.db, config, wallets, readerFor: pickReader, ledger, metrics, clock, ids, logger }),
+      };
+    })()
+    : undefined;
   const scheduler = createScheduler({
     jobs: [{
       name: 'hold_expiry',
@@ -134,6 +172,23 @@ export const createApp = ({
       run: async () => {
         await depositWatcher();
       },
+    }] : [], ...payoutsJob ? [{
+      name: payoutsJobName,
+      lockId: payoutsLockId,
+      intervalMs: payoutsIntervalMs,
+      run: async () => {
+        await payoutsJob();
+      },
+    }] : [], ...treasuryJobs ? [{
+      name: treasuryBalancesJobName,
+      lockId: treasuryBalancesLockId,
+      intervalMs: treasuryBalancesIntervalMs,
+      run: treasuryJobs.balances,
+    }, {
+      name: reconciliationJobName,
+      lockId: reconciliationLockId,
+      intervalMs: reconciliationIntervalMs,
+      run: treasuryJobs.reconciliation,
     }] : []],
     locks: postgres,
     clock,

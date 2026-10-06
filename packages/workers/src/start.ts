@@ -1,11 +1,13 @@
 import {
   readHost, readPort, readSecret, systemClock, type AppContext, type RunningApp,
 } from '@servicerouter/common';
-import { createBlockfrostClient, loadPlatformConfig } from '@servicerouter/core';
+import { createBlockfrostClient, findAsset, loadPlatformConfig, platformDefaults, type PlatformConfig } from '@servicerouter/core';
 import { createPostgres, createRedis } from '@servicerouter/db';
 import { checkFacilitators, createFacilitators, createMppSettlementCheck, createTempoRpc, type MppSettlementCheck } from '@servicerouter/payments';
 
 import { createApp } from './app.js';
+import { createCardanoPayoutWallet } from './payouts/wallet.js';
+import { createCardanoBalanceReader, createEvmBalanceReader } from './treasury/readers.js';
 
 export const defaultMetricsPort = 9082;
 // How long the facilitators get to answer /supported at startup, as for the proxy (PR-6), and the Tempo
@@ -13,6 +15,29 @@ export const defaultMetricsPort = 9082;
 export const facilitatorStartupTimeoutMs = 10_000;
 // Each Blockfrost call of the deposit watcher
 export const blockfrostTimeoutMs = 10_000;
+
+// Public RPCs of the EVM networks the treasury reads (TR-3). EVM_RPC_URLS overrides them, and mpp.rpcUrl Tempo's.
+const defaultEvmRpcUrls: Readonly<Record<string, string>> = {
+  'eip155:8453': 'https://mainnet.base.org',
+  'eip155:84532': 'https://sepolia.base.org',
+  'eip155:4217': 'https://rpc.tempo.xyz',
+  'eip155:42431': 'https://rpc.moderato.tempo.xyz',
+};
+
+/** `EVM_RPC_URLS`: `eip155:8453=https://…,eip155:4217=https://…`, without credentials. */
+const readEvmRpcUrls = (env: Readonly<Record<string, string | undefined>>, config: PlatformConfig): ReadonlyMap<string, string> => new Map([
+  ...Object.entries(defaultEvmRpcUrls),
+  ...config.mpp.rpcUrl ? [[config.mpp.network.id, config.mpp.rpcUrl] as const] : [],
+  ...(env['EVM_RPC_URLS'] ?? '').split(',').map(item => item.trim()).filter(Boolean).map(item => {
+    const [network, url] = item.split('=') as [string, string | undefined];
+
+    return [network, url ?? ''] as const;
+  }),
+]);
+
+/** The Cardano network's Blockfrost: the deposits' URL on the same network, or Blockfrost's default. */
+const blockfrostUrlFor = (config: PlatformConfig, networkId: string): string | undefined =>
+  config.deposits?.network.id === networkId ? config.deposits.blockfrostUrl : platformDefaults.blockfrostUrls[networkId];
 
 /** Wires the production dependencies from platform config and the environment, then listens. */
 export const startWorkers = async ({ env, logger }: AppContext): Promise<RunningApp> => {
@@ -42,17 +67,36 @@ export const startWorkers = async ({ env, logger }: AppContext): Promise<Running
     mppCheck = createMppSettlementCheck({ rpc, timeoutMs: config.timeouts.connectMs, clock: systemClock });
   }
 
-  // DP-2: the deposit watcher reads the chain through Blockfrost, while deposits are on
-  const blockfrost = config.deposits
-    ? createBlockfrostClient({ url: config.deposits.blockfrostUrl, projectId: readSecret('BLOCKFROST_PROJECT_ID', env), timeoutMs: blockfrostTimeoutMs })
+  // PO-8: the payout key, in the workers only. Without it, the payouts job doesn't run.
+  const payoutAsset = config.payouts.assets[0] === undefined ? undefined : findAsset(config, config.payouts.assets[0]);
+  const payoutMnemonic = env['PAYOUT_WALLET_MNEMONIC']?.trim() ? readSecret('PAYOUT_WALLET_MNEMONIC', env) : undefined;
+  // DP-2, PO-3, TR-3: Blockfrost for the deposits' and payouts' Cardano network
+  const cardanoNetwork = config.deposits?.network.id ?? payoutAsset?.network.id;
+  const blockfrostUrl = cardanoNetwork === undefined ? undefined : blockfrostUrlFor(config, cardanoNetwork);
+  const blockfrostProjectId = config.deposits || payoutMnemonic ? readSecret('BLOCKFROST_PROJECT_ID', env) : undefined;
+  const blockfrost = blockfrostUrl && blockfrostProjectId
+    ? createBlockfrostClient({ url: blockfrostUrl, projectId: blockfrostProjectId, timeoutMs: blockfrostTimeoutMs })
     : undefined;
+  const payoutWallet = payoutMnemonic && payoutAsset && blockfrostUrl && blockfrostProjectId
+    ? createCardanoPayoutWallet({ mnemonic: payoutMnemonic, asset: payoutAsset, blockfrost: { url: blockfrostUrl, projectId: blockfrostProjectId } })
+    : undefined;
+  if (!payoutWallet)
+    logger.warn('Payouts are off: PAYOUT_WALLET_MNEMONIC is not set');
+  const evmRpcUrls = readEvmRpcUrls(env, config);
+  const balanceReaders = {
+    ...blockfrost ? { cardano: createCardanoBalanceReader(blockfrost) } : {},
+    evm: createEvmBalanceReader({ rpcUrlFor: network => evmRpcUrls.get(network), timeoutMs: blockfrostTimeoutMs }),
+  };
 
   const postgres = createPostgres({ url: databaseUrl, logger });
   const redis = createRedis({ url: redisUrl, logger });
   const closeConnections = async () => {
     await Promise.all([postgres.close(), redis.close()]);
   };
-  const server = createApp({ config, logger, postgres, redis, facilitators, ...(mppCheck ? { mppCheck } : {}), ...(blockfrost ? { blockfrost } : {}) });
+  const server = createApp({
+    config, logger, postgres, redis, facilitators, balanceReaders,
+    ...(mppCheck ? { mppCheck } : {}), ...(blockfrost ? { blockfrost } : {}), ...(payoutWallet ? { payoutWallet } : {}),
+  });
   try {
     await server.listen(listen);
   }
