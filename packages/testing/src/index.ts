@@ -1,8 +1,17 @@
 export { createTestCertificate } from './certificate.js';
 export type { TestCertificate, TestCertificateOptions } from './certificate.js';
+export { createFakeClock } from './clock.js';
+export type { FakeClock } from './clock.js';
+export { createTestDatabase } from './database.js';
+export type { TestDatabase, TestDatabaseOptions } from './database.js';
 export { createFakeResolver } from './dns.js';
 export type { FakeResolver } from './dns.js';
+export { createFakeIdGenerator } from './ids.js';
+export type { FakeIdGenerator } from './ids.js';
+export { createTestRedis } from './redis.js';
+export type { TestRedis } from './redis.js';
 export { createManualTimers } from './timers.js';
 export type { ManualTimers } from './timers.js';
 export { startFakeUpstream } from './upstream.js';
 export type { FakeUpstream, FakeUpstreamOptions, RecordedRequest, UpstreamHandler } from './upstream.js';
+export { fixtureInstant, fixtureTime, fixtureDay, fixtureRun } from './dateFixtures.js';

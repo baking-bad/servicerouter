@@ -22,6 +22,10 @@
     "@servicerouter/common": "0.1.0",
     "@servicerouter/core": "0.1.0",
     "@servicerouter/db": "0.1.0",
-    "@servicerouter/payments": "0.1.0"
+    "@servicerouter/payments": "0.1.0",
+    "pg": "^8.23.1"
+  },
+  "devDependencies": {
+    "@types/pg": "^8.23.1"
   }
 }
