@@ -20,6 +20,15 @@
       "path": "packages/api"
     },
     {
+      "path": "packages/workers"
+    },
+    {
+      "path": "packages/signer"
+    },
+    {
+      "path": "packages/web"
+    },
+    {
       "path": "packages/testing"
     }
   ]

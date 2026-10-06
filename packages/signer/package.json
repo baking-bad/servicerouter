@@ -1,0 +1,25 @@
+{
+  "name": "@servicerouter/signer",
+  "version": "0.1.0",
+  "private": true,
+  "description": "App: signs payments to routed targets",
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -p tsconfig.check.json",
+    "test": "vitest run --root ../.. --project signer",
+    "start": "node dist/main.js"
+  },
+  "dependencies": {
+    "@servicerouter/common": "0.1.0"
+  }
+}
