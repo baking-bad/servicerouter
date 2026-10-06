@@ -49,6 +49,10 @@ The public HTTP surface of the control plane, plus a private internal API.
 - **PA-2** Auth: the master key for every account endpoint: the account, keys, services, secrets, balance, payments, and earnings. Payment keys work only on the proxy. Here they get `401 wrong_key_type` ([AK-4](accounts-and-keys.md)). Signup, email confirmation, recovery, the top-up data, catalog, intents, and agent docs need no key.
 - **PA-3** Errors: `{ "error": { "code": "...", "message": "..." } }`. Config errors add `details` with the path, line, and column.
 - **PA-4** The internal listener binds to the internal network only. Traefik never routes to it. It requires a shared-secret header, compared with `Secret.equals`. Every internal call writes the audit log.
+  - It is the API's third listener, on `INTERNAL_PORT` (default 8082), with no public routes. Its stack gives it no Traefik labels and no published port.
+  - The header is `x-internal-secret`, matching `INTERNAL_API_SECRET`. The API refuses to start without that secret, or when it is shorter than 32 characters. A missing or wrong header is `401 unauthorized`.
+  - The optional `x-internal-caller` header names the calling app or operator: the audit entry's actor is `internal_api` with that name, or `unknown`.
+  - `POST /internal/v1/accounts/{id}/credits` takes `{ "amount": "10.00", "reference": "…" }`. A new credit is `201`, the same one again `200` with `replayed: true` ([LG-3](ledger.md)). It writes `ledger.credit` to the audit log.
 - **PA-5** Endpoints that need no key are rate limited per IP. Signup and recovery get the tightest limits.
   - Signup: a fixed window per client IP in Redis, under `rl:api:signup:<ip>`, set by `rateLimits.signup` in platform config. An IPv6 client is counted by its /64. Over the limit: `429 rate_limited` with `Retry-After`.
   - While Redis is down, the limit fails closed: signup answers `500` rather than skipping the limit.
@@ -65,11 +69,12 @@ Every `401` carries `WWW-Authenticate: Bearer`.
 | `400` | `invalid_config` | The service config fails validation. `details` lists every problem with its path, line, and column ([SR-12](service-registry.md)). |
 | `400` | `service_id_mismatch` | The config's `service.id` isn't the ID in the URL. |
 | `400` | `unused_secret` | A sent secret that no upstream of the config uses, so it has no host to be bound to ([SC-10](secrets.md)). |
-| `401` | `unauthorized` | No `Authorization: Bearer` key. |
+| `401` | `unauthorized` | No `Authorization: Bearer` key, or an internal call without the right shared secret (PA-4). |
 | `401` | `invalid_key` | An unknown, revoked, or malformed key. |
 | `401` | `wrong_key_type` | A payment key ([AK-4](accounts-and-keys.md)). |
 | `403` | `forbidden` | The service belongs to another account. |
-| `404` | `not_found` | An unknown route, service, or revision. |
+| `404` | `not_found` | An unknown route, service, revision, or payment key, including another account's key or a revoked one. An unknown account on the internal API. |
+| `409` | `idempotency_conflict` | An admin credit's `reference` was already used for another account or amount ([LG-3](ledger.md)). |
 | `409` | `secret_origin_mismatch` | A rollback, or a racing submit, would send stored secrets to another host than they're sealed for ([SC-10](secrets.md)). |
 | `413` | `request_too_large` | The request body is over the limit. |
 | `415` | `unsupported_media_type` | A content type the route doesn't take. |
