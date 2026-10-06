@@ -1,0 +1,68 @@
+{
+  "service": "my-app",
+  "revision": 3,
+  "operations": [
+    {
+      "resource": "https://pay.staging.servicerouter.ai/service/my-app/weather/{city}",
+      "method": "GET",
+      "description": "Current weather for a city",
+      "input": {
+        "parameters": [
+          {
+            "name": "city",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "units",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "metric",
+                "imperial"
+              ]
+            }
+          }
+        ],
+        "body": null
+      },
+      "output": {
+        "contentType": "application/json",
+        "schema": {
+          "$ref": "#/components/schemas/Weather"
+        }
+      },
+      "example": {
+        "city": "Oslo",
+        "celsius": 4
+      }
+    },
+    {
+      "resource": "https://pay.staging.servicerouter.ai/service/my-app/forecast/{city}",
+      "method": "GET",
+      "description": "14-day forecast",
+      "input": {
+        "parameters": [],
+        "body": null
+      },
+      "output": null,
+      "example": null
+    },
+    {
+      "resource": "https://pay.staging.servicerouter.ai/service/my-app/upload",
+      "method": "POST",
+      "description": "Upload a file",
+      "input": {
+        "parameters": [],
+        "body": null
+      },
+      "output": null,
+      "example": null
+    }
+  ]
+}

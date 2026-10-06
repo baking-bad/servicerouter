@@ -1,0 +1,35 @@
+---
+name: my-app
+description: "Weather forecasts for any city. Call My App through Service Router, paid per call with a payment key, x402, or MPP."
+---
+
+# My App
+
+Current weather and 14-day forecasts for any city.
+
+Base URL: `https://pay.staging.servicerouter.ai/service/my-app`. Add the route's path to it.
+
+## Routes
+
+| Route | What it does | Price | Pay with |
+|---|---|---|---|
+| `GET /weather/{city}` | Current weather for a city | $0.01 | credits (payment key), x402, MPP |
+| `GET /forecast/{city}` | 14-day forecast | $0.001 | credits (payment key), x402, MPP |
+| `POST /upload` | Upload a file | $0.01 | credits (payment key), x402, MPP |
+
+## How to pay
+
+1. **Credits (default).** Send a Service Router payment key as `Authorization: Bearer sr_test_…`. A paid answer carries `Servicerouter-Receipt`. The guide at https://staging.servicerouter.ai/llms.txt shows how to get an account and a key, with the user's consent.
+2. **x402.** Without a key, the `402` answer carries `PAYMENT-REQUIRED` with x402 options. Sign one and retry with `PAYMENT-SIGNATURE`.
+3. **MPP.** The same `402` carries `WWW-Authenticate: Payment` with a Tempo charge. Retry with `Authorization: Payment …`.
+
+Only billable answers are charged: a failed call costs nothing.
+
+## Example
+
+```sh
+curl -X GET "https://pay.staging.servicerouter.ai/service/my-app/weather/<city>" \
+  -H "Authorization: Bearer $SERVICEROUTER_PAYMENT_KEY"
+```
+
+The OpenAPI document at https://api.staging.servicerouter.ai/v1/services/my-app/openapi.json describes each route's parameters and answers.

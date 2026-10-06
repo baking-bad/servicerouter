@@ -1,0 +1,136 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "My App",
+    "summary": "Weather forecasts for any city",
+    "description": "Current weather and 14-day forecasts for any city.\n",
+    "version": "3"
+  },
+  "servers": [
+    {
+      "url": "https://pay.staging.servicerouter.ai/service/my-app",
+      "description": "Service Router: pay per call with a payment key, x402, or MPP"
+    }
+  ],
+  "security": [
+    {
+      "paymentKey": []
+    }
+  ],
+  "paths": {
+    "/weather/{city}": {
+      "get": {
+        "operationId": "getWeather",
+        "summary": "Current weather for a city",
+        "parameters": [
+          {
+            "name": "city",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "units",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "metric",
+                "imperial"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Weather"
+                },
+                "example": {
+                  "city": "Oslo",
+                  "celsius": 4
+                }
+              }
+            }
+          }
+        },
+        "x-payment-info": {
+          "price": "0.01",
+          "currency": "USD",
+          "methods": [
+            "credits",
+            "x402",
+            "mpp"
+          ]
+        }
+      }
+    },
+    "/forecast/{city}": {
+      "get": {
+        "operationId": "getForecast",
+        "description": "14-day forecast",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        },
+        "x-payment-info": {
+          "price": "0.001",
+          "currency": "USD",
+          "methods": [
+            "credits",
+            "x402",
+            "mpp"
+          ]
+        }
+      }
+    },
+    "/upload": {
+      "post": {
+        "operationId": "uploadFile",
+        "summary": "Upload a file",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        },
+        "x-payment-info": {
+          "price": "0.01",
+          "currency": "USD",
+          "methods": [
+            "credits",
+            "x402",
+            "mpp"
+          ]
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "Weather": {
+        "type": "object",
+        "properties": {
+          "city": {
+            "type": "string"
+          },
+          "celsius": {
+            "type": "number"
+          }
+        }
+      }
+    },
+    "securitySchemes": {
+      "paymentKey": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "A Service Router payment key (sr_test_…). Without one, the 402 answer lists x402 and MPP options."
+      }
+    }
+  }
+}
