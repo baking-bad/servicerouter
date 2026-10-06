@@ -44,12 +44,26 @@ const isRecord = (value: unknown): value is Record<string, unknown> => typeof va
 const field = (value: unknown, ...path: readonly string[]): unknown =>
   path.reduce<unknown>((current, key) => isRecord(current) ? current[key] : undefined, value);
 
-/** The payer a request's payment names: the EIP-3009 `from` on EVM, or `solana-payer` for a Solana transaction. */
+const isCardano = (network: unknown): boolean => typeof network === 'string' && network.startsWith('cardano:');
+
+/**
+ * The payer a request's payment names: the EIP-3009 `from` on EVM, `solana-payer` for a Solana
+ * transaction, and `cardano-payer` for a Cardano one. Script `/verify` to answer a real address.
+ */
 export const payerOf = (body: unknown): string => {
   const from = field(body, 'paymentPayload', 'payload', 'authorization', 'from');
+  if (typeof from === 'string')
+    return from;
 
-  return typeof from === 'string' ? from : 'solana-payer';
+  return isCardano(field(body, 'paymentRequirements', 'network')) ? 'cardano-payer' : 'solana-payer';
 };
+
+// What the Cardano facilitator advertises in /supported: the capabilities a resource server checks its
+export const cardanoSupportedExtra = {
+  assetTransferMethods: ['default', 'masumi', 'script'],
+  areFeesSponsored: false,
+  l1Confirmations: { minimum: 0, maximum: 20 },
+} as const;
 
 /** A fake transaction hash for a network: 32 hex bytes on EVM, 64 hex characters elsewhere. */
 export const fakeTransaction = (network: unknown): string =>
@@ -61,8 +75,16 @@ export const facilitatorAnswers = {
   invalid: (reason = 'insufficient_funds') => (): FacilitatorAnswer => ({ status: 200, body: { isValid: false, invalidReason: reason } }),
   settled: (request: FacilitatorRequest): FacilitatorAnswer => {
     const network = field(request.body, 'paymentRequirements', 'network');
+    const transaction = fakeTransaction(network);
 
-    return { status: 200, body: { success: true, transaction: fakeTransaction(network), network, payer: payerOf(request.body) } };
+    return {
+      status: 200,
+      body: {
+        success: true, transaction, network, payer: payerOf(request.body),
+        // The Cardano facilitator also says how deep the transaction is
+        ...isCardano(network) ? { extra: { status: 'confirmed', confirmations: 1, transactionId: transaction } } : {},
+      },
+    };
   },
   pending: (transaction: string) => (request: FacilitatorRequest): FacilitatorAnswer => ({
     status: 200,
@@ -74,6 +96,46 @@ export const facilitatorAnswers = {
   }),
   unavailable: (): FacilitatorAnswer => ({ status: 503, body: { error: 'unavailable' } }),
   timeout: (delayMs: number) => (): FacilitatorAnswer => ({ status: 503, delayMs }),
+};
+
+const cardanoFailure = (request: FacilitatorRequest, errorReason: string, transaction: string, extra?: Record<string, unknown>) => ({
+  success: false, errorReason, transaction, network: field(request.body, 'paymentRequirements', 'network'), ...extra ? { extra } : {},
+});
+
+// HTTP 200 unless it says otherwise: read the body, not the status
+export const cardanoAnswers = {
+  /** A rejected payment: `isValid: false` with a reason and a message. */
+  invalid: (reason = 'invalid_exact_cardano_payload_amount_insufficient') => (): FacilitatorAnswer => ({
+    status: 200, body: { isValid: false, invalidReason: reason, invalidMessage: 'Paid less than amount' },
+  }),
+  /** Broadcast, without the evidence the policy asks for yet. Repeat the identical request. */
+  pending: (transaction: string) => (request: FacilitatorRequest): FacilitatorAnswer => ({
+    status: 200, body: cardanoFailure(request, 'settlement_pending', transaction, { status: 'pending', transactionId: transaction }),
+  }),
+  /** The node refused the submission: nothing was submitted. */
+  notSubmitted: () => (request: FacilitatorRequest): FacilitatorAnswer => ({
+    status: 200, body: { ...cardanoFailure(request, 'exact_cardano_settlement_failed', ''), errorMessage: 'Node rejected the submission' },
+  }),
+  /** The transaction's validity window passed without it on chain. Final: never submitted again. */
+  expired: (transaction: string) => (request: FacilitatorRequest): FacilitatorAnswer => ({
+    status: 200, body: cardanoFailure(request, 'exact_cardano_settlement_failed', transaction, { status: 'expired', transactionId: transaction }),
+  }),
+  /** A definitive rejection. Final. */
+  rejected: (transaction: string) => (request: FacilitatorRequest): FacilitatorAnswer => ({
+    status: 200, body: cardanoFailure(request, 'exact_cardano_settlement_definitively_rejected', transaction, { transactionId: transaction }),
+  }),
+  /** The same payment was already claimed. Final: nothing new moved. */
+  duplicate: () => (request: FacilitatorRequest): FacilitatorAnswer => ({
+    status: 200, body: cardanoFailure(request, 'duplicate_settlement', ''),
+  }),
+  /** The chain backend is down at verify: `200` with `isValid: false`, as the image answers. Retryable, not the buyer's fault. */
+  verifyBackendDown: () => (): FacilitatorAnswer => ({
+    status: 200, body: { isValid: false, invalidReason: 'exact_cardano_facilitator_chain_lookup_failed', invalidMessage: 'Blockfrost params failed', payer: '' },
+  }),
+  /** The chain backend is down at settle: `503`, as the image answers, and retryable. */
+  backendDown: (status = 503) => (request: FacilitatorRequest): FacilitatorAnswer => ({
+    status, body: { ...cardanoFailure(request, 'exact_cardano_facilitator_chain_lookup_failed', ''), errorMessage: 'settlement backend unhealthy' },
+  }),
 };
 
 /** A scripted x402 facilitator on 127.0.0.1 (PR-5, PR-6) that records every request. */
@@ -88,6 +150,7 @@ export const startFakeFacilitator = async ({ networks, feePayer }: FakeFacilitat
           scheme: 'exact',
           network,
           ...(network.startsWith('solana:') && feePayer ? { extra: { feePayer } } : {}),
+          ...(isCardano(network) ? { extra: cardanoSupportedExtra } : {}),
         })),
         extensions: [],
         signers: {},

@@ -19,10 +19,12 @@
     "test": "vitest run --root ../.. --project testing"
   },
   "dependencies": {
+    "@evolution-sdk/evolution": "0.5.17",
     "@servicerouter/common": "0.1.0",
     "@servicerouter/core": "0.1.0",
     "@servicerouter/db": "0.1.0",
     "@servicerouter/payments": "0.1.0",
+    "@x402/cardano": "2.28.0",
     "pg": "^8.23.1"
   },
   "devDependencies": {
