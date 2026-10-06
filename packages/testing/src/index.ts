@@ -14,4 +14,7 @@ export { createManualTimers } from './timers.js';
 export type { ManualTimers } from './timers.js';
 export { startFakeUpstream } from './upstream.js';
 export type { FakeUpstream, FakeUpstreamOptions, RecordedRequest, UpstreamHandler } from './upstream.js';
+export { createTestSecretKeys } from './secretKeys.js';
+export type { TestSecretKeys } from './secretKeys.js';
+export { nownodesCategory, nownodesHosts, nownodesSecretNames, nownodesServiceConfig } from './fixtures.js';
 export { fixtureInstant, fixtureTime, fixtureDay, fixtureRun } from './dateFixtures.js';
