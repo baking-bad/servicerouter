@@ -8,6 +8,13 @@
       "when": 1791287400000,
       "tag": "0000_audit_log",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1791287520000,
+      "tag": "0001_accounts_and_api_keys",
+      "breakpoints": true
     }
   ]
 }
