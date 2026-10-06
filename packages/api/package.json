@@ -24,5 +24,8 @@
     "@servicerouter/core": "0.1.0",
     "@servicerouter/db": "0.1.0",
     "@servicerouter/payments": "0.1.0"
+  },
+  "devDependencies": {
+    "@servicerouter/testing": "0.1.0"
   }
 }
