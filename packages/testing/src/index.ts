@@ -8,7 +8,7 @@ export { createFakeResolver } from './dns.js';
 export type { FakeResolver } from './dns.js';
 export { createFakeIdGenerator } from './ids.js';
 export type { FakeIdGenerator } from './ids.js';
-export { createTestRedis } from './redis.js';
+export { createTestRedis, dropRedisConnections } from './redis.js';
 export type { TestRedis } from './redis.js';
 export { createManualTimers } from './timers.js';
 export type { ManualTimers } from './timers.js';

@@ -48,3 +48,18 @@ export const createTestRedis = async (): Promise<TestRedis> => {
     cleanup: () => cleaning ??= deleteKeys(),
   };
 };
+
+/**
+ * Drops every server connection with this CLIENT SETNAME name, as a network failure would. The clients
+ * reconnect on their own. Returns how many connections it dropped.
+ */
+export const dropRedisConnections = async (redis: Redis, name: string): Promise<number> => {
+  const list = await redis.client.sendCommand(['CLIENT', 'LIST']) as string;
+  const ids = list.split('\n')
+    .map(line => Object.fromEntries(line.trim().split(' ').map(field => field.split('=', 2) as [string, string])))
+    .filter(fields => fields['name'] === name)
+    .map(fields => fields['id']!);
+  await Promise.all(ids.map(id => redis.client.sendCommand(['CLIENT', 'KILL', 'ID', id])));
+
+  return ids.length;
+};
