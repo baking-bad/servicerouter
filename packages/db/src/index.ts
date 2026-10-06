@@ -31,3 +31,5 @@ export { createOwnershipStatus, createOwnershipStore, createPayoutConfirmationRe
 export type { OwnershipRepositoryOptions, OwnershipStoreOptions, PayoutConfirmationRepository } from './ownershipRepository.js';
 export { createDepositRepository, depositReference } from './depositRepository.js';
 export type { DepositAddressView, DepositRepository, DepositRepositoryOptions } from './depositRepository.js';
+export { createServiceDocumentRepository } from './serviceDocumentRepository.js';
+export type { ServiceDocumentRepository, StoredServiceDocument } from './serviceDocumentRepository.js';
