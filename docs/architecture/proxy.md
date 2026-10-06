@@ -91,6 +91,8 @@ Every `401` carries `WWW-Authenticate: Bearer`, and every `402` carries `Cache-C
 | `402` | `key_allowance_exceeded` | The key's allowance is used up. |
 | `402` | `key_price_limit` | The price is above the key's per-call maximum. |
 | `402` | `payment_invalid` | A facilitator rejected the x402 payment (the message names its reason), the payment doesn't match an option for the price, it isn't x402 v2, or MPP verification failed. |
+| `400` | `host_not_allowed` | Payment routing refuses the host: ours, a seller's, blocklisted, or opted out (RT-2). |
+| `400` | `not_payable` | The routed target didn't answer `402` (RT-3). |
 | `403` | `service_suspended` | The service is suspended. |
 | `404` | `not_found` | Unknown service or operation, or a disabled route. |
 | `413` | `request_too_large` | The request body is over the limit (PX-8). |
@@ -102,4 +104,6 @@ Every `401` carries `WWW-Authenticate: Bearer`, and every `402` carries `Cache-C
 | `502` | `response_too_large` | x402: the response is over the buffer limit. |
 | `502` | `settlement_failed` | x402: settlement failed or its outcome is unknown. No response bytes were sent. |
 | `503` | `upstream_unavailable` | The opaque upstream failure. Also used when the Signer refuses. |
+| `502` | `unsupported_payment` | No option of the routed target's `402` is one we pay (RT-4). The buyer pays nothing. |
+| `502` | `quote_exceeded` | The routed target asked for more on the paid retry than it quoted (RT-8). The buyer pays nothing. |
 | `503` | `facilitator_unavailable` | A facilitator didn't answer an x402 verify. Nothing was paid. |

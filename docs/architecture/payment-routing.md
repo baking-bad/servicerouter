@@ -77,3 +77,18 @@ The URL has the host, not the full target URL: some clients and proxies collapse
 - **RT-17** Routed `402`s carry no Bazaar metadata ([AR7](README.md#8-open-questions)).
 - **RT-18** Hosts with bad success rates or abuse reports go on the blocklist through the internal API. The proxy refuses them.
 - **RT-19** The link checker's endpoint, `GET /_/check?url=<link>`, runs RT-1 to RT-5 without paying. It returns whether the link is payable, the target's price and asset, our quote, and the routing link. It's rate limited per IP.
+
+## As built in step 12
+
+- **Targets:**
+  - x402 `exact` on Base, from the v2 `PAYMENT-REQUIRED` header or the v1 body. Prices are rounded up to the micro-USD.
+  - Solana and Tempo targets, and MPP challenges, come later: the Signer has no wallet there yet.
+  - The paid retry carries `PAYMENT-SIGNATURE` (v2) or `X-PAYMENT` (v1).
+- **Our hosts (RT-2)** are the registrable domains of `urls` and every subdomain, plus `ownHosts`. Sellers' hosts come from `services.hosts`, for services in any state. The opt-out file is fetched with a 2 s limit and cached a day under `optout:`.
+- **Quotes** are cached 30 s under `quote:<method> <url>`. A retry's `402` drops the cached quote.
+- **The ledger:**
+  - The target leg is recorded in `target_payments` before the retry. Capture and settle of a routed payment read it: buyer held (or the buyer asset's treasury) → the target asset's treasury at the target price, plus `platform:routing_fees`.
+  - A target that answers a failure but sends a successful `PAYMENT-RESPONSE` is booked as a routing loss: `platform:routing_losses` → the target asset's treasury.
+- **Answers:** a failed call's `4xx` passes through uncharged, and `5xx` is the opaque `503`. The target's payment headers are dropped, and `Location` and links to the target's own origin point at the routing link.
+- **Registration (RT-12):** a bounded queue in each proxy calls `PUT /internal/v1/routed-endpoints` (`INTERNAL_API_URL`, `INTERNAL_API_SECRET`). The API stores the host as the link names it, with a port when one was given.
+- **Rate limits (RT-15):** the per-service limit counts per target host (`host:<host>`). `/_/check` uses the per-IP unpaid limit.

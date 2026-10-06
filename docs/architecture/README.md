@@ -89,7 +89,7 @@ Dependency rules:
 - `common` depends on nothing internal. `core` depends on `common`. `db` depends on `core` and `common`.
 - `payments` depends on `core` and `common` only. It declares ports, such as `CreditsLedger`, `ReplayStore`, and `PaymentRecorder`. `db` and the Redis adapters implement them.
 - `proxy`, `api`, and `workers` may depend on any package above. They wire the implementations.
-- `signer` depends on `common` only. `web` talks to the public Platform API only.
+- `signer` depends on `common`, `core` (platform config, the asset registry), and `db` (its `signatures` table), never on another app's package (B-3, step 12). `web` talks to the public Platform API only.
 - `testing` is a dev dependency. Only test code imports it, never `src/`.
 - Use package imports across workspaces and `.js` relative imports inside a package. Keep public exports in each `src/index.ts`.
 
