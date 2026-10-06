@@ -103,10 +103,14 @@ const quote = (value: unknown): string => JSON.stringify(value);
 // Keywords whose errors are about a child property, so the schema's own errorMessage doesn't apply
 const structuralKeywords = new Set(['required', 'additionalProperties', 'if', 'discriminator', 'propertyNames']);
 
+// A schema's errorMessage: one message for every error, or one per keyword, such as { type: '…' }
 const customMessage = (error: ErrorObject): string | undefined => {
   const message: unknown = (error.parentSchema as SchemaObject | undefined)?.['errorMessage'];
+  if (typeof message === 'string')
+    return message;
+  const forKeyword = typeof message === 'object' && message !== null ? (message as Record<string, unknown>)[error.keyword] : undefined;
 
-  return typeof message === 'string' ? message : undefined;
+  return typeof forKeyword === 'string' ? forKeyword : undefined;
 };
 
 const describeError = (error: ErrorObject): string => {

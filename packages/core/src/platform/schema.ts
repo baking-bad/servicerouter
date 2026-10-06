@@ -30,7 +30,8 @@ const categoryId: SchemaObject = {
   type: 'string', maxLength: 64, pattern: '^[a-z0-9]+(?:-[a-z0-9]+)*(?:/[a-z0-9]+(?:-[a-z0-9]+)*)*$',
   errorMessage: 'must be a lowercase ID, optionally hierarchical, such as weather or finance/market-data',
 };
-const addressText = text(128);
+// An unquoted 0x… address reads as a hex number in YAML: say how to fix it
+const addressText = text(128, { errorMessage: { type: 'must be a string: put the address in quotes, since YAML reads an unquoted 0x… as a number' } });
 const basisPoints = integer(0, 10_000);
 const positive = integer(1);
 const rateLimit = object({ requests: positive, windowSeconds: positive }, ['requests', 'windowSeconds']);

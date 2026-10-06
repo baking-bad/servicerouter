@@ -1,6 +1,5 @@
 # Production platform config (docs/architecture/platform-config.md): mainnets only, real funds.
 #
-# The stack loads it with CONFIG_PATH=config/production.yaml (docs/deployment.md). Every value here is
 # public: secrets appear by name only, and their values come from the stack's environment.
 
 version: 1

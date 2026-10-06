@@ -28,14 +28,41 @@ const loadText = async (yaml: string) => {
   return loadPlatformConfig({ env: { CONFIG_PATH: 'production.yaml' }, cwd: directory });
 };
 
-const filled = (yaml: string): string => yaml
-  .replace('FILL_ME_BASE_TREASURY', '"0x1111111111111111111111111111111111111111"')
-  .replace('FILL_ME_CARDANO_TREASURY', 'addr1v9zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3q09h6pt')
-  .replaceAll('FILL_ME_TEMPO_RECIPIENT', '"0x2222222222222222222222222222222222222222"');
+const placeholders: Readonly<Record<string, string>> = {
+  'base-usdc': '"FILL_ME_BASE_TREASURY"', 'cardano-usdm': '"FILL_ME_CARDANO_TREASURY"', 'tempo-usdce': '"FILL_ME_TEMPO_RECIPIENT"',
+};
+const samples: Readonly<Record<string, string>> = {
+  'base-usdc': '"0x1111111111111111111111111111111111111111"',
+  'cardano-usdm': 'addr1v9zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3q09h6pt',
+  'tempo-usdce': '"0x2222222222222222222222222222222222222222"',
+};
+
+/** The config with each treasury address replaced: every asset's `payTo`, and `mpp.recipient` as Tempo's. */
+const withAddresses = (yaml: string, addressFor: (asset: string) => string): string => {
+  let asset = '';
+
+  return yaml.split('\n').map(line => {
+    asset = /^\s+- name: (\S+)/.exec(line)?.[1] ?? asset;
+    if (/^\s+payTo: /.test(line))
+      return line.replace(/payTo: .*$/, `payTo: ${addressFor(asset)}`);
+
+    return /^\s+recipient: /.test(line) ? line.replace(/recipient: .*$/, `recipient: ${addressFor('tempo-usdce')}`) : line;
+  }).join('\n');
+};
+
+// The owner's addresses once filled in, or samples while the file still has its placeholders
+const filled = (yaml: string): string => yaml.includes('FILL_ME_') ? withAddresses(yaml, asset => samples[asset]!) : yaml;
 
 describe('config/production.yaml (PC-1, PC-5, P-1 to P-9)', () => {
-  it('refuses to start until the owner fills in each treasury address, naming each one', async () => {
-    await expect(loadText(text)).rejects.toThrow(/assets\/0\/payTo: is not a valid address on Base[\s\S]*assets\/1\/payTo: is not a valid address on Cardano[\s\S]*mpp\/recipient: is not a valid address on Tempo/);
+  it('refuses to start while a treasury address is still its placeholder, naming each one', async () => {
+    await expect(loadText(withAddresses(text, asset => placeholders[asset]!))).rejects
+      .toThrow(/assets\/0\/payTo: is not a valid address on Base[\s\S]*assets\/1\/payTo: is not a valid address on Cardano[\s\S]*mpp\/recipient: is not a valid address on Tempo/);
+  });
+
+  it('refuses an unquoted 0x… address, which YAML reads as a number, and says to quote it', async () => {
+    const unquoted = withAddresses(text, asset => asset === 'cardano-usdm' ? samples[asset]! : '0x5d0b54076191062bea66176c6a0c94ab3aeafb26');
+
+    await expect(loadText(unquoted)).rejects.toThrow(/assets\/0\/payTo: must be a string: put the address in quotes, since YAML reads an unquoted 0x… as a number/);
   });
 
   it('loads once they are filled in: mainnets only, USDC.e on Tempo, no Solana yet, live key prefixes, the temporary domain', async () => {
@@ -52,7 +79,12 @@ describe('config/production.yaml (PC-1, PC-5, P-1 to P-9)', () => {
       ['cardano', ['cardano:mainnet']],
     ]);
     expect(config.keyPrefixes).toEqual({ master: 'srm_live_', payment: 'sr_live_' });
-    expect(config.urls.website).toBe('https://servicerouter.agents.bakingbad.dev');
+    // One label below agents.bakingbad.dev, so its wildcard certificate covers each host (P-7)
+    expect(config.urls).toEqual({
+      website: 'https://servicerouter.agents.bakingbad.dev',
+      api: 'https://api-servicerouter.agents.bakingbad.dev',
+      pay: 'https://pay-servicerouter.agents.bakingbad.dev',
+    });
     expect(config.rateLimits.signup).toEqual({ requests: 200, windowSeconds: 3600 });
     expect(config.rateLimits.documents).toEqual({ requests: 600, windowSeconds: 60 });
     expect(config.rateLimits.topup).toEqual({ requests: 300, windowSeconds: 60 });
