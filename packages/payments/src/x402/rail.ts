@@ -1,12 +1,13 @@
 import { isRecord, usdToAtomic, type Logger } from '@servicerouter/common';
 import type { JsonObject } from '@servicerouter/core';
 import { decodePaymentSignatureHeader, encodePaymentRequiredHeader, encodePaymentResponseHeader } from '@x402/core/http';
-import type { Network, PaymentPayload, PaymentRequirements, SettleResponse } from '@x402/core/types';
+import type { Network, PaymentPayload, PaymentRequired, PaymentRequirements, SettleResponse } from '@x402/core/types';
 
 import { detectX402, type Credential } from '../credentials.js';
 import { PaymentInvalidError, SettlementFailedError, type SettlementFailure } from '../errors.js';
 import type { PaymentRecorder, SettlementLedger } from '../ports.js';
 import type { Authorization, PaymentRail, Quote, Receipt } from '../rail.js';
+import { bazaarExtensionKey, createBazaarDeclarations } from './bazaar.js';
 import type { X402Setup } from './setup.js';
 
 // The header that carries the settle response to the buyer
@@ -103,6 +104,7 @@ const decode = (credential: Credential): PaymentPayload => {
  */
 export const createX402Rail = ({ setup, recorder, ledger, logger }: X402RailOptions): PaymentRail => {
   const { server } = setup;
+  const bazaar = createBazaarDeclarations(server, logger);
 
   // The same quote gives the same requirements, so the paid retry matches what the 402 offered
   const requirementsFor = async (quote: Quote): Promise<PaymentRequirements[]> => {
@@ -132,7 +134,10 @@ export const createX402Rail = ({ setup, recorder, ledger, logger }: X402RailOpti
       if (accepts.length === 0)
         return undefined;
 
-      const required = await server.createPaymentRequiredResponse(accepts, { url: quote.resource, description: quote.description }, 'Payment required');
+      // PR-7: a discoverable service's operation carries the Bazaar extension, and its description and media type
+      const listed = bazaar.resourceOf(quote.discovery);
+      const resource = { url: quote.resource, description: listed?.description ?? quote.description, ...listed?.mimeType ? { mimeType: listed.mimeType } : {} };
+      const required = await server.createPaymentRequiredResponse(accepts, resource, 'Payment required', bazaar.extensionsFor(quote.discovery, quote.resource));
 
       return { headers: { 'payment-required': encodePaymentRequiredHeader(required) }, body: { ...required } };
     },
@@ -145,6 +150,16 @@ export const createX402Rail = ({ setup, recorder, ledger, logger }: X402RailOpti
       const asset = setup.assetName(requirements.network, requirements.asset);
       if (!asset)
         throw new PaymentInvalidError('The payment\'s asset isn\'t offered');
+      // The extensions it echoes must be the ones this challenge offers, as the SDK's HTTP server checks.
+      // A Bazaar extension the challenge didn't offer, which would list a routed call or an opted-out
+      // service, is refused too (P-4).
+      const offered = bazaar.extensionsFor(quote.discovery, quote.resource);
+      const echoed = server.validateExtensions({ x402Version: 2, resource: { url: quote.resource }, accepts: [requirements], ...offered ? { extensions: offered } : {} } satisfies PaymentRequired, payload);
+      if (!echoed.valid || (payload.extensions?.[bazaarExtensionKey] !== undefined && offered?.[bazaarExtensionKey] === undefined)) {
+        throw new PaymentInvalidError('The payment\'s extensions don\'t match what this resource offers. Request the resource again for the current ones.', {
+          reason: 'extension_echo_mismatch',
+        });
+      }
 
       const facilitator = setup.facilitatorFor(requirements.network)?.name;
       const verified = await server.verifyPayment(payload, requirements);

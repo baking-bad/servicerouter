@@ -16,6 +16,8 @@ export type {
   ServiceState,
 } from './runtime.js';
 export { compileServiceRuntime } from './compile.js';
+export { bazaarMetadata, inlineLocalReferences, operationObject } from './discovery.js';
+export type { BazaarContent, BazaarMetadata, BazaarParameter } from './discovery.js';
 export type { CompileServiceRuntimeInput, CompileServiceRuntimeResult } from './compile.js';
 export { fetchOpenApiDocuments, openApiFetchLimits } from './fetch.js';
 export type { FetchOpenApiDocumentsOptions, FetchOpenApiDocumentsResult } from './fetch.js';

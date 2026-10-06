@@ -16,6 +16,8 @@ export interface ServiceInfoDocument {
     readonly url?: string;
     readonly email?: string;
   };
+  // Listed in the x402 Bazaar (P-4, PR-7). Default: true. False keeps the service out of it.
+  readonly discoverable?: boolean;
 }
 
 export interface PayoutDocument {

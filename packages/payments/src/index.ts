@@ -18,6 +18,8 @@ export type { CheckFacilitatorsOptions, FacilitatorsOptions, X402Asset, X402Setu
 export {
   createX402Rail, encodeSettleReceipt, fromSettlementRequest, paymentResponseHeader, settlementPending, toSettlementRequest,
 } from './x402/rail.js';
+export { bazaarExtensionKey, createBazaarDeclarations } from './x402/bazaar.js';
+export type { BazaarDeclarations } from './x402/bazaar.js';
 export type { SettlementRequest, X402Authorization, X402RailOptions } from './x402/rail.js';
 export { createMppRail } from './mpp/rail.js';
 export type { MppAuthorization, MppChargeRequest, MppRailOptions } from './mpp/rail.js';

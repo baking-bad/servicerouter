@@ -103,6 +103,18 @@ describe('a draft (CA-1, CA-3, CA-4)', () => {
     expect(drafted.ok && drafted.draft.notes).toEqual(expect.arrayContaining([expect.stringContaining('category')]));
   });
 
+  it('lists the service in the x402 Bazaar, and says how to keep it out (P-4)', async () => {
+    const drafted = await draftServiceConfig({ document, link, platform: examplePlatform, drafter: fakeDrafter(), payoutAddress: preprodEnterpriseAddress });
+
+    const yaml = drafted.ok ? drafted.draft.yaml : '';
+    const parsed = parseServiceConfig(yaml);
+    expect(parsed.ok && parsed.parsed.config.service.discoverable).toBe(true);
+    expect(yaml.split('\n').slice(0, 2)).toEqual([
+      expect.stringMatching(/^# A draft from /),
+      '# service.discoverable: true lists each paid route in the x402 Bazaar, with its OpenAPI description, schemas, and example. Set it to false to keep the service out.',
+    ]);
+  });
+
   it('drafts without a model, from the document\'s own words and the default price', async () => {
     const drafted = await draftServiceConfig({ document, link, platform: examplePlatform, drafter: createDefaultDrafter(), payoutAddress: preprodEnterpriseAddress });
 

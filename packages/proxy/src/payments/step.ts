@@ -233,6 +233,8 @@ export const createPaymentStep = ({
       description: describe(operation),
       subject: { kind: 'service', serviceId, routeKey: operation.routeKey, sellerAccountId: ownerAccountId },
       feeBps,
+      // AD-3, PR-7: the x402 challenge lists the operation in the Bazaar, unless the seller opted out (P-4)
+      ...operation.docs.bazaar === undefined ? {} : { discovery: operation.docs.bazaar },
     }, serviceId, { serviceId, ...operation.routeKey === undefined ? {} : { routeKey: operation.routeKey } }),
     beginRouted: async ({ headers, ip, log = logger, requestId, host, path, resource, quote }) => start({ headers, ip, log }, {
       paymentId: `${paymentIdPrefix}${ids.next()}`,

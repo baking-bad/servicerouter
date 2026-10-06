@@ -382,6 +382,16 @@ describe('payment routing (RT-1 to RT-12, SG-2, SG-3, SG-7, step 12)', () => {
     expect(after[ledgerAccountIds.routingFees]! - (before[ledgerAccountIds.routingFees] ?? 0n)).toBe(100n);
     expect(await fees() - feesBefore).toBe(0n);
   });
+
+  it('never lists a routed endpoint in the x402 Bazaar: its 402 carries no extension (PR-7)', async () => {
+    const unpaid = await fetch(`${proxyUrl}/${at('api.target.dev')}/v1/pools`);
+    const required = decodePaymentRequiredHeader(unpaid.headers.get('payment-required')!);
+
+    expect(unpaid.status).toBe(402);
+    expect(required.accepts.length).toBeGreaterThan(0);
+    expect(required.extensions).toBeUndefined();
+    expect((await unpaid.json() as Record<string, unknown>)['extensions']).toBeUndefined();
+  });
 });
 
 // --- Diagnostic logs (T24) ---

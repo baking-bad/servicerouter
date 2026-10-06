@@ -9,14 +9,16 @@ import { ExactSvmScheme } from '@x402/svm/exact/client';
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
+import { extractDiscoveryInfo } from '@x402/extensions/bazaar';
+
 import { createLogger, Secret } from '@servicerouter/common';
-import { loadPlatformConfig, type NewPayment, type PlatformConfig, type SettleInput } from '@servicerouter/core';
+import { loadPlatformConfig, type BazaarMetadata, type NewPayment, type PlatformConfig, type SettleInput } from '@servicerouter/core';
 import {
   cardanoAnswers, encodeBase58, facilitatorAnswers, startFakeFacilitator, startFakeSolanaRpc, type FakeFacilitator, type FakeSolanaRpc,
 } from '@servicerouter/testing';
 
 import {
-  createFacilitators, createX402Rail, FacilitatorUnavailableError, initializeX402, PaymentInvalidError, SettlementFailedError,
+  bazaarExtensionKey, createFacilitators, createX402Rail, FacilitatorUnavailableError, initializeX402, PaymentInvalidError, SettlementFailedError,
   type PaymentRail, type PaymentRecorder, type Quote, type SettlementLedger, type X402Setup,
 } from '../../src/index.js';
 
@@ -323,6 +325,81 @@ describe('x402 payments through the facilitator (PR-5, PR-10, PR-12)', () => {
 
     expect(changes).toEqual([{ paymentId: authorization.paymentId, to: 'cancelled' }]);
     expect(facilitator.requests.filter(request => request.path === '/settle')).toHaveLength(before);
+  });
+});
+
+describe('the x402 Bazaar extension on the challenge (PR-7, AD-3, P-4)', () => {
+  const discovery: BazaarMetadata = {
+    resource: 'https://pay.staging.servicerouter.ai/service/weather/weather/{city}',
+    method: 'GET',
+    description: 'Current weather for a city',
+    input: { parameters: [{ name: 'city', in: 'path', required: true, schema: { type: 'string' } }], body: null },
+    output: { contentType: 'application/json', schema: { type: 'object', properties: { celsius: { type: 'number' } } } },
+    example: { celsius: 4 },
+  };
+  const discoverableQuote = (): Quote => ({ ...quoteOf(), discovery });
+
+  it('carries the operation\'s metadata, and a payment that echoes it verifies and settles, with the extension reaching the facilitator', async () => {
+    const { rail, settled } = createPorts();
+    const quote = discoverableQuote();
+    const required = await requiredOf(rail, quote);
+    const before = facilitator.requests.length;
+
+    expect(required.resource).toEqual({ url: quote.resource, description: 'Current weather for a city', mimeType: 'application/json' });
+    expect(required.extensions?.[bazaarExtensionKey]).toMatchObject({
+      info: { input: { type: 'http', method: 'GET', pathParams: { city: 'oslo' } }, output: { type: 'json', example: { celsius: 4 } } },
+      routeTemplate: '/service/weather/weather/:city',
+    });
+    const authorization = await rail.authorize(paidCredential(rail, await pay(required, base)), quote);
+    await rail.finalize(authorization);
+
+    expect(settled).toEqual([expect.objectContaining({ paymentId: quote.paymentId })]);
+    const calls = facilitator.requests.slice(before);
+    expect(calls.map(call => call.path)).toEqual(['/verify', '/settle']);
+    for (const call of calls) {
+      const body = call.body as { paymentPayload: Parameters<typeof extractDiscoveryInfo>[0]; paymentRequirements: Parameters<typeof extractDiscoveryInfo>[1] };
+      expect(body.paymentPayload.extensions?.[bazaarExtensionKey]).toEqual(required.extensions?.[bazaarExtensionKey]);
+      expect(extractDiscoveryInfo(body.paymentPayload, body.paymentRequirements)).toMatchObject({
+        resourceUrl: 'https://pay.staging.servicerouter.ai/service/weather/weather/:city', method: 'GET', description: 'Current weather for a city',
+      });
+    }
+  });
+
+  it('carries none for a quote without metadata: a routed call, a free operation, or an opted-out service', async () => {
+    const { rail } = createPorts();
+
+    const required = await requiredOf(rail, quoteOf());
+
+    expect(required.extensions).toBeUndefined();
+    expect(required.resource).toEqual({ url: expect.any(String), description: 'Current weather' });
+  });
+
+  it.each([
+    ['changes the advertised metadata', async (rail: PaymentRail, quote: Quote) => {
+      const payload = decodePaymentSignatureHeader(await pay(await requiredOf(rail, quote), base));
+      const bazaar = payload.extensions![bazaarExtensionKey] as { info: Record<string, unknown> };
+
+      return { quote, header: encodePaymentSignatureHeader({ ...payload, extensions: { [bazaarExtensionKey]: { ...bazaar, info: { ...bazaar.info, output: { type: 'json', example: { spam: true } } } } } }) };
+    }],
+    ['adds the extension to a quote that offered none', async (rail: PaymentRail) => {
+      const listed = discoverableQuote();
+      const unlisted = { ...listed, discovery: undefined } as Quote;
+      const offered = await requiredOf(rail, listed);
+      const payload = decodePaymentSignatureHeader(await pay(await requiredOf(rail, unlisted), base));
+
+      return { quote: unlisted, header: encodePaymentSignatureHeader({ ...payload, extensions: offered.extensions! }) };
+    }],
+  ])('refuses a payment whose echo %s, before asking the facilitator', async (_case, make) => {
+    const { rail, created } = createPorts();
+    const { quote, header } = await make(rail, discoverableQuote());
+    const before = facilitator.requests.length;
+
+    const error = await rail.authorize(paidCredential(rail, header), quote).catch((thrown: unknown) => thrown);
+
+    expect(error).toBeInstanceOf(PaymentInvalidError);
+    expect(error).toMatchObject({ reason: 'extension_echo_mismatch' });
+    expect(facilitator.requests.length).toBe(before);
+    expect(created).toEqual([]);
   });
 });
 

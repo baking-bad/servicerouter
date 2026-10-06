@@ -1,5 +1,6 @@
 import type { MicroUsd, ServiceId } from '@servicerouter/common';
 
+import type { BazaarMetadata } from './discovery.js';
 import type { HttpMethod } from './document.js';
 
 // The compiled form of a service revision (SR-5): what the proxy serves from step 3. Keep it small.
@@ -39,8 +40,12 @@ export interface OperationDocs {
   readonly operationId: string | undefined;
   readonly summary: string | undefined;
   readonly description: string | undefined;
-  /** x402 Bazaar discovery metadata (AD-3). Always undefined until step 10 */
-  readonly bazaar: undefined;
+  /**
+   * x402 Bazaar discovery metadata (AD-3), which the x402 challenge carries (PR-7): the same entry as
+   * the revision's `bazaar.json`, with local references inlined. Undefined for a free or disabled
+   * operation, and for every operation of a service with `discoverable: false` (P-4)
+   */
+  readonly bazaar: BazaarMetadata | undefined;
 }
 
 export interface RuntimeOperation {

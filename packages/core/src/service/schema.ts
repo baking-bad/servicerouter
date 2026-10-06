@@ -118,6 +118,7 @@ export const serviceConfigSchema: SchemaObject = {
       tags: array(singleLine(40), { maxItems: 20, uniqueItems: true }),
       links: object({ homepage: httpsUrl, docs: httpsUrl }),
       contact: object({ name: singleLine(100), url: httpsUrl, email }),
+      discoverable: boolean,
     }, ['id', 'title', 'description', 'category']),
     payouts: object({
       default: object({ asset: text(64), address: text(256) }, ['asset', 'address']),

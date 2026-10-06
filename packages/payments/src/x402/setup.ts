@@ -7,6 +7,7 @@ import { findDefaultAsset } from '@x402/evm';
 import { ExactEvmScheme } from '@x402/evm/exact/server';
 import { ExactSvmScheme } from '@x402/svm/exact/server';
 
+import { bazaarResourceServerExtension } from './bazaar.js';
 import { createCdpRequestSigner, type CdpApiKey } from './cdp.js';
 import { createFacilitator, type Facilitator } from './facilitator.js';
 
@@ -153,7 +154,8 @@ export const initializeX402 = async ({ config, facilitators, timeoutMs }: X402Se
   const facilitatorFor = createFacilitatorLookup(config, facilitators);
   await checkFacilitators({ config, facilitators, timeoutMs });
 
-  const server = new x402ResourceServer([...facilitators]);
+  // PR-7: the x402 Bazaar extension adds each call's method and path parameters to its declaration
+  const server = new x402ResourceServer([...facilitators]).registerExtension(bazaarResourceServerExtension);
   const assets: X402Asset[] = [];
   const namespaces = new Map<string, string>();
   for (const asset of config.assets) {

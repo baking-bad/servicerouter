@@ -1,11 +1,12 @@
 import {
-  deepFreeze, getSafeErrorMessage, isServiceId, parseUsd, type MicroUsd, type ServiceId, type ValidationIssue, type ValuePath,
+  deepFreeze, getSafeErrorMessage, isRecord, isServiceId, parseUsd, type MicroUsd, type ServiceId, type ValidationIssue, type ValuePath,
 } from '@servicerouter/common';
 
 import type { PlatformConfig } from '../platform/config.js';
 import { toIssues, type IssueDraft } from '../validation/issues.js';
 import { toSchemaDrafts } from '../validation/schema.js';
 import type { CredentialDocument, PaymentDocument, RouteDocument, ServiceConfigDocument, UpstreamDocument } from './document.js';
+import { bazaarMetadata, inlineLocalReferences, operationObject, type BazaarMetadata } from './discovery.js';
 import { createMatcherBuilder, parseTemplate } from './matcher.js';
 import { operationsFromDocument, operationsFromPaths, pathParameters, type Operation, type OperationsResult } from './openapi.js';
 import {
@@ -22,7 +23,7 @@ export interface CompileServiceRuntimeInput {
   readonly config: ServiceConfigDocument;
   // The fetched OpenAPI documents, keyed by link (SR-3)
   readonly openapiDocuments: ReadonlyMap<string, unknown>;
-  // Not read yet. Payment options per asset come from it in steps 4 to 7.
+  // The pay URL, for the operations' discovery metadata (AD-3)
   readonly platform: PlatformConfig;
 }
 
@@ -39,6 +40,8 @@ interface UpstreamEntry {
   readonly upstream: RuntimeUpstream;
   readonly operations: readonly Operation[];
   readonly credentials: readonly CredentialReference[];
+  // The seller's `paths`, and the document that local references point into (none for inline paths)
+  readonly source: { readonly paths: unknown; readonly document: unknown };
 }
 
 const serviceStates: readonly ServiceState[] = ['pending', 'live', 'suspended'];
@@ -107,13 +110,18 @@ export const compileRuntimeDrafts = (input: CompileServiceRuntimeInput): Compile
       error(['upstreams', index, 'baseUrl'], 'is not a valid URL');
 
     let result: OperationsResult;
-    if (document.paths !== undefined)
+    let source: UpstreamEntry['source'];
+    if (document.paths !== undefined) {
       result = operationsFromPaths(document.paths);
+      source = { paths: document.paths, document: undefined };
+    }
     else {
       const link = document.openapi ?? '';
+      const fetched = openapiDocuments.get(link);
       result = openapiDocuments.has(link)
-        ? operationsFromDocument(openapiDocuments.get(link))
+        ? operationsFromDocument(fetched)
         : { ok: false, message: 'it was not loaded' };
+      source = { paths: isRecord(fetched) ? fetched['paths'] : undefined, document: fetched };
     }
     if (!result.ok)
       error(['upstreams', index, document.paths === undefined ? 'openapi' : 'paths'], `can't be compiled: ${result.message}`);
@@ -133,6 +141,7 @@ export const compileRuntimeDrafts = (input: CompileServiceRuntimeInput): Compile
       upstream: upstream ?? { name: document.name, baseUrl: '', origin: '', pathPrefix: '' },
       operations: result.ok ? result.operations : [],
       credentials: upstreamCredentials,
+      source,
     };
     upstreams.push(entry);
     if (document.name !== undefined)
@@ -177,6 +186,8 @@ export const compileRuntimeDrafts = (input: CompileServiceRuntimeInput): Compile
 
   // Operations and the matcher
   const defaultPrice = price(['payments', 'default', 'amount'], config.payments.default.amount);
+  // P-4: listed in the x402 Bazaar unless the seller opts out
+  const discoverable = config.service.discoverable ?? true;
   const matcher = createMatcherBuilder();
   const operations: RuntimeOperation[] = [];
   for (const entry of upstreams) {
@@ -222,6 +233,18 @@ export const compileRuntimeDrafts = (input: CompileServiceRuntimeInput): Compile
       if (operationPrice === undefined)
         continue;
 
+      const enabled = configured?.route.enabled ?? true;
+      // AD-3: what the x402 challenge carries for the Bazaar (PR-7), for paid operations of a discoverable service
+      let bazaar: BazaarMetadata | undefined;
+      if (discoverable && enabled && operationPrice > 0n) {
+        const object = inlineLocalReferences(operationObject(entry.source.paths, operation), entry.source.document);
+        bazaar = bazaarMetadata({
+          resource: `${input.platform.urls.pay}/service/${input.serviceId}${operation.path}`,
+          method: operation.method,
+          description: operation.description ?? operation.summary ?? config.service.title,
+          object: isRecord(object) ? object : {},
+        });
+      }
       const compiled: RuntimeOperation = {
         routeKey: routeKeyOf(entry, operation),
         method: operation.method,
@@ -229,14 +252,14 @@ export const compileRuntimeDrafts = (input: CompileServiceRuntimeInput): Compile
         upstream: entry.upstream,
         target: encodeTarget(target),
         price: operationPrice,
-        enabled: configured?.route.enabled ?? true,
+        enabled,
         credentials: entry.credentials,
         responses: operation.responses,
         docs: {
           operationId: operation.operationId,
           summary: operation.summary,
           description: operation.description,
-          bazaar: undefined,
+          bazaar,
         },
       };
       const existing = matcher.add(compiled, template.segments);

@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { formatUsd, isRecord, type MicroUsd } from '@servicerouter/common';
 
 import type { PlatformConfig } from '../platform/config.js';
+import { bazaarMetadata, operationObject, withoutKeys } from '../service/discovery.js';
 import type { ServiceConfigDocument } from '../service/document.js';
 import { canonicalJson } from '../service/registry.js';
 import type { RuntimeOperation, ServiceRuntime } from '../service/runtime.js';
@@ -37,8 +38,6 @@ interface DocOperation {
   readonly methods: readonly PaymentMethod[];
 }
 
-// Keys of an operation that name upstream hosts or the seller's own credentials (AD-1)
-const droppedOperationKeys = new Set(['servers', 'security', 'callbacks']);
 // Components that describe the seller's own credentials
 const droppedComponentKeys = new Set(['securitySchemes']);
 
@@ -71,25 +70,6 @@ const sourceOf = (input: ServiceDocumentsInput, operation: RuntimeOperation): { 
   }
 
   return { paths: upstream?.paths, components: undefined };
-};
-
-const withoutKeys = (value: Record<string, unknown>, keys: ReadonlySet<string>): Record<string, unknown> =>
-  Object.fromEntries(Object.entries(value).filter(([key]) => !keys.has(key)));
-
-const operationObject = (paths: unknown, operation: RuntimeOperation): Record<string, unknown> => {
-  const pathItem = isRecord(paths) ? paths[operation.path] : undefined;
-  const object = isRecord(pathItem) ? pathItem[operation.method] : undefined;
-  if (!isRecord(object) || !isRecord(pathItem))
-    return {};
-
-  const own = withoutKeys(object, droppedOperationKeys);
-  // A parameter the path item declares applies to its operations, unless the operation redeclares it
-  const shared = Array.isArray(pathItem['parameters']) ? pathItem['parameters'] : [];
-  const ownParameters = Array.isArray(own['parameters']) ? own['parameters'] : [];
-  const declared = new Set(ownParameters.filter(isRecord).map(parameter => `${String(parameter['in'])}:${String(parameter['name'])}`));
-  const inherited = shared.filter(parameter => !isRecord(parameter) || !declared.has(`${String(parameter['in'])}:${String(parameter['name'])}`));
-
-  return inherited.length > 0 ? { ...own, parameters: [...inherited, ...ownParameters] } : own;
 };
 
 const operationsOf = (input: ServiceDocumentsInput): readonly DocOperation[] => input.runtime.operations
@@ -260,45 +240,19 @@ const skill = (input: ServiceDocumentsInput, operations: readonly DocOperation[]
   ].join('\n')}\n`;
 };
 
-/** The JSON schema of a media type of a request body or a response, if it has one. */
-const jsonSchemaOf = (content: unknown): { readonly contentType: string; readonly schema: unknown; readonly example: unknown } | undefined => {
-  if (!isRecord(content))
-    return undefined;
-
-  const [contentType, media] = Object.entries(content).find(([type]) => type.includes('json')) ?? Object.entries(content)[0] ?? [];
-  if (contentType === undefined || !isRecord(media))
-    return undefined;
-
-  return { contentType, schema: media['schema'], example: media['example'] };
-};
-
 /**
- * AD-3: x402 Bazaar discovery metadata per operation: a description, the input (parameters and body),
- * the output schema, and an example where the seller's document has one. Stored with the documents.
- * PR-7 attaches it to the x402 challenge once the SDK's Bazaar extension is in the stack.
+ * AD-3: x402 Bazaar discovery metadata per paid operation: a description, the input (parameters and
+ * body), the output schema, and an example where the seller's document has one. Stored with the
+ * documents as the seller wrote it. The compiler puts the same entries in the runtime, with local
+ * references inlined, and the x402 challenge carries them (PR-7).
  */
 const bazaar = (input: ServiceDocumentsInput, operations: readonly DocOperation[]): string => {
-  const entries = operations.filter(operation => operation.runtime.price > 0n).map(({ runtime, object }) => {
-    const responses = isRecord(object['responses']) ? object['responses'] : {};
-    const success = ['200', '201', '2XX', '2xx', 'default'].map(key => responses[key]).find(isRecord);
-    const output = success ? jsonSchemaOf(success['content']) : undefined;
-    const body = isRecord(object['requestBody']) ? jsonSchemaOf(object['requestBody']['content']) : undefined;
-    const parameters = Array.isArray(object['parameters']) ? object['parameters'].filter(isRecord) : [];
-
-    return {
-      resource: `${payUrlOf(input)}${runtime.path}`,
-      method: runtime.method.toUpperCase(),
-      description: runtime.docs.description ?? runtime.docs.summary ?? input.config.service.title,
-      input: {
-        parameters: parameters.map(parameter => ({
-          name: parameter['name'], in: parameter['in'], required: parameter['required'] === true, schema: parameter['schema'] ?? null,
-        })),
-        body: body ? { contentType: body.contentType, schema: body.schema ?? null } : null,
-      },
-      output: output ? { contentType: output.contentType, schema: output.schema ?? null } : null,
-      example: output?.example ?? null,
-    };
-  });
+  const entries = operations.filter(operation => operation.runtime.price > 0n).map(({ runtime, object }) => bazaarMetadata({
+    resource: `${payUrlOf(input)}${runtime.path}`,
+    method: runtime.method,
+    description: runtime.docs.description ?? runtime.docs.summary ?? input.config.service.title,
+    object,
+  }));
 
   return `${JSON.stringify({ service: input.config.service.id, revision: input.runtime.revision, operations: entries }, null, 2)}\n`;
 };

@@ -109,6 +109,7 @@ service:
     Current conditions for any city, with temperature and wind.
   category: weather          # One of the catalog's categories
   tags: [forecast, geo]
+  discoverable: true         # Listed in the x402 Bazaar. false keeps it out
 
 payouts:
   default:
@@ -133,6 +134,7 @@ credentials:
 
 - Each operation of the OpenAPI document becomes a route at the same path. \`routes.<operationId>\` sets a route's own \`payment\`, a \`target\` path, or \`enabled: false\`.
 - An amount of \`"0"\` makes a route free.
+- \`service.discoverable\` (default \`true\`) lists each paid route in the x402 Bazaar, Coinbase's catalog of x402 APIs, once a payment for it settles through Coinbase's facilitator: its 402 carries the route's description, input and output schemas, and response example from your OpenAPI document. \`discoverable: false\` keeps the service out of it. Changing it makes a new revision, like any change.
 
 ## 3. Submit it with its secrets
 
@@ -164,7 +166,7 @@ Before a service goes live, each upstream host serves \`/.well-known/servicerout
 
 ## 6. Get paid
 
-Earnings are paid out monthly, on the 1st, in USDM on Cardano to the payout address, once they reach the minimum. Agents find the service in the catalog, and in its generated \`llms.txt\`, Agent Skill, and OpenAPI document.
+Earnings are paid out monthly, on the 1st, in USDM on Cardano to the payout address, once they reach the minimum. Agents find the service in the catalog, in its generated \`llms.txt\`, Agent Skill, and OpenAPI document, and in the x402 Bazaar unless \`discoverable\` is \`false\`.
 `,
 };
 

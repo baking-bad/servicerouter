@@ -96,7 +96,16 @@ describe('compileServiceRuntime (SR-5)', () => {
       ['post', '/admin/reset', 'adminReset', 'main', '/admin/reset', 1_000n, false],
       ['post', '/upload', 'uploadFile', 'files', '/upload', 10_000n, true],
     ]);
-    expect(operation(runtime, 'post', '/upload').docs).toEqual({ operationId: 'uploadFile', summary: 'Upload a file', description: undefined, bazaar: undefined });
+    expect(operation(runtime, 'post', '/upload').docs).toEqual({
+      operationId: 'uploadFile',
+      summary: 'Upload a file',
+      description: undefined,
+      // AD-3, PR-7: a paid operation carries its discovery metadata
+      bazaar: {
+        resource: 'https://pay.staging.servicerouter.ai/service/my-app/upload', method: 'POST', description: 'Upload a file',
+        input: { parameters: [], body: null }, output: null, example: null,
+      },
+    });
     expect(operation(runtime, 'get', '/weather/{city}').upstream).toEqual({
       name: 'main', baseUrl: 'https://api.example.com', origin: 'https://api.example.com', pathPrefix: '',
     });

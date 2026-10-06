@@ -1,5 +1,5 @@
 import type { LogSink, MicroUsd } from '@servicerouter/common';
-import type { RailName } from '@servicerouter/core';
+import type { BazaarMetadata, RailName } from '@servicerouter/core';
 
 import type { Credential } from './credentials.js';
 
@@ -35,6 +35,9 @@ export interface Quote {
   readonly subject: PaymentSubject;
   // The platform's share, taken at capture or settlement (LG-4)
   readonly feeBps: number;
+  // The operation's x402 Bazaar metadata (AD-3), which the x402 challenge carries (PR-7). A registered
+  // service's paid operation only, and only while the service is discoverable (P-4).
+  readonly discovery?: BazaarMetadata;
   // The request's logger, so a rail's lines carry the request ID (XC-5, L-3). Default: the rail's own.
   readonly log?: LogSink;
 }

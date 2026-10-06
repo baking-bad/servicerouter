@@ -79,6 +79,14 @@ describe('the platform Agent Skills (AD-5, AD-7, WB-11)', () => {
     expect(seller).toContain('earnings');
   });
 
+  it('tells the seller that a service is listed in the x402 Bazaar unless service.discoverable is false (P-4)', () => {
+    const seller = skillDocument(platformSkills.find(skill => skill.name === 'servicerouter-seller')!, settings);
+
+    expect(seller).toContain('  discoverable: true         # Listed in the x402 Bazaar. false keeps it out\n');
+    expect(seller).toContain('`service.discoverable` (default `true`) lists each paid route in the x402 Bazaar');
+    expect(seller).toContain('`discoverable: false` keeps the service out of it');
+  });
+
   it('puts the guide, both skills, and the whole catalog in /llms-full.txt', async () => {
     const full = fullDocument(settings, await listAllCatalog(settings));
 

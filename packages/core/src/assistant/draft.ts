@@ -199,6 +199,8 @@ export const draftServiceConfig = async ({ document, link, platform, drafter, se
       description: judged.description,
       category: judged.category,
       ...judged.tags.length > 0 ? { tags: [...judged.tags] } : {},
+      // P-4: listed in the x402 Bazaar by default; the header comment says how to opt out
+      discoverable: true,
     },
     payouts: { default: { asset: platform.payouts.assets[0]!, address: payoutAddress } },
     payments: { default: { amount: defaultPrice } },
@@ -206,7 +208,11 @@ export const draftServiceConfig = async ({ document, link, platform, drafter, se
     ...Object.keys(routes).length > 0 ? { routes } : {},
     ...Object.keys(mechanical.credentials).length > 0 ? { credentials: mechanical.credentials } : {},
   };
-  const yaml = `# A draft from ${link}. Review every field, replace the payout address, and send each credential's secret with the submit.\n${stringify(config, { lineWidth: 0 })}`;
+  const yaml = [
+    `# A draft from ${link}. Review every field, replace the payout address, and send each credential's secret with the submit.`,
+    '# service.discoverable: true lists each paid route in the x402 Bazaar, with its OpenAPI description, schemas, and example. Set it to false to keep the service out.',
+    stringify(config, { lineWidth: 0 }),
+  ].join('\n');
 
   // CA-3: the same validation as a submit, secrets still to come
   const parsed = parseServiceConfig(yaml);
