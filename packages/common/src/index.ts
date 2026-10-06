@@ -8,7 +8,7 @@ export * from './logging.js';
 
 export * from './ports.js';
 export * from './types.js';
-
-
+export * from './object.js';
+export * from './safeValue.js';
 
 
