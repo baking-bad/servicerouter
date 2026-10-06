@@ -3,19 +3,22 @@ import { fixtureRun, fixtureTime } from '@servicerouter/testing';
 import * as Address from '@evolution-sdk/evolution/Address';
 import * as PrivateKey from '@evolution-sdk/evolution/PrivateKey';
 import * as Transaction from '@evolution-sdk/evolution/Transaction';
+import * as TransactionHash from '@evolution-sdk/evolution/TransactionHash';
 import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { createLogger, randomIdGenerator, Secret, type MicroUsd, type ServiceId } from '@servicerouter/common';
 import {
-  blockfrostUnit, createBlockfrostClient, findAsset, hashApiKey, loadPlatformConfig, type Asset, type NewPayment, type PlatformConfig,
+  blockfrostUnit, createBlockfrostClient, createDepositAddressDeriver, findAsset, hashApiKey, loadPlatformConfig, type Asset, type NewPayment, type PlatformConfig,
   type ServiceConfigDocument,
 } from '@servicerouter/core';
 import {
   createAccountRepository, createLedger, createPaymentKeyRepository, createPaymentRepository, createPayoutRepository, createServiceRepository,
   ledgerAccountIds, payouts, payoutRuns, type Ledger,
 } from '@servicerouter/db';
-import { createFakeClock, createTestDatabase, startFakeBlockfrost, type FakeBlockfrost, type FakeClock, type TestDatabase } from '@servicerouter/testing';
+import {
+  createFakeClock, createTestDatabase, createTestDepositWallet, startFakeBlockfrost, type FakeBlockfrost, type FakeClock, type TestDatabase,
+} from '@servicerouter/testing';
 
 import { createPayoutsJob, payoutConfirmations } from '../../src/payouts/job.js';
 import { createCardanoPayoutWallet, type PayoutWallet } from '../../src/payouts/wallet.js';
@@ -231,12 +234,19 @@ describe('payouts (PO-1 to PO-7)', () => {
     expect((await runOf(fixtureRun(4, 1)))?.status).toBe('submitted');
   });
 
-  it('leaves a refused transaction\'s earnings for the next run (PO-7)', async () => {
+  it('fails a refused transaction only once its window has passed unseen, and pays its earnings in a later run (PO-7)', async () => {
     const paid = await seller(sellerAddresses[2]!);
     await earn(paid, 30_000_000n);
     clock.set(new Date(fixtureTime(5, 1, 0, 5, 0, 0)));
     blockfrost.onSubmit('reject');
     try {
+      await job()();
+      clock.advance(10 * 60_000);
+      // Refused again when it is sent again: still waiting, never failed while it could land
+      await job()();
+      expect((await payoutsOf(fixtureRun(5, 1))).map(payout => payout.status)).toEqual(['pending']);
+
+      clock.set(new Date(fixtureTime(5, 9, 0, 0, 0, 0)));
       await job()();
     }
     finally {
@@ -244,13 +254,86 @@ describe('payouts (PO-1 to PO-7)', () => {
     }
 
     expect((await payoutsOf(fixtureRun(5, 1))).map(payout => payout.status)).toEqual(['failed']);
-    expect(await earned(paid.accountId)).toBe(29_250_000n);
-    clock.advance(10 * 60_000);
-    await job()();
     expect((await runOf(fixtureRun(5, 1)))?.status).toBe('failed');
+    expect(await earned(paid.accountId)).toBe(29_250_000n);
 
     clock.set(new Date(fixtureTime(6, 1, 0, 5, 0, 0)));
     await job()();
     expect((await payoutsOf(fixtureRun(6, 1))).map(payout => [payout.address, payout.amount])).toEqual([[sellerAddresses[2]!, 29_250_000n]]);
+  });
+
+  it('pays once when the submission\'s answer is lost after the node took it, as on a timeout (PO-4, PO-7)', async () => {
+    const paid = await seller(sellerAddresses[0]!);
+    await earn(paid, 40_000_000n);
+    clock.set(new Date(fixtureTime(7, 1, 0, 5, 0, 0)));
+    blockfrost.onSubmit('include_then_fail');
+    try {
+      await job()();
+    }
+    finally {
+      blockfrost.onSubmit('include');
+    }
+    const [transaction] = await createPayoutRepository({ db: database.db, clock, ids: randomIdGenerator }).transactions(fixtureRun(7, 1));
+
+    // Recorded as sent: no new transaction is built for these payouts, and nothing fails
+    expect(transaction).toMatchObject({ status: 'submitted' });
+    blockfrost.addBlocks(payoutConfirmations);
+    clock.advance(10 * 60_000);
+    await job()();
+
+    expect((await payoutsOf(fixtureRun(7, 1))).map(payout => payout.status)).toEqual(['confirmed']);
+    expect(await earned(paid.accountId)).toBe(0n);
+    // Next month owes this seller nothing more
+    clock.set(new Date(fixtureTime(8, 1, 0, 5, 0, 0)));
+    await job()();
+    expect((await payoutsOf(fixtureRun(8, 1))).filter(payout => payout.address === sellerAddresses[0])).toEqual([]);
+  });
+
+  it('sends the same signed transaction again when a submission never reached the node (PO-4)', async () => {
+    const paid = await seller(sellerAddresses[1]!);
+    await earn(paid, 20_000_000n);
+    clock.set(new Date(fixtureTime(9, 1, 0, 5, 0, 0)));
+    blockfrost.onSubmit('lose');
+    try {
+      await job()();
+    }
+    finally {
+      blockfrost.onSubmit('include');
+    }
+    const [transaction] = await createPayoutRepository({ db: database.db, clock, ids: randomIdGenerator }).transactions(fixtureRun(9, 1));
+    expect(blockfrost.submitted.has(transaction!.txHash)).toBe(false);
+
+    clock.advance(10 * 60_000);
+    await job()();
+    blockfrost.addBlocks(payoutConfirmations);
+    clock.advance(10 * 60_000);
+    await job()();
+
+    expect(blockfrost.submissions.filter(hash => hash === transaction!.txHash)).toHaveLength(1);
+    expect((await payoutsOf(fixtureRun(9, 1))).map(payout => payout.status)).toEqual(['confirmed']);
+  });
+
+  it('chains a run\'s transactions past 40 payouts, so no two spend the same coin (PO-3)', async () => {
+    const big = createCardanoPayoutWallet({
+      mnemonic: Secret.from(PrivateKey.generateMnemonic(256)), asset: usdm, blockfrost: { url: blockfrost.url, projectId: Secret.from('preprodTestProjectId') },
+    });
+    blockfrost.fund(big.address, { lovelace: 400_000_000n, assets: { [usdm.address]: 1_000_000_000n } });
+    const derive = createDepositAddressDeriver({ accountPublicKey: createTestDepositWallet().accountPublicKey, network: usdm.network });
+    for (let index = 0; index < 41; index += 1)
+      await earn(await seller(derive(index)), 11_000_000n);
+    clock.set(new Date(fixtureTime(10, 1, 0, 5, 0, 0)));
+
+    await job({ payoutWallet: big })();
+    const transactions = await createPayoutRepository({ db: database.db, clock, ids: randomIdGenerator }).transactions(fixtureRun(10, 1));
+
+    expect(transactions).toHaveLength(2);
+    const inputsOf = (cbor: string) => Transaction.fromCBORHex(cbor).body.inputs.map(input => `${TransactionHash.toHex(input.transactionId)}#${input.index}`);
+    const [first, second] = transactions.map(transaction => inputsOf(transaction.cbor));
+    expect(first!.filter(input => second!.includes(input))).toEqual([]);
+    // The second spends what the first left
+    expect(second!.some(input => input.startsWith(transactions[0]!.txHash))).toBe(true);
+    const paidTo = { ...paidBy(transactions[0]!.cbor), ...paidBy(transactions[1]!.cbor) };
+    for (let index = 0; index < 41; index += 1)
+      expect(paidTo[derive(index)]).toBe(10_725_000n);
   });
 });
