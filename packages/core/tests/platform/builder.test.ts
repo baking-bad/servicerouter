@@ -45,10 +45,15 @@ describe('buildPlatformConfig', () => {
     expect(config.mpp.network.chain).toBe('tempo');
   });
 
-  it('enables a facilitator unless it says enabled: false, as Cardano does until step 6 (PC-2, PR-6)', () => {
+  it('enables a facilitator unless it says enabled: false (PC-2, PR-6)', () => {
     const config = buildPlatformConfig(document());
+    const withoutCardano = loadExamplePlatformDocument() as { facilitators: Record<string, unknown>[] };
+    withoutCardano.facilitators[1]!['enabled'] = false;
+    delete withoutCardano.facilitators[0]!['enabled'];
 
-    expect(config.facilitators.map(facilitator => [facilitator.name, facilitator.enabled])).toEqual([['cdp', true], ['cardano', false]]);
+    // Cardano is on in the example since step 6
+    expect(config.facilitators.map(facilitator => [facilitator.name, facilitator.enabled])).toEqual([['cdp', true], ['cardano', true]]);
+    expect(buildPlatformConfig(withoutCardano as never).facilitators.map(facilitator => [facilitator.name, facilitator.enabled])).toEqual([['cdp', true], ['cardano', false]]);
     const notBoolean = loadExamplePlatformDocument() as { facilitators: Record<string, unknown>[] };
     notBoolean.facilitators[0]!['enabled'] = 'no';
     expect(issues(() => assertValidPlatformConfigDocument(notBoolean)).map(issue => issue.path)).toEqual(['/facilitators/0/enabled']);

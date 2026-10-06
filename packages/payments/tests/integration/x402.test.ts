@@ -2,7 +2,7 @@ import { generateKeyPairSync, verify } from 'node:crypto';
 
 import { generateKeyPairSigner } from '@solana/kit';
 import { x402Client } from '@x402/core/client';
-import { decodePaymentRequiredHeader, decodePaymentResponseHeader, encodePaymentSignatureHeader } from '@x402/core/http';
+import { decodePaymentRequiredHeader, decodePaymentResponseHeader, decodePaymentSignatureHeader, encodePaymentSignatureHeader } from '@x402/core/http';
 import type { PaymentRequired } from '@x402/core/types';
 import { ExactEvmScheme } from '@x402/evm/exact/client';
 import { ExactSvmScheme } from '@x402/svm/exact/client';
@@ -12,7 +12,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { createLogger, Secret } from '@servicerouter/common';
 import { loadPlatformConfig, type NewPayment, type PlatformConfig, type SettleInput } from '@servicerouter/core';
 import {
-  encodeBase58, facilitatorAnswers, startFakeFacilitator, startFakeSolanaRpc, type FakeFacilitator, type FakeSolanaRpc,
+  cardanoAnswers, encodeBase58, facilitatorAnswers, startFakeFacilitator, startFakeSolanaRpc, type FakeFacilitator, type FakeSolanaRpc,
 } from '@servicerouter/testing';
 
 import {
@@ -183,6 +183,11 @@ describe('x402 payments through the facilitator (PR-5, PR-10, PR-12)', () => {
   it.each([
     ['a payment for another price', async (rail: PaymentRail) => pay(await requiredOf(rail, quoteOf(999n)), base)],
     ['a header that isn\'t base64 JSON', async () => 'not a payment'],
+    ['a payment that adds another transfer method to the quote, Permit2 on Base (PR-8)', async (rail: PaymentRail) => {
+      const payload = decodePaymentSignatureHeader(await pay(await requiredOf(rail, quoteOf()), base));
+
+      return encodePaymentSignatureHeader({ ...payload, accepted: { ...payload.accepted, extra: { ...payload.accepted.extra, assetTransferMethod: 'permit2' } } });
+    }],
   ])('refuses %s with payment_invalid before asking the facilitator', async (_case, header) => {
     const { rail } = createPorts();
     const before = facilitator.requests.length;
@@ -219,6 +224,22 @@ describe('x402 payments through the facilitator (PR-5, PR-10, PR-12)', () => {
     facilitator.handle('/verify', facilitatorAnswers.unavailable);
 
     await expect(rail.authorize(paidCredential(rail, await pay(await requiredOf(rail, quote), base)), quote)).rejects.toBeInstanceOf(FacilitatorUnavailableError);
+  });
+
+  it.each([
+    ['verify, with 200 and isValid false', '/verify' as const, cardanoAnswers.verifyBackendDown()],
+    ['settle, with 503', '/settle' as const, cardanoAnswers.backendDown(503)],
+    ['settle, with 200', '/settle' as const, cardanoAnswers.backendDown(200)],
+  ])('treats a chain backend that is down at %s as the facilitator being unavailable: the outcome is unknown (CF-6, step 6)', async (_case, path, answer) => {
+    const [client] = createFacilitators({ config, cdpApiKey: () => { throw new Error('none'); }, clock });
+    const quote = quoteOf();
+    const { rail } = createPorts();
+    const payload = decodePaymentSignatureHeader(await pay(await requiredOf(rail, quote), base));
+    facilitator.handle(path, answer);
+
+    const call = path === '/verify' ? client!.verify(payload, payload.accepted) : client!.settle(payload, payload.accepted);
+
+    await expect(call).rejects.toBeInstanceOf(FacilitatorUnavailableError);
   });
 
   const authorized = async () => {
@@ -286,6 +307,19 @@ describe('facilitators at startup (PR-6)', () => {
     }
     finally {
       await down.close();
+    }
+  });
+
+  it('fails fast when a facilitator\'s /supported doesn\'t list exact on a network it is configured for (step 6)', async () => {
+    const baseOnly = await startFakeFacilitator({ networks: [base] });
+    try {
+      const both = await configWith(baseOnly.url);
+
+      await expect(initializeX402({ config: both, facilitators: createFacilitators({ config: both, cdpApiKey: () => { throw new Error('none'); }, clock }), timeoutMs: 2_000 }))
+        .rejects.toThrow(`The cdp facilitator's /supported doesn't list exact on ${solana}`);
+    }
+    finally {
+      await baseOnly.close();
     }
   });
 
