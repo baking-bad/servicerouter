@@ -9,3 +9,4 @@ export * from './deposits.js';
 export * from './serviceDocuments.js';
 export * from './payouts.js';
 export * from './routing.js';
+export * from './catalog.js';

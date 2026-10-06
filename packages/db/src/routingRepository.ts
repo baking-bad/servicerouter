@@ -33,7 +33,7 @@ export interface RoutingRepository {
   /** Whether a registered service uses the host as an upstream, in any state (RT-2, RT-12, RT-14). */
   isServiceHost(host: string): Promise<boolean>;
   /** Registers a routed endpoint once (RT-12, RT-13), up to the cap per host (AR17), never for a service's host. */
-  registerEndpoint(input: { readonly host: string; readonly path: string }): Promise<EndpointRegistration>;
+  registerEndpoint(input: { readonly host: string; readonly path: string; readonly lastPrice?: bigint }): Promise<EndpointRegistration>;
   /** The endpoint's own fee, if it has one (RT-5). */
   endpointFee(host: string, path: string): Promise<number | undefined>;
   /** Sets an endpoint's own fee, or back to the default with null. Returns whether the endpoint exists. */
@@ -56,17 +56,21 @@ export const createRoutingRepository = ({ db, clock }: { readonly db: DatabaseEx
 
   isServiceHost: async host => (await db.select({ id: services.id }).from(services).where(sql`${host} = any(${services.hosts})`).limit(1)).length > 0,
 
-  registerEndpoint: async ({ host, path }) => {
+  registerEndpoint: async ({ host, path, lastPrice }) => {
     if ((await db.select({ id: services.id }).from(services).where(sql`${host} = any(${services.hosts})`).limit(1)).length > 0)
       return 'service_host';
     const [existing] = await db.select({ host: routedEndpoints.host }).from(routedEndpoints)
       .where(and(eq(routedEndpoints.host, host), eq(routedEndpoints.path, path)));
-    if (existing)
+    if (existing) {
+      if (lastPrice !== undefined)
+        await db.update(routedEndpoints).set({ lastPrice }).where(and(eq(routedEndpoints.host, host), eq(routedEndpoints.path, path)));
+
       return 'exists';
+    }
     const [registered] = await db.select({ count: count() }).from(routedEndpoints).where(eq(routedEndpoints.host, host));
     if ((registered?.count ?? 0) >= maxRoutedEndpointsPerHost)
       return 'capped';
-    const created = await db.insert(routedEndpoints).values({ host, path, createdAt: clock.now() }).onConflictDoNothing().returning();
+    const created = await db.insert(routedEndpoints).values({ host, path, lastPrice: lastPrice ?? null, createdAt: clock.now() }).onConflictDoNothing().returning();
 
     return created.length > 0 ? 'created' : 'exists';
   },

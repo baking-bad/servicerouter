@@ -70,6 +70,7 @@ export const createServiceRepository = ({ db }: ServiceRepositoryOptions): Servi
     setState: async ({ id, state, updatedAt }) => {
       await db.update(services).set({ state, updatedAt }).where(eq(services.id, id));
     },
+    idsInState: async state => (await db.select({ id: services.id }).from(services).where(eq(services.state, state)).orderBy(asc(services.id))).map(row => row.id),
     // In ID order, so two checks lock the same services in the same order
     lockUsingHost: async (accountId, host) => (await db.select().from(services)
       .where(and(eq(services.ownerAccountId, accountId), arrayContains(services.hosts, [host])))

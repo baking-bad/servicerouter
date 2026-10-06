@@ -13,6 +13,8 @@ export const routedEndpoints = pgTable('routed_endpoints', {
   path: text('path').notNull(),
   // Null: routingFeeBps from platform config
   feeBps: integer('fee_bps'),
+  // The last quote in micro-USD (the target's price and the fee), for the catalog (CI-2)
+  lastPrice: bigint('last_price', { mode: 'bigint' }),
   // The first routed call
   createdAt: timestamp('created_at', { withTimezone: true, precision: 3 }).notNull(),
 }, table => [
