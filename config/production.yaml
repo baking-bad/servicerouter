@@ -1,8 +1,7 @@
 # Production platform config (docs/architecture/platform-config.md): mainnets only, real funds.
 #
+# The stack loads it with CONFIG_PATH=config/production.yaml (docs/deployment.md). Every value here is
 # public: secrets appear by name only, and their values come from the stack's environment.
-#
-# FILL IN before the first deploy: the three FILL_ME addresses below. The apps refuse to start while
 
 version: 1
 environment: production         # Mainnets only
@@ -33,20 +32,20 @@ assets:                         # PC-6. Addresses and decimals from the SDKs: @x
     address: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
     decimals: 6
     peg: usd
-    payTo: FILL_ME_BASE_TREASURY          # Our Base address that receives USDC
+    payTo: 0x5d0b54076191062bea66176c6a0c94ab3aeafb26          # Our Base address that receives USDC
   - name: cardano-usdm
     network: cardano:mainnet
     address: c48cbb3d5e57ed56e276bc45f99ab39abe94e6cd7ac39fb402da47ad.0014df105553444d
     decimals: 6
     peg: usd
     minPrice: "0.05"            # PR-3: Cardano's network fee makes smaller calls uneconomic
-    payTo: FILL_ME_CARDANO_TREASURY       # Our Cardano address that receives USDM
+    payTo: addr1q97yhwkk46wcdz24za643jeme4n9gu7m6v74vkqacy66v3cee07nknkut5k5xw4w7t5aj78a26aw0xw2cn2jcmj9mcxsugtysy       # Our Cardano address that receives USDM
   - name: tempo-usdce           # P-3: USDC.e only. MPP only (PR-9)
     network: eip155:4217        # Tempo
     address: "0x20C000000000000000000000b9537d11c60E8b50"
     decimals: 6
     peg: usd
-    payTo: FILL_ME_TEMPO_RECIPIENT        # The same address as mpp.recipient
+    payTo: 0x5d0b54076191062bea66176c6a0c94ab3aeafb26        # The same address as mpp.recipient
 
 facilitators:
   - name: cdp
@@ -63,7 +62,7 @@ facilitators:
 
 mpp:
   network: eip155:4217          # Tempo
-  recipient: FILL_ME_TEMPO_RECIPIENT      # Our Tempo address that receives USDC.e
+  recipient: 0x5d0b54076191062bea66176c6a0c94ab3aeafb26      # Our Tempo address that receives USDC.e
 
 deposits:                       # Buyers top up credits with USDM on Cardano
   asset: cardano-usdm
