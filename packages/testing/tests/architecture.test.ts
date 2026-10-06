@@ -15,7 +15,12 @@ const allowedImports: Readonly<Record<string, readonly string[]>> = {
   db: ['core', 'common'],
   payments: ['core', 'common'],
   signer: ['common'],
+  // WB-2: the website reads only the public Platform API, over HTTP
+  web: [],
 };
+
+// Where a package's source lives: src/, and the website's Next.js routes in app/
+const sourceDirectories = ['src', 'app'];
 
 // PR-11: payments knows no HTTP framework or database. Adapters, such as one from Fastify to Fetch for
 // mppx's HTTP handlers, live in the apps.
@@ -171,7 +176,7 @@ interface Violation {
 const findViolations = (files: readonly SourceFile[]): readonly Violation[] => {
   const violations: Violation[] = [];
   for (const file of files) {
-    const [packageName = '', , ...rest] = file.path.split('/');
+    const [packageName = '', top = '', ...rest] = file.path.split('/');
     const code = blankSource(file.text);
     const add = (index: number, message: string) => violations.push({ file: file.path, line: lineOf(code, index), message });
 
@@ -187,9 +192,9 @@ const findViolations = (files: readonly SourceFile[]): readonly Violation[] => {
         else if (packageName === 'payments' && frameworkImport.test(specifier))
           add(index, `imports ${specifier}: payments knows no HTTP framework or database (PR-11)`);
         else if (specifier.startsWith('.')) {
-          const target = path.posix.join(path.posix.dirname(rest.join('/')), specifier);
-          if (target.startsWith('..'))
-            add(index, `imports ${specifier}: reaches outside ${packageName}/src. Import the package instead`);
+          const target = path.posix.join(top, path.posix.dirname(rest.join('/')), specifier);
+          if (!sourceDirectories.some(directory => target.startsWith(`${directory}/`)))
+            add(index, `imports ${specifier}: reaches outside ${packageName}/${top}. Import the package instead`);
         }
       }
     }
@@ -208,13 +213,13 @@ const findViolations = (files: readonly SourceFile[]): readonly Violation[] => {
 
 const readSources = async (): Promise<readonly SourceFile[]> => {
   const packages = (await readdir(packagesRoot, { withFileTypes: true })).filter(entry => entry.isDirectory()).map(entry => entry.name);
-  const paths = (await Promise.all(packages.map(async name => {
-    const entries = await readdir(path.join(packagesRoot, name, 'src'), { recursive: true, withFileTypes: true });
+  const paths = (await Promise.all(packages.flatMap(name => sourceDirectories.map(async directory => {
+    const entries = await readdir(path.join(packagesRoot, name, directory), { recursive: true, withFileTypes: true }).catch(() => []);
 
     return entries
-      .filter(entry => entry.isFile() && entry.name.endsWith('.ts'))
+      .filter(entry => entry.isFile() && /\.tsx?$/.test(entry.name))
       .map(entry => path.relative(packagesRoot, path.join(entry.parentPath, entry.name)).split(path.sep).join('/'));
-  }))).flat();
+  })))).flat();
 
   return Promise.all(paths.map(async file => ({ path: file, text: await readFile(path.join(packagesRoot, file), 'utf8') })));
 };
@@ -266,6 +271,12 @@ describe('architecture rules', () => {
 
     it('nothing in payments\' use of mppx\'s core and Tempo modules (PR-11)', () => {
       expect(check('payments/src/mpp/a.ts', 'import { Challenge } from \'mppx\';\nimport { Mppx, tempo } from \'mppx/server\';\nimport { Transaction } from \'viem/tempo\';')).toEqual([]);
+    });
+
+    it('an import of a package of ours in the website, which reads only the Platform API (WB-2)', () => {
+      expect(check('web/app/page.tsx', 'import { parseUsd } from \'@servicerouter/common\';'))
+        .toEqual(['web/app/page.tsx:1 imports @servicerouter/common: web may import no internal package']);
+      expect(check('web/app/discover/page.tsx', 'import { readSettings } from \'../../src/config\';')).toEqual([]);
     });
 
     it('an import of @servicerouter/testing from any src', () => {
