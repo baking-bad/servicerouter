@@ -1,20 +1,25 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
-    "rootDir": "src",
-    "outDir": "dist",
-    "composite": true,
-    "tsBuildInfoFile": "dist/.tsbuildinfo"
+    "lib": [
+      "ES2022",
+      "DOM",
+      "DOM.Iterable"
+    ],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "jsx": "react-jsx",
+    "noEmit": true,
+    "isolatedModules": true,
+    "declaration": false,
+    "sourceMap": false
   },
   "include": [
-    "src/**/*.ts"
-  ],
-  "references": [
-    {
-      "path": "../common"
-    },
-    {
-      "path": "../core"
-    }
+    "app/**/*.ts",
+    "app/**/*.tsx",
+    "src/**/*.ts",
+    "src/**/*.tsx",
+    "proxy.ts",
+    "next.config.ts"
   ]
 }
