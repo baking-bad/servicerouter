@@ -5,7 +5,9 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest
 import { createLogger, runApp, Secret, type Logger, type Server } from '@servicerouter/common';
 import { loadPlatformConfig, type PlatformConfig } from '@servicerouter/core';
 import { createPostgres, createRedis, type Postgres, type Redis } from '@servicerouter/db';
-import { createTestDatabase, createTestRedis, type TestDatabase, type TestRedis } from '@servicerouter/testing';
+import {
+  createTestDatabase, createTestRedis, createTestSecretKeys, type TestDatabase, type TestRedis, type TestSecretKeys,
+} from '@servicerouter/testing';
 
 import { createApp } from '../../src/app.js';
 import { startProxy } from '../../src/start.js';
@@ -22,6 +24,7 @@ interface RunningServer {
 let config: PlatformConfig;
 let database: TestDatabase;
 let redis: TestRedis;
+let keys: TestSecretKeys;
 const started: Server[] = [];
 
 const start = async (dependencies: { postgres?: Postgres; redis?: Redis; logger?: Logger } = {}): Promise<RunningServer> => {
@@ -30,6 +33,7 @@ const start = async (dependencies: { postgres?: Postgres; redis?: Redis; logger?
     logger: dependencies.logger ?? silentLogger,
     postgres: dependencies.postgres ?? database.postgres,
     redis: dependencies.redis ?? redis,
+    opener: keys.opener,
   });
   server.app.get('/test/boom', async () => {
     throw new Error('upstream 10.0.0.5 said: secret detail');
@@ -76,7 +80,7 @@ const captureLogs = () => {
 
 beforeAll(async () => {
   config = await loadPlatformConfig({ env: exampleConfig });
-  [database, redis] = await Promise.all([createTestDatabase(), createTestRedis()]);
+  [database, redis, keys] = await Promise.all([createTestDatabase(), createTestRedis(), createTestSecretKeys()]);
 });
 
 afterEach(async () => {
@@ -177,7 +181,7 @@ describe('errors (PA-3, XC-7)', () => {
   it('answers an unknown route with 404 not_found in the error envelope', async () => {
     const { url } = await start();
 
-    const response = await fetch(`${url}/v1/nothing-here`);
+    const response = await fetch(`${url}/_/nothing-here`);
 
     expect(response.status).toBe(404);
     expect(await response.json()).toEqual({ error: { code: 'not_found', message: 'Not found' } });
@@ -206,21 +210,24 @@ describe('limits (PX-8)', () => {
   });
 
   it('takes request bodies up to the platform config limit, and answers 413 above it', async () => {
-    const { url } = await start();
+    const { server } = await start();
     const limit = config.sizeLimits.requestBodyBytes;
-    const post = (bytes: number) => fetch(`${url}/test/echo`, {
+    // Injected: over a socket, the server answers 413 and closes while a 1 MiB upload is still being
+    // written, and the client can see a reset instead of the answer
+    const post = (bytes: number) => server.app.inject({
       method: 'POST',
+      url: '/test/echo',
       headers: { 'content-type': 'text/plain' },
-      body: 'x'.repeat(bytes),
+      payload: 'x'.repeat(bytes),
     });
 
     const atLimit = await post(limit);
     const overLimit = await post(limit + 1);
 
     expect(limit).toBe(1_048_576);
-    expect(atLimit.status).toBe(200);
-    expect(overLimit.status).toBe(413);
-    expect(await overLimit.json()).toMatchObject({ error: { code: 'request_too_large' } });
+    expect(atLimit.statusCode).toBe(200);
+    expect(overLimit.statusCode).toBe(413);
+    expect(overLimit.json()).toMatchObject({ error: { code: 'request_too_large' } });
   });
 });
 
@@ -265,5 +272,34 @@ describe('startup (PC-1)', () => {
     expect(lines.find(line => line['msg'] === 'Failed to start')).toMatchObject({
       error: { message: 'Secret DATABASE_URL is not set' },
     });
+  });
+});
+
+describe('the secrets private keys (SC-4, S2-D4)', () => {
+  const connections = () => ({ DATABASE_URL: database.url.expose(), REDIS_URL: redis.url.expose() });
+  const listen = { HOST: '127.0.0.1', PORT: '0', METRICS_PORT: '0' };
+  const oneLine = (pem: string) => pem.trim().replaceAll('\n', '\\n');
+  const hint = 'Generate a pair with node scripts/secrets-keygen.mjs';
+
+  it('starts with the PEM keys on one line, each newline written as \\n', async () => {
+    const app = await startProxy({ env: { ...exampleConfig, ...connections(), ...listen, SECRETS_PRIVATE_KEYS: oneLine(keys.privateKey) }, logger: silentLogger });
+
+    await app.close();
+  });
+
+  it.each([
+    ['unset', undefined, `SECRETS_PRIVATE_KEYS is not set. It holds the PEM private keys that open seller secrets. ${hint}`],
+    ['not a PEM key', 'not a key', `SECRETS_PRIVATE_KEYS holds no PEM key. ${hint}`],
+    ['the public key', 'PUBLIC', `SECRETS_PRIVATE_KEYS can't open secrets: The private key is not a valid, unencrypted PEM private key. ${hint}`],
+  ])('exits with 1 and says why when the keys are %s, quoting no key', async (_case, value, message) => {
+    const { logger, lines } = captureLogs();
+    const exit = vi.fn();
+    const keysValue = value === 'PUBLIC' ? oneLine(keys.publicKey) : value;
+
+    await runApp({ name: 'proxy', start: startProxy, logger, exit, env: { ...exampleConfig, ...connections(), ...listen, SECRETS_PRIVATE_KEYS: keysValue } });
+
+    expect(exit).toHaveBeenCalledWith(1);
+    expect(lines.find(line => line['msg'] === 'Failed to start')).toMatchObject({ error: { message } });
+    expect(JSON.stringify(lines)).not.toContain(keys.publicKey.split('\n')[1]);
   });
 });

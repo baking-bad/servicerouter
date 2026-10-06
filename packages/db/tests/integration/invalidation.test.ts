@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { createLogger } from '@servicerouter/common';
 import type { InvalidationEvent } from '@servicerouter/core';
-import { createTestRedis, type TestRedis } from '@servicerouter/testing';
+import { createTestRedis, dropRedisConnections, type TestRedis } from '@servicerouter/testing';
 
 import { createRedis, createRedisInvalidationBus, invalidationChannel, type Redis, type RedisInvalidationBus } from '../../src/index.js';
 
@@ -114,5 +114,40 @@ describe('Redis invalidation bus', () => {
 
     await vi.waitFor(() => expect(watcher).toEqual([{ kind: 'key', id: 'after-close' }]));
     expect(received).toEqual([]);
+  });
+
+  it('tells subscribers when the subscription is back after its connection dropped, and keeps delivering (backlog, T07)', async () => {
+    const prefix = `${redis.prefix}reconnect:`;
+    const publisher = createBus(prefix);
+    const subscriber = createBus(prefix);
+    const events: InvalidationEvent[] = [];
+    const reconnects = vi.fn();
+    await subscriber.subscribe(event => {
+      events.push(event);
+    }, { onReconnect: reconnects });
+    await publisher.publish({ kind: 'service', id: 'before' });
+    await vi.waitFor(() => expect(events).toEqual([{ kind: 'service', id: 'before' }]));
+    expect(reconnects).not.toHaveBeenCalled();
+
+    expect(await dropRedisConnections(redis, `${prefix}${invalidationChannel}`)).toBe(1);
+
+    await vi.waitFor(() => expect(reconnects).toHaveBeenCalledTimes(1), { timeout: 5_000 });
+    await publisher.publish({ kind: 'service', id: 'after' });
+    await vi.waitFor(() => expect(events).toEqual([{ kind: 'service', id: 'before' }, { kind: 'service', id: 'after' }]));
+  });
+
+  it('stops telling a subscriber about reconnects once it unsubscribes', async () => {
+    const prefix = `${redis.prefix}unsubscribed:`;
+    const subscriber = createBus(prefix);
+    const kept = vi.fn();
+    const dropped = vi.fn();
+    await subscriber.subscribe(() => undefined, { onReconnect: kept });
+    const unsubscribe = await subscriber.subscribe(() => undefined, { onReconnect: dropped });
+    await unsubscribe();
+
+    await dropRedisConnections(redis, `${prefix}${invalidationChannel}`);
+
+    await vi.waitFor(() => expect(kept).toHaveBeenCalledTimes(1), { timeout: 5_000 });
+    expect(dropped).not.toHaveBeenCalled();
   });
 });
