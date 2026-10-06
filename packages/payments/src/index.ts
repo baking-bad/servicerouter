@@ -12,8 +12,8 @@ export { createCdpRequestSigner } from './x402/cdp.js';
 export type { CdpApiKey, CdpRequestSigner } from './x402/cdp.js';
 export { createFacilitator, FacilitatorUnavailableError } from './x402/facilitator.js';
 export type { Facilitator, FacilitatorOptions } from './x402/facilitator.js';
-export { createAssetLookup, createFacilitatorLookup, createFacilitators, initializeX402 } from './x402/setup.js';
-export type { FacilitatorsOptions, X402Asset, X402Setup, X402SetupOptions } from './x402/setup.js';
+export { cardanoL1Confirmations, cardanoTransferMethod, checkFacilitators, createAssetLookup, createFacilitatorLookup, createFacilitators, initializeX402 } from './x402/setup.js';
+export type { CheckFacilitatorsOptions, FacilitatorsOptions, X402Asset, X402Setup, X402SetupOptions } from './x402/setup.js';
 export {
   createX402Rail, encodeSettleReceipt, fromSettlementRequest, paymentResponseHeader, settlementPending, toSettlementRequest,
 } from './x402/rail.js';

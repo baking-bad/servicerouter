@@ -47,6 +47,13 @@ const body = async (response: Response): Promise<unknown> => {
 // 4xx answers that say nothing about the payment: our auth, a timeout, or a rate limit
 const notRefusals = new Set([401, 403, 408, 429]);
 
+// Answers that say the facilitator can't decide yet, and to ask again: the Cardano facilitator's chain
+// backend is down (CF-6). Not a refusal, so the outcome is unknown, like a 503's
+const retryableReasons = new Set(['exact_cardano_facilitator_chain_lookup_failed']);
+
+const retryable = (answer: unknown): boolean =>
+  isRecord(answer) && [answer['errorReason'], answer['invalidReason']].some(reason => typeof reason === 'string' && retryableReasons.has(reason));
+
 const isVerifyResponse = (value: unknown): value is VerifyResponse => isRecord(value) && typeof value['isValid'] === 'boolean';
 
 const isSettleResponse = (value: unknown): value is SettleResponse =>
@@ -59,8 +66,8 @@ const isSupportedResponse = (value: unknown): value is SupportedResponse =>
  * A facilitator over HTTP (PR-5, PR-6): `GET /supported`, `POST /verify`, `POST /settle`, with the body
  * the x402 SDK's client sends. A `4xx` that carries a verify or settle answer is that answer. Any other
  * `4xx` on verify or settle refuses the payment, as CDP's `400` for a malformed one does, except `401`,
- * `403`, `408`, and `429`. Those, a timeout, a failed connection, a `5xx`, or an answer that isn't one
- * throw FacilitatorUnavailableError.
+ * `403`, `408`, and `429`. Those, a timeout, a failed connection, a `5xx`, an answer that isn't one, or
+ * one that says to ask again later (the Cardano chain backend is down) throw FacilitatorUnavailableError.
  */
 export const createFacilitator = ({
   name, url, signer, requestTimeoutMs, settleTimeoutMs, fetch: send = fetch,
@@ -94,7 +101,7 @@ export const createFacilitator = ({
       throw new FacilitatorUnavailableError(name, error instanceof Error && error.name === 'TimeoutError' ? 'timeout' : 'connection failed', { cause: error });
     }
     const answer = await body(response);
-    if (response.status < 500 && accept(answer))
+    if (response.status < 500 && accept(answer) && !retryable(answer))
       return answer;
     // A 4xx refuses the payment. Auth, timeout, and rate limit answers are ours to fix, not the buyer's.
     if (refused && response.status >= 400 && response.status < 500 && !notRefusals.has(response.status))

@@ -15,6 +15,21 @@ export const paymentResponseHeader = 'payment-response';
 export const settlementPending = 'settlement_pending';
 const reasonPattern = /^[a-z0-9_]{1,64}$/;
 
+// The transfer method each namespace's `exact` scheme uses when a quote names none
+const defaultTransferMethods: Readonly<Record<string, string>> = { eip155: 'eip3009', cardano: 'default' };
+
+/**
+ * Whether a payment uses the transfer method its quote does (PR-8). The SDK matches a paid quote that
+ * merely contains ours, so one that adds `assetTransferMethod: "masumi"` or `"script"` on Cardano, or
+ * `"permit2"` on EVM, would otherwise pass.
+ */
+const sameTransferMethod = (requirements: PaymentRequirements, payload: PaymentPayload): boolean => {
+  const paid = payload.accepted.extra?.['assetTransferMethod'];
+  const quoted = requirements.extra['assetTransferMethod'] ?? defaultTransferMethods[requirements.network.split(':')[0]!];
+
+  return paid === undefined || paid === quoted;
+};
+
 /** What the x402 rail keeps between verify and settle. */
 export interface X402Authorization extends Authorization {
   readonly rail: 'x402';
@@ -122,7 +137,8 @@ export const createX402Rail = ({ setup, recorder, ledger, logger }: X402RailOpti
     },
     authorize: async (credential, quote) => {
       const payload = decode(credential);
-      const requirements = server.findMatchingRequirements(await requirementsFor(quote), payload);
+      const matched = server.findMatchingRequirements(await requirementsFor(quote), payload);
+      const requirements = matched && sameTransferMethod(matched, payload) ? matched : undefined;
       if (!requirements)
         throw new PaymentInvalidError('The payment doesn\'t match an option for this price. Request the resource again for the current options.');
       const asset = setup.assetName(requirements.network, requirements.asset);
