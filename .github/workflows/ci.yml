@@ -7,12 +7,10 @@ on:
       - dev
     paths-ignore:
       - 'docs/**'
-      - 'demo/**'
       - '**.md'
   pull_request:
     paths-ignore:
       - 'docs/**'
-      - 'demo/**'
       - '**.md'
   workflow_dispatch:
     inputs:
