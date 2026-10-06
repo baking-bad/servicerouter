@@ -10,7 +10,7 @@ export type {
   CompiledServiceConfigResult, ParsedServiceConfig, ParseServiceConfigResult, ServiceConfigResult, ServiceConfigSource,
   ServiceRuntimeContext,
 } from './validate.js';
-export { normalizePathText, targetPath } from './runtime.js';
+export { declaresStatus, normalizePathText, targetPath } from './runtime.js';
 export type {
   CredentialApplication, CredentialReference, OperationDocs, OperationMatch, RuntimeOperation, RuntimeUpstream, ServiceRuntime,
   ServiceState,

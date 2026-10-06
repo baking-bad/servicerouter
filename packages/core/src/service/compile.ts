@@ -231,6 +231,7 @@ export const compileRuntimeDrafts = (input: CompileServiceRuntimeInput): Compile
         price: operationPrice,
         enabled: configured?.route.enabled ?? true,
         credentials: entry.credentials,
+        responses: operation.responses,
         docs: {
           operationId: operation.operationId,
           summary: operation.summary,

@@ -58,6 +58,11 @@ export interface RuntimeOperation {
   readonly enabled: boolean;
   /** The upstream's credentials, in config order. All of them are sent */
   readonly credentials: readonly CredentialReference[];
+  /**
+   * The keys of the operation's `responses`: codes such as `200`, ranges such as `2XX`, and `default`.
+   * The proxy passes only a declared status (PX-7). See `declaresStatus`
+   */
+  readonly responses: readonly string[];
   readonly docs: OperationDocs;
 }
 
@@ -119,3 +124,10 @@ export const targetPath = (operation: RuntimeOperation, params: Readonly<Record<
 
     return params[name]!;
   });
+
+/**
+ * Whether the operation declares this response status (PX-7): its code, its range such as `2XX`, or
+ * `default`. An operation without `responses` declares none, so the proxy passes none of its answers.
+ */
+export const declaresStatus = (operation: Pick<RuntimeOperation, 'responses'>, status: number): boolean =>
+  operation.responses.some(key => key === 'default' || key === String(status) || key === `${Math.floor(status / 100)}XX`);

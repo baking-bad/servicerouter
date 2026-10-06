@@ -12,14 +12,23 @@ export interface InvalidationEvent {
 export type InvalidationHandler = (event: InvalidationEvent) => void | Promise<void>;
 export type Unsubscribe = () => Promise<void>;
 
+export interface InvalidationSubscribeOptions {
+  /**
+   * Called each time the subscription is back after its connection dropped, once it receives events
+   * again. Events published while it was down are lost, so a cache drops everything it holds.
+   */
+  readonly onReconnect?: () => void | Promise<void>;
+}
+
 /**
  * Port: tells every replica that a cached item changed. Delivery is best effort: a replica that is
- * disconnected when an event is published misses it, so caches still expire on their own.
+ * disconnected when an event is published misses it. It learns of the gap through `onReconnect`, and
+ * caches still expire on their own.
  */
 export interface InvalidationBus {
   publish(event: InvalidationEvent): Promise<void>;
   /** Resolves once the handler is subscribed: it receives every event published after that. */
-  subscribe(handler: InvalidationHandler): Promise<Unsubscribe>;
+  subscribe(handler: InvalidationHandler, options?: InvalidationSubscribeOptions): Promise<Unsubscribe>;
 }
 
 // Extra fields are allowed, so a newer publisher can add some without breaking older subscribers

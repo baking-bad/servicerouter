@@ -11,10 +11,19 @@ export interface Operation {
   // The operation's own, or else the path item's
   readonly summary: string | undefined;
   readonly description: string | undefined;
+  // The keys of its `responses`: status codes such as `200`, ranges such as `2XX`, and `default`
+  readonly responses: readonly string[];
 }
 
 const optionalText = (...values: readonly unknown[]): string | undefined =>
   values.find((value): value is string => typeof value === 'string');
+
+const responseKey = /^(?:[1-5][0-9]{2}|[1-5]XX|default)$/;
+
+// The response keys OpenAPI defines, in a single form. Anything else, such as an `x-` extension, isn't a status.
+const responseKeys = (responses: unknown): readonly string[] => isRecord(responses)
+  ? Object.keys(responses).map(key => key === 'default' ? key : key.toUpperCase()).filter(key => responseKey.test(key))
+  : [];
 
 export type OperationsResult =
   | { readonly ok: true; readonly operations: readonly Operation[] }
@@ -62,6 +71,7 @@ export const operationsFromPaths = (paths: unknown): OperationsResult => {
         operationId,
         summary: optionalText(operation['summary'], pathItem['summary']),
         description: optionalText(operation['description'], pathItem['description']),
+        responses: responseKeys(operation['responses']),
       });
     }
   }
