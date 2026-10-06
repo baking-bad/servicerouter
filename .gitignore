@@ -18,3 +18,5 @@ CLAUDE.local.md
 
 # TypeScript project-reference metadata is generated alongside package output.
 *.tsbuildinfo
+
+# The NOWNodes demo's local files: keys, its submitted config, the rehearsal's state, the treasury address

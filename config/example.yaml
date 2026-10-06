@@ -82,6 +82,8 @@ categories:                     # CI-3
     title: Market data
   - id: ai/image-generation
     title: Image generation
+  - id: blockchain              # Multi-chain upstream category
+    title: Blockchain
 
 rateLimits:                     # PX-13, PA-5. Illustrations
   paymentKey: { requests: 600, windowSeconds: 60 }
