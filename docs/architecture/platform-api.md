@@ -57,15 +57,20 @@ The public HTTP surface of the control plane, plus a private internal API.
 
 ## Error codes
 
-Every `401` carries `WWW-Authenticate: Bearer`. Service endpoints add their codes in step 2 (T06).
+Every `401` carries `WWW-Authenticate: Bearer`.
 
 | Status | Code | When |
 |---|---|---|
-| `400` | `invalid_request` | A malformed request: invalid JSON, or a body that fails its schema. |
+| `400` | `invalid_request` | A malformed request: invalid JSON, a body that fails its schema, or a malformed submit envelope or secret. |
+| `400` | `invalid_config` | The service config fails validation. `details` lists every problem with its path, line, and column ([SR-12](service-registry.md)). |
+| `400` | `service_id_mismatch` | The config's `service.id` isn't the ID in the URL. |
+| `400` | `unused_secret` | A sent secret that no upstream of the config uses, so it has no host to be bound to ([SC-10](secrets.md)). |
 | `401` | `unauthorized` | No `Authorization: Bearer` key. |
 | `401` | `invalid_key` | An unknown, revoked, or malformed key. |
 | `401` | `wrong_key_type` | A payment key ([AK-4](accounts-and-keys.md)). |
-| `404` | `not_found` | An unknown route. |
+| `403` | `forbidden` | The service belongs to another account. |
+| `404` | `not_found` | An unknown route, service, or revision. |
+| `409` | `secret_origin_mismatch` | A rollback, or a racing submit, would send stored secrets to another host than they're sealed for ([SC-10](secrets.md)). |
 | `413` | `request_too_large` | The request body is over the limit. |
 | `415` | `unsupported_media_type` | A content type the route doesn't take. |
 | `429` | `rate_limited` | Over a per-IP limit (PA-5). |

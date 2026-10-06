@@ -116,6 +116,8 @@ credentials:                            # How the platform authenticates to upst
 - **SR-3** Fetch linked OpenAPI documents at submit time through Outbound HTTP, with `sameHost` redirects and size and time limits. Store a snapshot in the revision. Store inline `paths` as they are. Never fetch a document while serving a call.
   - Links are fetched concurrently. A failure is an issue at the link that names the host and what went wrong, never anything from the response.
 - **SR-4** Revisions are immutable and numbered per service. Keep the config as submitted, for the seller, and normalized, for compiling. A submit identical to the active revision is a no-op.
+  - Identical means the same parsed config and the same OpenAPI documents, compared as canonical JSON. Formatting, comments, key order, and the media type don't count. A changed OpenAPI document makes a new revision.
+  - Revision numbers are assigned under a row lock on the service, so concurrent submits get consecutive numbers.
 - **SR-5** Compiling is a pure function of the revision and platform config. It returns a deeply frozen `ServiceRuntime`:
   - state;
   - an operation matcher;
@@ -127,10 +129,14 @@ credentials:                            # How the platform authenticates to upst
   - Template literals are stored percent-encoded in one normalized form, `normalizePathText`. The proxy normalizes request segments with the same function.
 - **SR-6** Route keys are `operationId`, or `<upstream>/<operationId>` when two upstreams share an `operationId`. A key splits on the first `/` only. Upstream names are `[a-z0-9-]`, so they never clash.
 - **SR-7** Activation moves the pointer and publishes the service ID on the Redis invalidation channel. Rollback activates an earlier revision the same way.
+  - `POST /v1/services/{id}/rollback` with `{ "revision": n }` takes any stored revision, so it also rolls forward. The active one answers `changed: false`. An unknown one is `404 not_found`.
+  - The event is published after the commit, with a 2 s deadline. A failure is logged, and the request still succeeds: caches expire on their own.
 - **SR-8** Service state: `pending` until every upstream host is verified, then `live`. `suspended` while any host is suspended ([Ownership verification](ownership-verification.md)). The proxy serves only `live` services.
+  - The `OwnershipStatus` port answers whether every upstream host of a service is verified. Until step 8, its adapter `assumeHostsVerified` says yes, so an activation is `live` (S2-D1).
 - **SR-9** Reserved fields fail validation with a clear "not supported yet" error. They are never silently ignored.
 - **SR-10** Price changes apply to new requests at once, unless the revision also changes `payouts` (SR-13).
 - **SR-11** Every submit, activation, and rollback writes the audit log.
+  - `service.submit` `{ revision, changed }`, `service.activate` `{ revision, previousRevision, state, payoutsChanged }`, and `service.rollback` `{ revision, previousRevision, changed }`. The actor is the account, the subject the service, and every entry carries the request ID.
 - **SR-12** `PUT /v1/services/{id}` takes the config alone, as YAML or JSON, or a JSON envelope with its secrets:
 
   ```json
@@ -143,4 +149,14 @@ credentials:                            # How the platform authenticates to upst
   - A JSON body with a top-level `config` field is an envelope. `config` is the config as a YAML string or a JSON object.
   - `secrets` maps secret names to values. Omitted names keep their values. `null` deletes one. [SC-9](secrets.md) covers how they're handled.
   - Secrets are written even when the config is a no-op (SR-4).
+  - Media types: `application/json` (the config, or the envelope), and `application/yaml`, `application/x-yaml`, or `text/yaml`. The body may be up to 2 MiB; the config itself up to 1 MiB ([CK-8](common-kit.md)). The envelope takes only `config` and `secrets`.
+  - Responses: `201` when the submit created the service, `200` otherwise, with `{ id, revision, changed, state, warnings }`. A service owned by another account is `403 forbidden` on every endpoint.
+  - Config errors are `400 invalid_config`: `{ "error": { "code", "message", "details": [{ "path", "line", "column", "message" }], "warnings": [...] } }`. `line` and `column` are `null` when a problem has no position. Positions come for YAML, JSON, an envelope's YAML string, and an envelope's config object.
 - **SR-13** An activation that changes `payouts`, including a rollback, waits for a payout confirmation ([OV-10](ownership-verification.md)). Until then, the active revision keeps serving. The service's first activation needs no confirmation. Ownership verification arrives in step 8. Until then, payout changes activate at once.
+
+## Storage
+
+- `services`: the ID, the owning account, the state, and the active revision, a foreign key to `service_revisions`.
+- `service_revisions`: unique by service and number. The config as submitted with its media type, the parsed config, and the OpenAPI snapshots by link, as `json` so key order survives. No update or delete.
+- `service_secrets`: owned by [Secrets](secrets.md).
+- For the proxy, `loadForServing(id)` returns a `ServingService` read in one snapshot: the state, the active revision, the parsed config, the OpenAPI snapshots, and the sealed secrets.

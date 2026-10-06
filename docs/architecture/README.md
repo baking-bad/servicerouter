@@ -280,6 +280,7 @@ Redis runs with AOF on and `noeviction`. The MPP replay store must never lose a 
 - Apps read `DATABASE_URL` and `REDIS_URL` from the environment. They carry passwords, so they never go in platform config (S1-D2).
 - Ports come from the environment: `PORT` for the public listener and `METRICS_PORT` for metrics, with `HOST` defaulting to `0.0.0.0`. Defaults: proxy 8080 and 9080, API 8081 and 9081, workers 9082 only, Signer 8083 and 9083, website 8084 and 9084. The `prometheus-port` label is the app's metrics port.
 - The Platform API reads `TRUST_PROXY`, Traefik's addresses or network, so its per-IP limits see the client's address rather than Traefik's.
+- The secrets key pair ([SC-2](secrets.md)): the Platform API reads `SECRETS_PUBLIC_KEY`, and the proxy `SECRETS_PRIVATE_KEYS`, one or more PEM keys. A literal `\n` in the value becomes a newline, so a key fits on one line.
 - CORS on the public hosts exposes the payment headers ([PX-16](proxy.md)).
 
 ## 7. Build order
