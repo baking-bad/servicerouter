@@ -7,3 +7,4 @@ export * from './ledger.js';
 export * from './ownership.js';
 export * from './deposits.js';
 export * from './serviceDocuments.js';
+export * from './payouts.js';

@@ -8,6 +8,7 @@ import {
 
 import type { DatabaseExecutor } from './postgres.js';
 import { payments } from './schema/ledger.js';
+import { payoutItems, payouts } from './schema/payouts.js';
 
 export interface PaymentRepositoryOptions {
   // The database, or a transaction to join
@@ -209,7 +210,12 @@ export const createPaymentRepository = ({ db, clock }: PaymentRepositoryOptions)
         calls += row.calls;
       }
 
-      return { calls, earnedByRail, earned, fee, paidOut: 0n };
+      // LG-10: paid out is what confirmed payouts paid of this service (PO-7)
+      const [paid] = await db.select({ amount: sql<string>`coalesce(sum(${payoutItems.amount}), 0)::text` })
+        .from(payoutItems).innerJoin(payouts, eq(payouts.id, payoutItems.payoutId))
+        .where(and(eq(payoutItems.serviceId, serviceId), eq(payouts.status, 'confirmed')));
+
+      return { calls, earnedByRail, earned, fee, paidOut: BigInt(paid?.amount ?? '0') };
     },
     listExpiredHolds: async ({ createdBefore, limit, after }) => {
       const rows = await db.select().from(payments)

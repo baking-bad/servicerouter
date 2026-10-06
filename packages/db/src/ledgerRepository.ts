@@ -20,6 +20,8 @@ export const ledgerAccountIds = {
   depositsClearing: 'platform:deposits_clearing',
   // The on-chain money of one asset, such as `platform:treasury:base-usdc`
   treasury: (asset: string) => `platform:treasury:${asset}`,
+  // What rebalancing cost: the USD lost between two assets (TR-4, TR-6)
+  conversion: 'platform:conversion',
 } as const;
 
 export interface LedgerOptions {
@@ -53,6 +55,23 @@ export interface Ledger {
    */
   settle(input: SettleInput): Promise<CaptureResult>;
   balance(accountId: string): Promise<CreditsBalance>;
+  /**
+   * Books a confirmed payout (PO-7): seller earned → the payout asset's treasury, once per payout ID.
+   * Returns the transaction, and whether it moved money now.
+   */
+  payout(input: { readonly payoutId: string; readonly sellerAccountId: string; readonly amount: MicroUsd; readonly asset: string }): Promise<CreditResult>;
+  /**
+   * Books a rebalancing an operator did (TR-4): the treasury of one asset → another's, with the USD
+   * lost between them as conversion cost (TR-6). Idempotent by reference.
+   */
+  treasuryTransfer(input: {
+    readonly reference: string;
+    readonly from: { readonly asset: string; readonly amount: MicroUsd };
+    readonly to: { readonly asset: string; readonly amount: MicroUsd };
+    readonly requestId?: string;
+  }): Promise<CreditResult>;
+  /** Ledger accounts' balances by ID. An account never used is absent. */
+  balancesOf(ledgerAccountIds: readonly string[]): Promise<ReadonlyMap<string, bigint>>;
   /** Each key's spend: on the given UTC day, and in total. Keys without spend aren't in the map. */
   keySpend(keyIds: readonly string[], day: string): Promise<ReadonlyMap<string, KeySpend>>;
 }
@@ -341,6 +360,67 @@ export const createLedger = ({ db, clock, ids }: LedgerOptions): Ledger => {
         known?.add(account.id);
 
       return result;
+    },
+
+    payout: ({ payoutId, sellerAccountId, amount, asset }) => withTransaction(db, async tx => {
+      if (amount <= 0n)
+        throw new RangeError('A payout must be more than zero');
+      const now = clock.now();
+      const treasury: LedgerAccount = { id: ledgerAccountIds.treasury(asset), accountId: undefined, type: 'treasury', mayGoNegative: true };
+      await ensureAccounts(tx, [...accountsOf(sellerAccountId, 'earned'), treasury], now);
+      const transactionId = await insertTransaction(tx, 'payout', payoutId, undefined, now);
+      if (!transactionId) {
+        const [existing] = await tx.select({ id: ledgerTransactions.id, createdAt: ledgerTransactions.createdAt }).from(ledgerTransactions)
+          .where(and(eq(ledgerTransactions.operation, 'payout'), eq(ledgerTransactions.reference, payoutId)));
+
+        return { transactionId: existing!.id, createdAt: existing!.createdAt, replayed: true };
+      }
+      // Earned can't go below zero: a payout never pays more than was earned
+      const refused = await post(tx, transactionId, [
+        { ledgerAccountId: ledgerAccountIds.earned(sellerAccountId), amount: -amount },
+        { ledgerAccountId: treasury.id, amount },
+      ], now);
+      if (refused !== undefined)
+        throw new Error(`A payout would take ${refused} below zero`);
+
+      return { transactionId, createdAt: now, replayed: false };
+    }),
+
+    treasuryTransfer: ({ reference, from, to, requestId }) => withTransaction(db, async tx => {
+      if (from.amount <= 0n || to.amount <= 0n)
+        throw new RangeError('A treasury transfer moves more than zero');
+      if (to.amount > from.amount)
+        throw new RangeError('A treasury transfer can\'t gain USD: the platform absorbs conversion costs (TR-6)');
+      const now = clock.now();
+      const accounts: LedgerAccount[] = [
+        { id: ledgerAccountIds.treasury(from.asset), accountId: undefined, type: 'treasury', mayGoNegative: true },
+        { id: ledgerAccountIds.treasury(to.asset), accountId: undefined, type: 'treasury', mayGoNegative: true },
+        { id: ledgerAccountIds.conversion, accountId: undefined, type: 'conversion', mayGoNegative: true },
+      ];
+      await ensureAccounts(tx, accounts, now);
+      const transactionId = await insertTransaction(tx, 'treasury_transfer', reference, requestId, now);
+      if (!transactionId) {
+        const [existing] = await tx.select({ id: ledgerTransactions.id, createdAt: ledgerTransactions.createdAt }).from(ledgerTransactions)
+          .where(and(eq(ledgerTransactions.operation, 'treasury_transfer'), eq(ledgerTransactions.reference, reference)));
+
+        return { transactionId: existing!.id, createdAt: existing!.createdAt, replayed: true };
+      }
+      // The source treasury holds less, the target more, and the difference is the conversion cost
+      await post(tx, transactionId, [
+        { ledgerAccountId: ledgerAccountIds.treasury(from.asset), amount: from.amount },
+        { ledgerAccountId: ledgerAccountIds.treasury(to.asset), amount: -to.amount },
+        { ledgerAccountId: ledgerAccountIds.conversion, amount: to.amount - from.amount },
+      ], now);
+
+      return { transactionId, createdAt: now, replayed: false };
+    }),
+
+    balancesOf: async ids => {
+      if (ids.length === 0)
+        return new Map();
+      const rows = await db.select({ id: balances.ledgerAccountId, balance: balances.balance }).from(balances).where(inArray(balances.ledgerAccountId, [...ids]));
+
+      return new Map(rows.map(row => [row.id, row.balance]));
     },
 
     release: ({ paymentId }) => withTransaction(db, async tx => {

@@ -33,3 +33,9 @@ export { createDepositRepository, depositReference } from './depositRepository.j
 export type { DepositAddressView, DepositRepository, DepositRepositoryOptions } from './depositRepository.js';
 export { createServiceDocumentRepository } from './serviceDocumentRepository.js';
 export type { ServiceDocumentRepository, StoredServiceDocument } from './serviceDocumentRepository.js';
+export { createPayoutRepository } from './payoutRepository.js';
+export type {
+  NewPayoutRun, PayoutRecord, PayoutRepository, PayoutRepositoryOptions, PayoutRunRecord, PayoutTransactionRecord, ServiceDueRow,
+} from './payoutRepository.js';
+export { createTreasuryRepository } from './treasuryRepository.js';
+export type { TreasuryRepository, TreasuryTransferRecord } from './treasuryRepository.js';
