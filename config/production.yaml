@@ -65,7 +65,7 @@ mpp:
 
 deposits:                       # Buyers top up credits with USDM on Cardano
   asset: cardano-usdm
-  confirmations: 15
+  confirmations: 1 # Only for Token2049 Hackathon
 
 payouts:
   assets: [cardano-usdm]
