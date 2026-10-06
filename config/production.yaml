@@ -159,6 +159,6 @@ signer:                         # Payment routing's hot wallets (P-9). These cap
   maxPerCall: "0.1"
   maxPerNetworkPerHour: "5"
   maxPerNetworkPerDay: "20"
-  # wallets:                    # Optional. TR-3: the hot wallets' public addresses, in quotes, for the balance monitor. Never their keys
-  #   base: "0x…"               # SIGNER_BASE_KEY's address
-  #   tempo: "0x…"              # SIGNER_TEMPO_KEY's address: the same as Base's when one key serves both
+  wallets:                      # TR-3: the hot wallets' public addresses, for the balance monitor. Never their keys
+    base: "0xcf0a93C0e051DCceFc14C26A3Ec42342cf2E9704"    # SIGNER_BASE_KEY's address
+    tempo: "0xcf0a93C0e051DCceFc14C26A3Ec42342cf2E9704"   # SIGNER_TEMPO_KEY's address: one key serves both
