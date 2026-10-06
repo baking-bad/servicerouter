@@ -1,7 +1,7 @@
 import {
-  readHost, readPort, readSecret, systemClock, type AppContext, type RunningApp,
+  readCommit, readHost, readLogLevel, readPort, readSecret, systemClock, type AppContext, type RunningApp,
 } from '@servicerouter/common';
-import { createBlockfrostClient, findAsset, loadPlatformConfig, platformDefaults, type PlatformConfig } from '@servicerouter/core';
+import { createBlockfrostClient, findAsset, loadPlatformConfig, platformDefaults, platformSummary, type PlatformConfig } from '@servicerouter/core';
 import { createPostgres, createRedis } from '@servicerouter/db';
 import { checkFacilitators, createFacilitators, createMppSettlementCheck, createTempoRpc, type MppSettlementCheck } from '@servicerouter/payments';
 
@@ -42,7 +42,8 @@ const blockfrostUrlFor = (config: PlatformConfig, networkId: string): string | u
 /** Wires the production dependencies from platform config and the environment, then listens. */
 export const startWorkers = async ({ env, logger }: AppContext): Promise<RunningApp> => {
   const config = await loadPlatformConfig({ env });
-  logger.level = config.logger.level;
+  // LOG_LEVEL overrides the config's level (L-11)
+  logger.level = readLogLevel(env, config.logger.level);
   const listen = {
     host: readHost(env),
     port: readPort(env, 'METRICS_PORT', defaultMetricsPort),
@@ -97,13 +98,27 @@ export const startWorkers = async ({ env, logger }: AppContext): Promise<Running
     config, logger, postgres, redis, facilitators, balanceReaders,
     ...(mppCheck ? { mppCheck } : {}), ...(blockfrost ? { blockfrost } : {}), ...(payoutWallet ? { payoutWallet } : {}),
   });
+  let port;
   try {
-    await server.listen(listen);
+    port = await server.listen(listen);
   }
   catch (error) {
     await closeConnections();
     throw error;
   }
+  // L-1: once, what this replica runs. Network names only: an RPC URL can carry a key, so it stays out.
+  logger.info({
+    app: 'workers',
+    commit: readCommit(env) ?? null,
+    logLevel: logger.level,
+    ...platformSummary(config),
+    jobs: server.jobs,
+    blockfrost: blockfrost !== undefined,
+    payouts: payoutWallet !== undefined,
+    settlementFollowUp: { facilitators: facilitators.map(facilitator => facilitator.name), mpp: mppCheck !== undefined },
+    treasuryReaders: { cardano: balanceReaders.cardano !== undefined, evm: [...evmRpcUrls.keys()] },
+    ports: { metricsPort: port },
+  }, 'Started');
 
   return {
     close: async () => {

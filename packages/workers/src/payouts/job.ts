@@ -111,6 +111,7 @@ export const createPayoutsJob = ({ repository, wallet, blockfrost, clock, ids, l
       await blockfrost.submitTransaction(transaction.cbor);
     }
     catch (error) {
+      // Never the signed transaction: its hash only (rule 10)
       if (error instanceof TransactionRejectedError)
         logger.warn({ runId, txHash: transaction.txHash }, 'The chain refused a payout transaction: it is followed until its window ends');
       else
@@ -137,6 +138,8 @@ export const createPayoutsJob = ({ repository, wallet, blockfrost, clock, ids, l
       submitted += 1;
     }
     await repository.setRunStatus(runId, 'submitted');
+    // L-8: each payout run state change
+    logger.info({ runId, from: 'approved', to: 'submitted', transactions: submitted }, 'A payout run was submitted');
 
     return { submitted, failed: 0 };
   };
@@ -171,6 +174,9 @@ export const createPayoutsJob = ({ repository, wallet, blockfrost, clock, ids, l
     if (!statuses.some(status => status === 'built' || status === 'submitted')) {
       const lost = statuses.filter(status => status === 'failed').length;
       await repository.setRunStatus(runId, lost === 0 ? 'confirmed' : 'failed', lost === 0 ? undefined : `${lost} of ${statuses.length} transactions failed`);
+      // L-8: the run's last state change
+      logger[lost === 0 ? 'info' : 'error']({ runId, from: 'submitted', to: lost === 0 ? 'confirmed' : 'failed', transactions: statuses.length, failed: lost, ...lost === 0 ? {} : { alert: true } },
+        lost === 0 ? 'A payout run was confirmed' : 'A payout run failed: its failed payouts wait for the next run');
     }
 
     return { confirmed, failed };

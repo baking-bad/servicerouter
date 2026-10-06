@@ -9,7 +9,7 @@ import { createErrorHandler, notFoundResponse, type ErrorStatusTable } from './e
 import { registerHealthRoutes, type ReadinessCheck } from './health.js';
 import { createMetricsRegistry, registerHttpMetrics, registerMetricsRoute } from './metrics.js';
 import { createRequestIdGenerator, requestIdHeader } from './requestId.js';
-import { RequestLogController } from './requestLog.js';
+import { recordErrorCode, RequestLogController } from './requestLog.js';
 
 const defaultBodyLimit = 1_048_576;
 
@@ -94,7 +94,11 @@ const createFastify = ({
     genReqId: createRequestIdGenerator(requestIds),
   });
   app.setErrorHandler(createErrorHandler(errorStatuses));
-  app.setNotFoundHandler(async (_request, reply) => reply.status(404).send(notFoundResponse.body));
+  app.setNotFoundHandler(async (request, reply) => {
+    recordErrorCode(request, notFoundResponse.body.error.code);
+
+    return reply.status(404).send(notFoundResponse.body);
+  });
 
   return app;
 };

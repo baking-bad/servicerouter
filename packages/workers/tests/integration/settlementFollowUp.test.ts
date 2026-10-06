@@ -66,13 +66,16 @@ const settling = async ({ receipt, request = true }: { receipt?: string; request
   return id;
 };
 
-const followUp = (facilitatorFor = createFacilitatorLookup(config, createFacilitators({ config, cdpApiKey: () => { throw new Error('none'); }, clock }))) => createSettlementFollowUp({
+const followUp = (
+  facilitatorFor = createFacilitatorLookup(config, createFacilitators({ config, cdpApiKey: () => { throw new Error('none'); }, clock })),
+  logger = createLogger({ level: 'silent' }),
+) => createSettlementFollowUp({
   payments: payments(),
   ledger: createLedger({ db: database.db, clock, ids: randomIdGenerator }),
   facilitatorFor,
   assetName: createAssetLookup(config),
   feeBps: config.feeBps,
-  logger: createLogger({ level: 'silent' }),
+  logger,
 })();
 
 const statusOf = async (id: string) => (await payments().find(id))?.status;
@@ -232,5 +235,32 @@ describe('settlement follow-up for MPP (WK-6, PR-9)', () => {
     expect((unset as SettlementFollowUpError).result).toMatchObject({ skipped: 1 });
     expect(await statusOf(waiting.id)).toBe('settling');
     await followUpMpp(scriptedCheck(new Map([[waiting.hash, { status: 'failed', reason: 'expired' }]])).check);
+  });
+});
+
+describe('the follow-up\'s lines (L-8)', () => {
+  it('logs each settlement it finishes, and each that fails for good with the facilitator\'s reason, by payment ID', async () => {
+    const lines: Record<string, unknown>[] = [];
+    const logger = createLogger({ level: 'debug' }, { write: (line: string) => lines.push(JSON.parse(line) as Record<string, unknown>) });
+    const settled = await settling({ receipt: 'eyJ9' });
+    await followUp(undefined, logger);
+    const failing = await settling();
+    facilitator.handle('/settle', facilitatorAnswers.failed('invalid_exact_evm_payload_authorization_valid_before'));
+    await followUp(undefined, logger);
+    const undecided = await settling();
+    facilitator.handle('/settle', facilitatorAnswers.unavailable);
+    await expect(followUp(undefined, logger)).rejects.toBeInstanceOf(SettlementFollowUpError);
+
+    expect(lines.find(line => line['paymentId'] === settled && line['msg'] === 'The settlement follow-up settled a payment')).toMatchObject({
+      level: 30, rail: 'x402', network: base, facilitator: 'cdp', transaction: expect.any(String), needsReview: false,
+    });
+    expect(lines.find(line => line['paymentId'] === failing && line['msg'] === 'A settlement failed for good. Nothing was booked.')).toMatchObject({
+      level: 40, facilitator: 'cdp', reason: 'invalid_exact_evm_payload_authorization_valid_before',
+    });
+    expect(lines.find(line => line['paymentId'] === undecided && line['msg'] === 'A settlement is still undecided')).toMatchObject({
+      level: 40, facilitator: 'cdp', error: { code: 'facilitator_unavailable', path: '/settle', status: 503, network: base },
+    });
+    facilitator.reset();
+    await followUp();
   });
 });

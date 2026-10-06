@@ -46,8 +46,20 @@ let apiUrl: string;
 let internalUrl: string;
 let proxyUrl: string;
 let usdc: string;
-const signerWallet = privateKeyToAccount(generatePrivateKey());
+const signerKey = generatePrivateKey();
+const signerWallet = privateKeyToAccount(signerKey);
 const paidRequests: { path: string; amount: string; to: string }[] = [];
+// The PAYMENT-SIGNATURE values the target received: none may reach a log
+const signedHeaders: string[] = [];
+// Every line the three apps write, debug included, each with its app's name
+const lines: Record<string, unknown>[] = [];
+const loggerFor = (name: string) => createLogger({ name, level: 'debug' }, {
+  write: (line: string) => {
+    lines.push(JSON.parse(line) as Record<string, unknown>);
+    if (process.env['ROUTING_LOGS'])
+      process.stdout.write(line);
+  },
+});
 
 /** The target's x402 options: a Gateway nanopayment, cheaper, and a plain USDC payment on Base. */
 const options = (amount: string): PaymentRequirements[] => [
@@ -91,11 +103,19 @@ beforeAll(async () => {
       response.writeHead(200, { 'content-type': 'application/json' }).end('{"free":true}');
       return;
     }
-    const header = request.headers['payment-signature'];
-    if (typeof header !== 'string') {
-      response.writeHead(402, { 'payment-required': challenge(url, '1000'), 'content-type': 'application/json' }).end('{}');
+    if (path === '/v1/gateway-only') {
+      const gatewayOnly = encodePaymentRequiredHeader({
+        x402Version: 2, error: 'Payment required', resource: { url, description: 'Gateway only', mimeType: 'application/json' }, accepts: options('1000').slice(0, 1),
+      } as never);
+      response.writeHead(402, { 'payment-required': gatewayOnly }).end('{}');
       return;
     }
+    const header = request.headers['payment-signature'];
+    if (typeof header !== 'string') {
+      response.writeHead(402, { 'payment-required': challenge(url, path === '/v1/expensive' ? '600000' : '1000'), 'content-type': 'application/json' }).end('{}');
+      return;
+    }
+    signedHeaders.push(header);
     const payload = decodePaymentSignatureHeader(header) as unknown as { accepted: PaymentRequirements; payload: { authorization: { to: string; value: string } } };
     paidRequests.push({ path, amount: payload.payload.authorization.value, to: payload.payload.authorization.to });
     if (path === '/v1/pricier') {
@@ -107,8 +127,11 @@ beforeAll(async () => {
       response.writeHead(500, { 'payment-response': settled }).end('{"error":"boom"}');
       return;
     }
-    response.writeHead(200, { 'content-type': 'application/json', 'payment-response': settled, location: `https://${request.servername}:${target.port}/v1/pools/next` })
-      .end(JSON.stringify({ pools: [1, 2, 3], path }));
+    // A target that names its own requests (L-2)
+    response.writeHead(200, {
+      'content-type': 'application/json', 'payment-response': settled, location: `https://${request.servername}:${target.port}/v1/pools/next`,
+      ...path === '/v1/traced' ? { 'x-request-id': 'target-request-7' } : {},
+    }).end(JSON.stringify({ pools: [1, 2, 3], path }));
   });
   http = new OutboundHttp({
     ownHosts: config.ownHosts,
@@ -118,10 +141,9 @@ beforeAll(async () => {
     connectTimeoutMs: 5_000,
     totalTimeoutMs: 5_000,
   });
-  const logger = createLogger({ level: process.env['ROUTING_LOGS'] ? 'warn' : 'silent' });
   const keys = await createTestSecretKeys();
-  signer = createSigner({ config, logger, postgres: database.postgres, redis, secret: Secret.from(signerSecret), wallets: { base: signerWallet } });
-  api = createApi({ config, logger, postgres: database.postgres, redis, sealer: keys.sealer, ownership: assumeHostsVerified, internalSecret: Secret.from(internalSecret) });
+  signer = createSigner({ config, logger: loggerFor('signer'), postgres: database.postgres, redis, secret: Secret.from(signerSecret), wallets: { base: signerWallet } });
+  api = createApi({ config, logger: loggerFor('api'), postgres: database.postgres, redis, sealer: keys.sealer, ownership: assumeHostsVerified, internalSecret: Secret.from(internalSecret) });
   const [signerPorts, apiPorts] = await Promise.all([
     signer.listen({ host: '127.0.0.1', port: 0, metricsPort: 0 }),
     api.listen({ host: '127.0.0.1', port: 0, metricsPort: 0, internalPort: 0 }),
@@ -130,7 +152,7 @@ beforeAll(async () => {
   internalUrl = `http://127.0.0.1:${apiPorts.internalPort!}`;
   const x402 = await initializeX402({ config, facilitators: createFacilitators({ config, cdpApiKey: () => { throw new Error('No CDP auth'); }, clock: { now: () => new Date() } }), timeoutMs: 5_000 });
   proxy = createApp({
-    config, logger, postgres: database.postgres, redis, opener: keys.opener, http, buyerHeaderKey: Secret.from('buyer-header-key-for-the-routing-tests'), x402,
+    config, logger: loggerFor('proxy'), postgres: database.postgres, redis, opener: keys.opener, http, buyerHeaderKey: Secret.from('buyer-header-key-for-the-routing-tests'), x402,
     signer: createSignerClient({ url: `http://127.0.0.1:${signerPorts.port}`, secret: Secret.from(signerSecret), timeoutMs: 5_000 }),
     internalApi: { url: internalUrl, secret: Secret.from(internalSecret) },
     ownershipFileUrl: host => target.url(host, '/.well-known/servicerouter.json'),
@@ -338,5 +360,105 @@ describe('payment routing (RT-1 to RT-12, SG-2, SG-3, SG-7, step 12)', () => {
     finally {
       await switchedOff.close();
     }
+  });
+});
+
+// --- Diagnostic logs (T24) ---
+
+const appLines = (app: string, requestId: string) => lines.filter(line => line['name'] === app && line['requestId'] === requestId);
+const routedCall = async (path: string, requestId: string, key: string) =>
+  fetch(`${proxyUrl}/${at('api.target.dev')}${path}`, { headers: { authorization: `Bearer ${key}`, 'x-request-id': requestId } });
+
+describe('one request ID across apps (L-2, acceptance check 3)', () => {
+  it('finds a routed call in the proxy\'s, the Signer\'s, and the internal API\'s lines, and logs the target\'s own request ID', async () => {
+    const paying = await buyer();
+
+    const response = await routedCall('/v1/traced', 'routed-trace-1', paying.key);
+
+    expect(response.status).toBe(200);
+    await expect.poll(() => appLines('api', 'routed-trace-1').some(line => line['msg'] === 'A routed endpoint was registered')).toBe(true);
+    expect(appLines('proxy', 'routed-trace-1').map(line => line['msg'])).toEqual(expect.arrayContaining(['Routing quote', 'Routed call answered', 'Request completed']));
+    expect(appLines('signer', 'routed-trace-1').map(line => line['msg'])).toEqual(expect.arrayContaining(['Signed a routed payment', 'Request completed']));
+    expect(appLines('api', 'routed-trace-1')).toEqual(expect.arrayContaining([
+      expect.objectContaining({ msg: 'A routed endpoint was registered', caller: 'proxy', host: at('api.target.dev'), path: '/v1/traced', result: 'created' }),
+      expect.objectContaining({ msg: 'Request completed', route: '/internal/v1/routed-endpoints', status: 201 }),
+    ]));
+    expect(appLines('proxy', 'routed-trace-1').find(line => line['msg'] === 'Routed call answered')).toMatchObject({ targetRequestId: 'target-request-7' });
+    // The target gets the same ID on the probe and the paid retry
+    expect(target.requests.filter(request => request.path === '/v1/traced').map(request => request.headers['x-request-id'])).toEqual(['routed-trace-1', 'routed-trace-1']);
+  });
+});
+
+describe('payment routing\'s lines (L-5)', () => {
+  it('logs the probe\'s quote, the Signer\'s signature, the target\'s status, and whether it returned a receipt', async () => {
+    const paying = await buyer();
+
+    await routedCall('/v1/routing-lines', 'routing-lines-1', paying.key);
+    await routedCall('/v1/routing-lines', 'routing-lines-2', paying.key);
+
+    const proxyLines = appLines('proxy', 'routing-lines-1');
+    expect(proxyLines.find(line => line['msg'] === 'Routing quote')).toMatchObject({
+      level: 30, host: at('api.target.dev'), path: '/v1/routing-lines', targetStatus: 402, network: base, asset: 'base-usdc', x402Version: 2,
+      price: '0.001', fee: '0.0001', quote: '0.0011', cached: false,
+    });
+    expect(proxyLines.find(line => line['msg'] === 'Routed call answered')).toMatchObject({
+      level: 30, paymentId: expect.stringMatching(/^pay_/), signatureId: expect.stringMatching(/^sig_/), payTo: targetPayTo, targetStatus: 200, receipt: true, attempt: 2,
+      durationMs: expect.any(Number),
+    });
+    await expect.poll(() => appLines('proxy', 'routing-lines-1').find(line => line['msg'] === 'Paid call finished'))
+      .toMatchObject({ rail: 'credits', host: at('api.target.dev'), path: '/v1/routing-lines', amount: '0.0011', paymentStatus: 'captured' });
+    // A repeat within the quote's TTL takes it from the cache, at debug
+    expect(appLines('proxy', 'routing-lines-2').find(line => line['msg'] === 'Routing quote')).toMatchObject({ level: 20, cached: true });
+    // L-6: the Signer's line, under the same request ID
+    expect(appLines('signer', 'routing-lines-1').find(line => line['msg'] === 'Signed a routed payment')).toMatchObject({
+      level: 30, quoteId: proxyLines.find(line => line['msg'] === 'Routed call answered')!['paymentId'], network: base, asset: 'base-usdc', amount: '0.001',
+      atomicAmount: '1000', payTo: targetPayTo, signatureId: expect.stringMatching(/^sig_/), result: 'signed',
+    });
+  });
+
+  it('logs why the probe refused: not payable with the target\'s status, no option we pay, and the host\'s reason', async () => {
+    const refusal = async (path: string, requestId: string) => {
+      await fetch(`${proxyUrl}${path}`, { headers: { 'x-request-id': requestId } });
+
+      return appLines('proxy', requestId);
+    };
+
+    expect((await refusal(`/${at('api.target.dev')}/v1/free`, 'probe-free')).find(line => line['msg'] === 'The routed target didn\'t ask for a payment'))
+      .toMatchObject({ level: 30, code: 'not_payable', host: at('api.target.dev'), targetStatus: 200 });
+    expect((await refusal(`/${at('api.target.dev')}/v1/gateway-only`, 'probe-gateway')).find(line => line['msg'] === 'The routed target offers no payment we make'))
+      .toMatchObject({ level: 30, code: 'unsupported_payment', targetStatus: 402, offered: [`exact ${base}`] });
+    expect((await refusal(`/${at('optout.target.dev')}/v1/pools`, 'probe-optout')).find(line => line['msg'] === 'Routing refused the host'))
+      .toMatchObject({ level: 30, code: 'host_not_allowed', reason: 'opted_out', host: at('optout.target.dev') });
+    expect((await refusal('/api.servicerouter.ai/v1/x', 'probe-own')).find(line => line['msg'] === 'Routing refused the host'))
+      .toMatchObject({ code: 'host_not_allowed', reason: 'own_host' });
+  });
+
+  it('logs the Signer\'s refusal reason from 422 signing_refused, in both apps: the stage and the reason (L-5, L-6, acceptance check 2)', async () => {
+    const paying = await buyer();
+
+    const response = await routedCall('/v1/expensive', 'signer-refusal-1', paying.key);
+
+    expect(response.status).toBe(503);
+    expect(appLines('proxy', 'signer-refusal-1').find(line => line['msg'] === 'The Signer didn\'t sign a routed payment')).toMatchObject({
+      level: 40, paymentId: expect.stringMatching(/^pay_/), host: at('api.target.dev'), price: '0.6', quote: '0.66',
+      code: 'signing_refused', reason: 'The amount is above the per-call maximum',
+      signer: { method: 'POST', path: '/internal/v1/sign', status: 422, code: 'signing_refused', durationMs: expect.any(Number) },
+    });
+    expect(appLines('signer', 'signer-refusal-1').find(line => line['msg'] === 'Refused to sign a routed payment')).toMatchObject({
+      level: 30, result: 'refused', reason: 'above_max_per_call', network: base, atomicAmount: '600000', payTo: targetPayTo, quotedPrice: '0.6',
+    });
+    await expect.poll(() => appLines('proxy', 'signer-refusal-1').find(line => line['msg'] === 'Paid call finished')).toMatchObject({ paymentStatus: 'released' });
+  });
+});
+
+describe('the routing apps\' lines carry no secret (XC-7, rule 10)', () => {
+  it('never logs a key, a shared secret, the hot wallet\'s key, a signed payment, or a buyer\'s own header for the target', async () => {
+    expect(signedHeaders.length).toBeGreaterThan(0);
+    expect(lines.some(line => line['name'] === 'signer')).toBe(true);
+
+    const logged = JSON.stringify(lines);
+    for (const secret of [signerSecret, internalSecret, signerKey, signerKey.slice(2), 'buyer-own-key', 'buyer-header-key-for-the-routing-tests', ...signedHeaders])
+      expect(logged).not.toContain(secret);
+    expect(logged).not.toMatch(/sr_test_[A-Za-z0-9_-]{20,}|srm_test_[A-Za-z0-9_-]{20,}/);
   });
 });

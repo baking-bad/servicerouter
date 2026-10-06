@@ -28,6 +28,16 @@ const refusalMessages: Readonly<Record<HoldRefusal, string>> = {
 /** The x402 payment isn't one this call takes, or the facilitator rejected it (PR-5). Nothing moved. */
 export class PaymentInvalidError extends ServiceRouterError {
   readonly code = 'payment_invalid';
+  // The facilitator's invalidReason, or mppx's, for the log (L-3)
+  readonly reason: string | undefined;
+  readonly facilitator: string | undefined;
+
+  constructor(message: string, options?: ErrorOptions & { readonly reason?: string; readonly facilitator?: string }) {
+    super(message, options?.cause === undefined ? undefined : { cause: options.cause });
+
+    this.reason = options?.reason;
+    this.facilitator = options?.facilitator;
+  }
 }
 
 /**
@@ -42,15 +52,38 @@ export class PaymentUnavailableError extends ServiceRouterError {
   }
 }
 
+/** Why a settlement failed, for the log (L-3): never part of the buyer's answer. */
+export interface SettlementFailure {
+  // `failed`: nothing was charged. `unknown`: the follow-up repeats it (PR-12).
+  readonly outcome: 'failed' | 'unknown';
+  // The facilitator's errorReason, or the RPC's short message
+  readonly reason?: string;
+  readonly transaction?: string;
+  readonly facilitator?: string;
+  readonly network?: string;
+  readonly cause?: unknown;
+}
+
 /**
  * The settlement failed, or its outcome is unknown, so the response isn't sent (PR-12). A failure
  * charges nothing. An unknown outcome is repeated by a worker, which flags it for review if it settles.
  */
 export class SettlementFailedError extends ServiceRouterError {
   readonly code = 'settlement_failed';
+  readonly outcome: SettlementFailure['outcome'] | undefined;
+  readonly reason: string | undefined;
+  readonly transaction: string | undefined;
+  readonly facilitator: string | undefined;
+  readonly network: string | undefined;
 
-  constructor() {
-    super('The payment couldn\'t be settled, so the response wasn\'t sent. Retry the request.');
+  constructor(failure?: SettlementFailure) {
+    super('The payment couldn\'t be settled, so the response wasn\'t sent. Retry the request.', failure?.cause === undefined ? undefined : { cause: failure.cause });
+
+    this.outcome = failure?.outcome;
+    this.reason = failure?.reason;
+    this.transaction = failure?.transaction || undefined;
+    this.facilitator = failure?.facilitator;
+    this.network = failure?.network;
   }
 }
 

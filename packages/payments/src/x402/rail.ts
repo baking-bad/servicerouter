@@ -4,7 +4,7 @@ import { decodePaymentSignatureHeader, encodePaymentRequiredHeader, encodePaymen
 import type { Network, PaymentPayload, PaymentRequirements, SettleResponse } from '@x402/core/types';
 
 import { detectX402, type Credential } from '../credentials.js';
-import { PaymentInvalidError, SettlementFailedError } from '../errors.js';
+import { PaymentInvalidError, SettlementFailedError, type SettlementFailure } from '../errors.js';
 import type { PaymentRecorder, SettlementLedger } from '../ports.js';
 import type { Authorization, PaymentRail, Quote, Receipt } from '../rail.js';
 import type { X402Setup } from './setup.js';
@@ -117,9 +117,9 @@ export const createX402Rail = ({ setup, recorder, ledger, logger }: X402RailOpti
     return lists.flat();
   };
 
-  const settlementFailed = async (paymentId: string, to: 'failed' | 'settling', request?: JsonObject): Promise<never> => {
+  const settlementFailed = async (paymentId: string, to: 'failed' | 'settling', failure: SettlementFailure, request?: JsonObject): Promise<never> => {
     await recorder.changeStatus({ paymentId, to, ...(request ? { settlementRequest: request } : { settlementRequest: null }) });
-    throw new SettlementFailedError();
+    throw new SettlementFailedError(failure);
   };
 
   return {
@@ -145,10 +145,13 @@ export const createX402Rail = ({ setup, recorder, ledger, logger }: X402RailOpti
       if (!asset)
         throw new PaymentInvalidError('The payment\'s asset isn\'t offered');
 
+      const facilitator = setup.facilitatorFor(requirements.network)?.name;
       const verified = await server.verifyPayment(payload, requirements);
       if (!verified.isValid) {
-        const reason = verified.invalidReason && reasonPattern.test(verified.invalidReason) ? `: ${verified.invalidReason}` : '';
-        throw new PaymentInvalidError(`The facilitator rejected the payment${reason}`);
+        const reason = verified.invalidReason && reasonPattern.test(verified.invalidReason) ? verified.invalidReason : undefined;
+        throw new PaymentInvalidError(`The facilitator rejected the payment${reason ? `: ${reason}` : ''}`, {
+          reason: verified.invalidReason?.slice(0, 200) ?? 'unknown', ...facilitator === undefined ? {} : { facilitator },
+        });
       }
 
       const { subject } = quote;
@@ -177,42 +180,54 @@ export const createX402Rail = ({ setup, recorder, ledger, logger }: X402RailOpti
         feeBps: quote.feeBps,
         buyer: `address:${requirements.network}:${verified.payer ?? 'unknown'}`,
         receipt: undefined,
+        network: requirements.network,
         payload,
         requirements,
         asset,
+        ...quote.log ? { log: quote.log } : {},
       };
 
       return authorization;
     },
     finalize: async (authorization): Promise<Receipt> => {
-      const { paymentId, payload, requirements, asset, feeBps } = x402Only(authorization);
+      const { paymentId, payload, requirements, asset, feeBps, log = logger } = x402Only(authorization);
       const request = toSettlementRequest(payload, requirements);
+      const { network } = requirements;
+      const facilitator = setup.facilitatorFor(network)?.name;
+      const where = { facilitator, network };
       let result: SettleResponse;
       try {
         result = await server.settlePayment(payload, requirements);
       }
       catch (error) {
         // A timeout or a 503: the outcome is unknown. The worker repeats it (PR-12).
-        logger.warn({ error, paymentId }, 'The settlement\'s outcome is unknown. The settlement follow-up repeats it.');
-        return settlementFailed(paymentId, 'settling', request);
+        log.warn({ error, paymentId, ...where }, 'The settlement\'s outcome is unknown. The settlement follow-up repeats it.');
+        const reason = (error as { reason?: unknown }).reason;
+
+        return settlementFailed(paymentId, 'settling', {
+          outcome: 'unknown', ...typeof reason === 'string' ? { reason } : {}, ...facilitator === undefined ? {} : { facilitator }, network, cause: error,
+        }, request);
       }
 
       if (result.success) {
         const receipt = encodePaymentResponseHeader(result);
         await ledger.settle({ paymentId, feeBps, asset, transactionHash: result.transaction || undefined, receipt, needsReview: false });
 
-        return { headers: { [paymentResponseHeader]: receipt } };
+        return { headers: { [paymentResponseHeader]: receipt }, settlement: { status: 'settled', transaction: result.transaction || undefined } };
       }
       if (result.errorReason === settlementPending && result.transaction) {
         // Broadcast, not final: the response goes out, and the worker finishes the settlement
         const receipt = encodePaymentResponseHeader(result);
         await recorder.changeStatus({ paymentId, to: 'settling', transactionHash: result.transaction, receipt, settlementRequest: request });
 
-        return { headers: { [paymentResponseHeader]: receipt } };
+        return { headers: { [paymentResponseHeader]: receipt }, settlement: { status: 'settling', transaction: result.transaction } };
       }
 
-      logger.warn({ paymentId, reason: result.errorReason }, 'The settlement failed. Nothing was charged.');
-      return settlementFailed(paymentId, 'failed');
+      const reason = result.errorReason ?? 'unknown';
+      log.warn({ paymentId, reason, transaction: result.transaction || undefined, ...where }, 'The settlement failed. Nothing was charged.');
+      return settlementFailed(paymentId, 'failed', {
+        outcome: 'failed', reason, ...result.transaction ? { transaction: result.transaction } : {}, ...facilitator === undefined ? {} : { facilitator }, network,
+      });
     },
     abort: async authorization => {
       await recorder.changeStatus({ paymentId: x402Only(authorization).paymentId, to: 'cancelled' });

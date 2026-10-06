@@ -1,9 +1,10 @@
 import { privateKeyToAccount } from 'viem/accounts';
 
 import {
-  InvalidEnvironmentError, readHost, readPort, readSecret, type AppContext, type AppEnvironment, type RunningApp, type Secret,
+  formatUsd, InvalidEnvironmentError, readCommit, readHost, readLogLevel, readPort, readSecret, type AppContext, type AppEnvironment, type RunningApp,
+  type Secret,
 } from '@servicerouter/common';
-import { loadPlatformConfig } from '@servicerouter/core';
+import { loadPlatformConfig, platformSummary } from '@servicerouter/core';
 import { createPostgres, createRedis } from '@servicerouter/db';
 
 import { createApp } from './app.js';
@@ -47,7 +48,8 @@ const readBaseWallet = (env: AppEnvironment) => {
  */
 export const startSigner = async ({ env, logger }: AppContext): Promise<RunningApp> => {
   const config = await loadPlatformConfig({ env });
-  logger.level = config.logger.level;
+  // LOG_LEVEL overrides the config's level (L-11)
+  logger.level = readLogLevel(env, config.logger.level);
   const listen = {
     host: readHost(env),
     port: readPort(env, 'PORT', defaultPort),
@@ -66,13 +68,29 @@ export const startSigner = async ({ env, logger }: AppContext): Promise<RunningA
     await Promise.all([postgres.close(), redis.close()]);
   };
   const server = createApp({ config, logger, postgres, redis, secret, wallets: base ? { base } : {} });
+  let ports;
   try {
-    await server.listen(listen);
+    ports = await server.listen(listen);
   }
   catch (error) {
     await closeConnections();
     throw error;
   }
+  // L-1: once, what this Signer pays with. The wallet's public address, never its key.
+  const { signer } = config;
+  logger.info({
+    app: 'signer',
+    commit: readCommit(env) ?? null,
+    logLevel: logger.level,
+    environment: platformSummary(config).environment,
+    wallets: { base: base?.address ?? null },
+    limits: {
+      maxPerCall: formatUsd(signer.maxPerCall),
+      maxPerNetworkPerHour: signer.maxPerNetworkPerHour === undefined ? null : formatUsd(signer.maxPerNetworkPerHour),
+      maxPerNetworkPerDay: formatUsd(signer.maxPerNetworkPerDay),
+    },
+    ports,
+  }, 'Started');
 
   return {
     close: async () => {

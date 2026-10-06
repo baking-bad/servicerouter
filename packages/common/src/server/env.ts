@@ -1,4 +1,5 @@
 import { ServiceRouterError } from '../errors.js';
+import { logLevels, type LogLevel } from '../logging.js';
 
 export type AppEnvironment = Readonly<Record<string, string | undefined>>;
 
@@ -23,4 +24,27 @@ export const readPort = (env: AppEnvironment, name: string, defaultPort: number)
     throw new InvalidEnvironmentError(`${name} must be a port number from 0 to 65535`);
 
   return port;
+};
+
+/**
+ * `LOG_LEVEL`, which overrides platform config's `logger.level`, so an operator can switch a running
+ * stack to `debug` without a new config (L-11). Unset: the configured level.
+ */
+export const readLogLevel = (env: AppEnvironment, configured: LogLevel): LogLevel => {
+  const value = env['LOG_LEVEL']?.trim().toLowerCase();
+  if (!value)
+    return configured;
+  if (!(logLevels as readonly string[]).includes(value))
+    throw new InvalidEnvironmentError(`LOG_LEVEL must be one of ${logLevels.join(', ')}`);
+
+  return value as LogLevel;
+};
+
+const commitPattern = /^[0-9a-f]{7,40}$/i;
+
+/** `GIT_SHA`, the commit the image was built from, for the startup line (L-1). Undefined outside an image. */
+export const readCommit = (env: AppEnvironment): string | undefined => {
+  const value = env['GIT_SHA']?.trim();
+
+  return value && commitPattern.test(value) ? value.toLowerCase() : undefined;
 };

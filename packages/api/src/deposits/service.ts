@@ -1,4 +1,4 @@
-import { formatUsd, type Clock, type IdGenerator, type Logger } from '@servicerouter/common';
+import { formatUsd, type Clock, type IdGenerator, type Logger, type LogSink } from '@servicerouter/common';
 import {
   cryptoRandomSource, type DepositAddressDeriver, type DepositRecord, type PlatformConfig, type RandomSource,
 } from '@servicerouter/core';
@@ -45,8 +45,11 @@ export interface TopupView {
 }
 
 export interface DepositService {
-  /** The account's deposit address, created the first time (DP-1). Undefined while deposits are off. */
-  ensure(accountId: string): Promise<AccountDeposit | undefined>;
+  /**
+   * The account's deposit address, created the first time (DP-1). Undefined while deposits are off.
+   * `log`: the request's logger, for the line a new address writes (L-7).
+   */
+  ensure(accountId: string, log?: LogSink): Promise<AccountDeposit | undefined>;
   /** The top-up data by its token (DP-5). Opening it moves the address's next scan up. */
   topup(token: string): Promise<TopupView>;
 }
@@ -89,16 +92,20 @@ export const createDepositService = ({
   };
 
   return {
-    ensure: async accountId => {
+    ensure: async (accountId, log = logger) => {
       if (!settings || !deriver)
         return undefined;
 
-      const address = await deposits.ensureAddress({
+      const existing = await deposits.findAddress(accountId);
+      const address = existing ?? await deposits.ensureAddress({
         accountId,
         network: settings.network.id,
         derive: deriver,
         token: () => Buffer.from(random.bytes(topupTokenBytes)).toString('base64url'),
       });
+      // L-7: the account and the HD index, never the top-up token
+      if (!existing)
+        log.info({ accountId, network: address.network, derivationIndex: address.derivationIndex }, 'A deposit address was created');
       if (address.network !== settings.network.id)
         logger.error({ accountId, network: address.network }, 'A deposit address belongs to another network than the deposits config');
 

@@ -57,11 +57,13 @@ export const registerAccountRoutes = (app: FastifyInstance, { accounts, authenti
     const { account, masterKey } = await accounts.create({ email: request.body?.email, requestId: request.id });
     const key = masterKey.expose();
     masterKey.destroy();
+    // L-7: the account's ID only, never its email or key
+    request.log.info({ accountId: account.id }, 'An account was created');
     // From step 9, signup also creates the deposit address and top-up link (AK-1). A failure here leaves
     // the account without one, and the next GET /v1/account creates it.
     let deposit: AccountDeposit | undefined;
     try {
-      deposit = await deposits.ensure(account.id);
+      deposit = await deposits.ensure(account.id, request.log);
     }
     catch (error) {
       request.log.error({ error, accountId: account.id }, 'Failed to create a deposit address at signup');
@@ -82,7 +84,7 @@ export const registerAccountRoutes = (app: FastifyInstance, { accounts, authenti
       if (!account)
         throw new InvalidKeyError();
 
-      return toAccountBody(account, await deposits.ensure(account.id));
+      return toAccountBody(account, await deposits.ensure(account.id, request.log));
     });
 
     scope.post('/v1/account/master-key/rotate', async (request, reply) => {
@@ -90,6 +92,7 @@ export const registerAccountRoutes = (app: FastifyInstance, { accounts, authenti
       const masterKey = await accounts.rotateMasterKey({ accountId, keyId, requestId: request.id });
       const key = masterKey.expose();
       masterKey.destroy();
+      request.log.info({ accountId, revokedKeyId: keyId }, 'A master key was rotated');
 
       return reply.header('cache-control', 'no-store').send({ masterKey: key });
     });

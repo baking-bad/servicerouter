@@ -1,11 +1,14 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 
-import { formatUsd, OutboundHttpError, OwnHostError, type Logger, type MicroUsd, type OutboundHttp, type OutboundResponse } from '@servicerouter/common';
+import {
+  formatUsd, isRecord, OutboundHttpError, outboundFields, OwnHostError, upstreamRequestIdOf, type Logger, type LogSink, type MicroUsd, type OutboundHttp,
+  type OutboundResponse,
+} from '@servicerouter/common';
 import { findAsset, type PlatformConfig } from '@servicerouter/core';
 import type { Ledger, Redis, RoutingRepository } from '@servicerouter/db';
 import {
   chooseOption, HostNotAllowedError, NotPayableError, parseRoutingTarget, parseTargetChallenge, QuoteExceededError, routingQuote,
-  UnsupportedPaymentError, type RoutingTarget,
+  UnsupportedPaymentError, type RoutingTarget, type TargetChallenge,
 } from '@servicerouter/payments';
 import type { PaymentRequirements } from '@x402/core/types';
 
@@ -31,7 +34,7 @@ export interface RoutingOptions {
   readonly routing: Pick<RoutingRepository, 'isBlocked' | 'isServiceHost' | 'endpointFee' | 'recordTargetPayment' | 'updateTargetPayment'>;
   readonly ledger: Pick<Ledger, 'routingLoss'>;
   readonly signer: SignerClient | undefined;
-  readonly optedOut: (host: string) => Promise<boolean>;
+  readonly optedOut: (host: string, log?: LogSink) => Promise<boolean>;
   readonly registrar: EndpointRegistrar;
   // The per-IP limit of the link checker (RT-19)
   readonly limitIp: (ip: string) => Promise<void>;
@@ -49,6 +52,20 @@ interface RoutingQuote {
   readonly quote: MicroUsd;
 }
 
+// What the target offered, for the log when we can pay none of it (L-5): scheme and network only
+const offeredOptions = (challenge: TargetChallenge | undefined): string[] => (challenge?.accepts ?? []).slice(0, 10)
+  .map(option => isRecord(option) ? `${String(option['scheme']).slice(0, 32)} ${String(option['network']).slice(0, 64)}` : 'invalid');
+
+/** A quote's fields on a log line (L-5): the option chosen, the target's price, the fee, and our quote. */
+const quoteFields = (quote: RoutingQuote): Record<string, string | number> => ({
+  network: quote.requirement.network,
+  asset: quote.asset,
+  x402Version: quote.x402Version,
+  price: formatUsd(quote.price),
+  fee: formatUsd(quote.fee),
+  quote: formatUsd(quote.quote),
+});
+
 const serializeQuote = (quote: RoutingQuote): string => JSON.stringify({ ...quote, price: quote.price.toString(), fee: quote.fee.toString(), quote: quote.quote.toString() });
 const parseQuote = (text: string): RoutingQuote => {
   const value = JSON.parse(text) as RoutingQuote & { price: string; fee: string; quote: string };
@@ -57,52 +74,78 @@ const parseQuote = (text: string): RoutingQuote => {
 };
 
 /** Payment routing (RT-1 to RT-19): `/<host>/<path>` pays any x402 API for the buyer, and `GET /_/check` quotes one. */
-export const createRouting = ({ config, http, redis, payments, routing, ledger, signer, optedOut, registrar, limitIp, logger }: RoutingOptions) => {
+export const createRouting = ({ config, http, redis, payments, routing, ledger, signer, optedOut, registrar, limitIp }: RoutingOptions) => {
   const payUrl = config.urls.pay.replace(/\/+$/, '');
   const ownDomains = ownDomainsOf(config);
 
-  /** RT-2: our hosts, sellers' hosts, blocklisted hosts, and hosts that opted out. */
-  const checkHost = async (target: RoutingTarget): Promise<void> => {
-    if (isOwnHost(target.hostname, ownDomains))
-      throw new HostNotAllowedError();
-    const [service, blocked, optOut] = await Promise.all([
-      routing.isServiceHost(target.hostname), routing.isBlocked(target.hostname), optedOut(target.hostname),
-    ]);
-    if (service)
-      throw new HostNotAllowedError('This host serves a registered service: call it at its service URL');
-    if (blocked || optOut)
-      throw new HostNotAllowedError();
+  // L-5: why a host is refused, at info: the buyer picked it
+  const refuseHost = (log: LogSink, target: RoutingTarget, reason: string, message?: string): never => {
+    log.info({ host: target.host, code: 'host_not_allowed', reason }, 'Routing refused the host');
+    throw new HostNotAllowedError(...message === undefined ? [] : [message]);
   };
 
-  const send = async (target: RoutingTarget, method: string, headers: Record<string, string | readonly string[]>, body: Buffer | undefined, signal?: AbortSignal): Promise<OutboundResponse> => {
+  /** RT-2: our hosts, sellers' hosts, blocklisted hosts, and hosts that opted out. */
+  const checkHost = async (target: RoutingTarget, log: LogSink): Promise<void> => {
+    if (isOwnHost(target.hostname, ownDomains))
+      refuseHost(log, target, 'own_host');
+    const [service, blocked, optOut] = await Promise.all([
+      routing.isServiceHost(target.hostname), routing.isBlocked(target.hostname), optedOut(target.hostname, log),
+    ]);
+    if (service)
+      refuseHost(log, target, 'service_host', 'This host serves a registered service: call it at its service URL');
+    if (blocked)
+      refuseHost(log, target, 'blocklisted');
+    if (optOut)
+      refuseHost(log, target, 'opted_out');
+  };
+
+  // `attempt`: 1 for the probe, 2 for the paid retry
+  const send = async (
+    target: RoutingTarget, method: string, headers: Record<string, string | readonly string[]>, body: Buffer | undefined, log: LogSink, attempt: number,
+  ): Promise<OutboundResponse> => {
+    const started = performance.now();
     try {
-      return await http.request({ url: target.url, method, headers, body, redirect: 'none', ...signal ? { signal } : {} });
+      return await http.request({ url: target.url, method, headers, body, redirect: 'none' });
     }
     catch (error) {
+      const fields = outboundFields({ url: target.url, method, error, durationMs: performance.now() - started, attempt });
       // OH-5: a host that resolves to our addresses
       if (error instanceof OwnHostError)
-        throw new HostNotAllowedError();
-      if (error instanceof OutboundHttpError)
+        return refuseHost(log, target, 'own_address');
+      // L-4: the address policy and the transport say why, at warn
+      if (error instanceof OutboundHttpError) {
+        log.warn({ ...fields, error }, 'The routed target couldn\'t be reached');
         throw new UpstreamUnavailableError();
+      }
       throw error;
     }
   };
 
   /** RT-3 to RT-5: the probe, the option, and the quote, cached by method and URL. */
-  const quoteFor = async (target: RoutingTarget, method: string, headers: Record<string, string | readonly string[]>, body: Buffer | undefined): Promise<RoutingQuote> => {
+  const quoteFor = async (
+    target: RoutingTarget, method: string, headers: Record<string, string | readonly string[]>, body: Buffer | undefined, log: LogSink,
+  ): Promise<RoutingQuote> => {
     const key = `${redis.prefix}quote:${method} ${target.url}`;
     try {
       const cached = await redis.client.get(key);
-      if (cached !== null)
-        return parseQuote(cached);
+      if (cached !== null) {
+        const quote = parseQuote(cached);
+        log.debug({ host: target.host, path: target.path, ...quoteFields(quote), cached: true }, 'Routing quote');
+
+        return quote;
+      }
     }
     catch (error) {
-      logger.warn({ error }, 'The quote cache is unavailable');
+      log.warn({ error }, 'The quote cache is unavailable');
     }
 
-    const response = await send(target, method, headers, body);
+    const started = performance.now();
+    const response = await send(target, method, headers, body, log, 1);
+    const probe = { host: target.host, path: target.path, targetStatus: response.status, targetRequestId: upstreamRequestIdOf(response.headers), durationMs: Math.round(performance.now() - started) };
+    // L-5: the probe's outcome
     if (response.status !== 402) {
       response.dispose();
+      log.info({ ...probe, code: 'not_payable' }, 'The routed target didn\'t ask for a payment');
       throw new NotPayableError();
     }
     let challengeBody: Buffer;
@@ -114,19 +157,23 @@ export const createRouting = ({ config, http, redis, payments, routing, ledger, 
     }
     const challenge = parseTargetChallenge(response.headers, challengeBody);
     const chosen = challenge && chooseOption(challenge, config);
-    if (!challenge || !chosen)
+    if (!challenge || !chosen) {
+      log.info({ ...probe, code: 'unsupported_payment', offered: offeredOptions(challenge) }, 'The routed target offers no payment we make');
       throw new UnsupportedPaymentError();
+    }
 
     const feeBps = await routing.endpointFee(target.host, target.path) ?? config.routingFeeBps;
     const { quote, fee } = routingQuote(chosen.price, feeBps);
     const result: RoutingQuote = {
       x402Version: challenge.x402Version, requirement: chosen.requirement, resource: challenge.resource, asset: chosen.asset.name, price: chosen.price, fee, quote,
     };
+    // L-5: the option chosen and the quote
+    log.info({ ...probe, ...quoteFields(result), cached: false }, 'Routing quote');
     try {
       await redis.client.set(key, serializeQuote(result), { expiration: { type: 'EX', value: quoteTtlSeconds } });
     }
     catch (error) {
-      logger.warn({ error }, 'Failed to cache a quote');
+      log.warn({ error }, 'Failed to cache a quote');
     }
 
     return result;
@@ -166,15 +213,16 @@ export const createRouting = ({ config, http, redis, payments, routing, ledger, 
   };
 
   const serve = async (request: FastifyRequest, reply: FastifyReply): Promise<FastifyReply> => {
+    const log = request.log;
     const target = parseRoutingTarget(request.raw.url ?? '/');
-    await checkHost(target);
+    await checkHost(target, log);
     const headers = routedRequestHeaders(request.headers, request.id);
     const body = request.body as Buffer | undefined;
-    const quoted = await quoteFor(target, request.method, headers, body);
+    const quoted = await quoteFor(target, request.method, headers, body, log);
 
     // RT-6: the buyer pays the quote, with a key, x402, or MPP; or gets the combined 402 at it
     const payment = await payments.beginRouted({
-      headers: request.headers, ip: request.ip, requestId: request.id, host: target.host, path: target.path,
+      headers: request.headers, ip: request.ip, log, requestId: request.id, host: target.host, path: target.path,
       resource: `${payUrl}/${target.host}${target.path}`, quote: quoted.quote,
     });
     if (payment.kind === 'challenge')
@@ -185,9 +233,11 @@ export const createRouting = ({ config, http, redis, payments, routing, ledger, 
     const abortBuyer = async (status: number | undefined): Promise<void> => {
       await payments.finish(call, await payments.decide(call, { status, latencyMs: 0 }));
     };
+    const leg = { paymentId, host: target.host, path: target.path, ...quoteFields(quoted) };
 
     // RT-7: pay the target only now, through the Signer, within the quote (SG-3)
     if (!signer) {
+      log.warn(leg, 'Payment routing pays no targets: no Signer is configured');
       await abortBuyer(undefined);
       throw new UpstreamUnavailableError();
     }
@@ -201,7 +251,12 @@ export const createRouting = ({ config, http, redis, payments, routing, ledger, 
     catch (error) {
       await abortBuyer(undefined);
       if (error instanceof SignerUnavailableError) {
-        logger.warn({ error, paymentId, host: target.host }, 'The Signer didn\'t sign a routed payment');
+        // L-5: the Signer's refusal reason from 422 signing_refused, or why it couldn't be reached (L-4)
+        const { failure } = error;
+        log.warn({
+          ...leg, signer: failure, ...failure?.code === undefined ? {} : { code: failure.code }, ...failure?.reason === undefined ? {} : { reason: failure.reason },
+          ...error.cause === undefined ? {} : { error: error.cause },
+        }, 'The Signer didn\'t sign a routed payment');
         throw new UpstreamUnavailableError();
       }
       throw error;
@@ -213,18 +268,21 @@ export const createRouting = ({ config, http, redis, payments, routing, ledger, 
     });
 
     const paymentHeader = quoted.x402Version >= 2 ? 'payment-signature' : 'x-payment';
+    const signedLeg = { ...leg, signatureId: signed.signatureId, payTo: signed.payTo };
     const started = performance.now();
     let response: OutboundResponse;
     try {
-      response = await send(target, request.method, { ...headers, [paymentHeader]: signed.header }, body);
+      response = await send(target, request.method, { ...headers, [paymentHeader]: signed.header }, body, log, 2);
     }
     catch (error) {
       // Unknown: the target may have the signed authorization. The buyer isn't charged; the leg stays unknown.
+      log.warn({ ...signedLeg, targetLeg: 'unknown' }, 'The routed target didn\'t answer the paid retry: its payment\'s outcome is unknown');
       await routing.updateTargetPayment(paymentId, { status: 'unknown' });
       await abortBuyer(undefined);
       throw error;
     }
     const latencyMs = Math.round(performance.now() - started);
+    const answered = { ...signedLeg, targetStatus: response.status, targetRequestId: upstreamRequestIdOf(response.headers), durationMs: latencyMs, attempt: 2 };
 
     // RT-8: a retry that asks for more than the quote is refused; the buyer isn't charged
     if (response.status === 402) {
@@ -233,14 +291,20 @@ export const createRouting = ({ config, http, redis, payments, routing, ledger, 
       await routing.updateTargetPayment(paymentId, { status: 'failed' });
       await abortBuyer(402);
       await redis.client.del(`${redis.prefix}quote:${request.method} ${target.url}`).catch(() => undefined);
-      if (again && again.price > quoted.price)
+      const exceeded = again !== undefined && again.price > quoted.price;
+      log.warn({
+        ...answered, receipt: false, code: exceeded ? 'quote_exceeded' : 'upstream_unavailable', ...again ? { askedPrice: formatUsd(again.price) } : {},
+      }, 'The routed target refused our payment on the paid retry');
+      if (exceeded)
         throw new QuoteExceededError();
       throw new UpstreamUnavailableError();
     }
 
     const receipt = settledReceipt(response);
+    // L-5: the target's status, and whether it returned a receipt. A target's 5xx is an expected outcome: info.
+    log.info({ ...answered, receipt: receipt !== undefined }, 'Routed call answered');
     response.body.on('error', () => undefined);
-    const decision = await payments.decide(call, { status: response.status, latencyMs });
+    const decision = await payments.decide(call, { status: response.status, latencyMs, upstreamRequestId: answered.targetRequestId });
     const answerHeaders = responseHeaders(target, response);
     const bodyless = request.method === 'HEAD' || response.status === 204 || response.status === 304;
     if (decision !== 'billable') {
@@ -249,7 +313,7 @@ export const createRouting = ({ config, http, redis, payments, routing, ledger, 
       if (receipt) {
         await routing.updateTargetPayment(paymentId, { status: 'settled', receipt });
         await ledger.routingLoss({ paymentId });
-        logger.warn({ paymentId, host: target.host, status: response.status }, 'A target kept a routed payment for a failed call: booked as a routing loss');
+        log.warn({ paymentId, host: target.host, status: response.status, amount: formatUsd(signed.amount), asset: signed.asset }, 'A target kept a routed payment for a failed call: booked as a routing loss');
       }
       else
         await routing.updateTargetPayment(paymentId, { status: 'failed' });
@@ -264,7 +328,7 @@ export const createRouting = ({ config, http, redis, payments, routing, ledger, 
     }
 
     await routing.updateTargetPayment(paymentId, { status: 'settled', ...receipt ? { receipt } : {} });
-    registrar.register(target.host, target.path, quoted.quote);
+    registrar.register(target.host, target.path, quoted.quote, request.id);
     if (call.rail.settlesBeforeResponse) {
       // x402 and MPP buyers: settle before any byte goes out (PX-12)
       const buffered = bodyless ? undefined : await response.bytes();
@@ -277,7 +341,8 @@ export const createRouting = ({ config, http, redis, payments, routing, ledger, 
       catch (error) {
         // The target is paid and the buyer isn't: the workers book the routing loss once the buyer's
         // payment is final (RT-9). The owner accepts this risk for the MVP, capped by the Signer's limits.
-        logger.warn({ error, paymentId, host: target.host, rail: call.rail.name }, 'A routed buyer\'s settlement failed after the target was paid');
+        log.warn({ error, paymentId, host: target.host, rail: call.rail.name, amount: formatUsd(signed.amount), asset: signed.asset },
+          'A routed buyer\'s settlement failed after the target was paid');
         throw error;
       }
 
@@ -304,8 +369,8 @@ export const createRouting = ({ config, http, redis, payments, routing, ledger, 
     }
     try {
       const target = parseRoutingTarget(`/${parsed.host}${parsed.pathname}${parsed.search}`);
-      await checkHost(target);
-      const quoted = await quoteFor(target, 'GET', routedRequestHeaders({}, request.id), undefined);
+      await checkHost(target, request.log);
+      const quoted = await quoteFor(target, 'GET', routedRequestHeaders({}, request.id), undefined, request.log);
       const asset = findAsset(config, quoted.asset);
 
       return {

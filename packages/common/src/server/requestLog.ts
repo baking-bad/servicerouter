@@ -5,6 +5,17 @@ import { routeOf } from './metrics.js';
 // The field that carries the request ID on every log line of a request (XC-5)
 export const requestIdLogLabel = 'requestId';
 
+// The error code each failed request answered with, for its request line
+const errorCodes = new WeakMap<FastifyRequest, string>();
+
+/**
+ * Notes the error code a request answers with, so its one request line carries it: a domain error's
+ * `4xx` logs its code at `info` that way, with no line of its own (L-7).
+ */
+export const recordErrorCode = (request: FastifyRequest, code: string): void => {
+  errorCodes.set(request, code);
+};
+
 const contentLength = (value: unknown): number | undefined => {
   const length = Number(value);
 
@@ -30,10 +41,12 @@ export class RequestLogController extends LogController {
     if (this.isLogDisabled(request))
       return;
 
+    const code = errorCodes.get(request);
     const fields = {
       method: request.method,
       route: routeOf(request),
       status: reply.statusCode,
+      ...code === undefined ? {} : { code },
       requestBytes: contentLength(request.headers['content-length']),
       responseBytes: contentLength(reply.getHeader('content-length')),
       durationMs: Math.round(reply.elapsedTime * 1_000) / 1_000,

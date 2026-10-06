@@ -29,7 +29,10 @@ const sellerAddresses = [
   'addr_test1vqg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zygxrcya6',
   'addr_test1vz2fxv2umyhttkxyxp8x0dlpdt3k6cwng5pxj3jhsydzerspjrlsz',
 ];
-const logger = createLogger({ level: 'silent' });
+// Every line the payouts job writes, debug included (T24)
+const lines: Record<string, unknown>[] = [];
+const logger = createLogger({ level: 'debug' }, { write: (line: string) => lines.push(JSON.parse(line) as Record<string, unknown>) });
+const mnemonic = PrivateKey.generateMnemonic(256);
 
 let database: TestDatabase;
 let blockfrost: FakeBlockfrost;
@@ -46,7 +49,7 @@ beforeAll(async () => {
   ledger = createLedger({ db: database.db, clock, ids: randomIdGenerator });
   usdm = findAsset(config, 'cardano-usdm')!;
   wallet = createCardanoPayoutWallet({
-    mnemonic: Secret.from(PrivateKey.generateMnemonic(256)),
+    mnemonic: Secret.from(mnemonic),
     asset: usdm,
     blockfrost: { url: blockfrost.url, projectId: Secret.from('preprodTestProjectId') },
   });
@@ -315,7 +318,7 @@ describe('payouts (PO-1 to PO-7)', () => {
 
   it('chains a run\'s transactions past 40 payouts, so no two spend the same coin (PO-3)', async () => {
     const big = createCardanoPayoutWallet({
-      mnemonic: Secret.from(PrivateKey.generateMnemonic(256)), asset: usdm, blockfrost: { url: blockfrost.url, projectId: Secret.from('preprodTestProjectId') },
+      mnemonic: Secret.from(mnemonic), asset: usdm, blockfrost: { url: blockfrost.url, projectId: Secret.from('preprodTestProjectId') },
     });
     blockfrost.fund(big.address, { lovelace: 400_000_000n, assets: { [usdm.address]: 1_000_000_000n } });
     const derive = createDepositAddressDeriver({ accountPublicKey: createTestDepositWallet().accountPublicKey, network: usdm.network });
@@ -335,5 +338,25 @@ describe('payouts (PO-1 to PO-7)', () => {
     const paidTo = { ...paidBy(transactions[0]!.cbor), ...paidBy(transactions[1]!.cbor) };
     for (let index = 0; index < 41; index += 1)
       expect(paidTo[derive(index)]).toBe(10_725_000n);
+  });
+});
+
+describe('the payouts job\'s lines (L-8)', () => {
+  it('logs each payout run\'s state changes with its ID, and each transaction by its hash: never the mnemonic or a signed transaction', async () => {
+    // The first run above: built, submitted, then confirmed
+    const runLines = lines.filter(line => line['runId'] === fixtureRun(1, 1));
+    const transactions = await createPayoutRepository({ db: database.db, clock, ids: randomIdGenerator }).transactions(fixtureRun(1, 1));
+
+    expect(runLines.map(line => line['msg'])).toEqual(expect.arrayContaining([
+      'A payout run was built', 'A payout run was submitted', 'A payout transaction was confirmed and booked', 'A payout run was confirmed',
+    ]));
+    expect(runLines.find(line => line['msg'] === 'A payout run was submitted')).toMatchObject({ level: 30, from: 'approved', to: 'submitted', transactions: 1 });
+    expect(runLines.find(line => line['msg'] === 'A payout run was confirmed')).toMatchObject({ level: 30, from: 'submitted', to: 'confirmed', failed: 0 });
+    expect(runLines.find(line => line['msg'] === 'A payout transaction was confirmed and booked')).toMatchObject({ txHash: transactions[0]!.txHash });
+    const logged = JSON.stringify(lines);
+    expect(logged).not.toContain(mnemonic);
+    expect(logged).not.toContain(mnemonic.split(' ').slice(0, 4).join(' '));
+    for (const transaction of transactions)
+      expect(logged).not.toContain(transaction.cbor.slice(0, 64));
   });
 });

@@ -36,11 +36,11 @@ afterAll(async () => {
 
 const usdm = (): string => config.deposits!.asset.address;
 
-const watcher = () => createDepositWatcherJob({
+const watcher = (logger = createLogger({ level: 'silent' })) => createDepositWatcherJob({
   store: repository,
   blockfrost: createBlockfrostClient({ url: blockfrost.url, projectId: Secret.from('preprodTestProjectId'), timeoutMs: 2_000 }),
   clock,
-  logger: createLogger({ level: 'silent' }),
+  logger,
   deposits: config.deposits!,
 });
 
@@ -156,5 +156,23 @@ describe('the deposit watcher (DP-2, DP-3, DP-4)', () => {
     await expect(broken()).rejects.toBeInstanceOf(DepositWatcherFailedError);
     const [row] = await database.db.select().from(depositAddresses).where(eq(depositAddresses.address, address));
     expect(row!.nextCheckAt.getTime()).toBeLessThanOrEqual(clock.now().getTime());
+  });
+});
+
+describe('the deposit watcher\'s lines (L-8)', () => {
+  it('logs each deposit it sees and credits, with the account, the transaction, and the amount', async () => {
+    const lines: Record<string, unknown>[] = [];
+    const logger = createLogger({ level: 'debug' }, { write: (line: string) => lines.push(JSON.parse(line) as Record<string, unknown>) });
+    const { accountId, address } = await buyer();
+    const txHash = blockfrost.send([{ address, value: { lovelace: 1_500_000n, assets: { [usdm()]: 7_000_000n } } }]);
+    await watcher(logger)();
+    blockfrost.addBlocks(config.deposits!.confirmations);
+    later();
+
+    await watcher(logger)();
+
+    expect(lines.find(line => line['msg'] === 'A deposit was seen' && line['txHash'] === txHash)).toMatchObject({ level: 30, accountId, outputIndex: 0, status: 'pending' });
+    expect(lines.find(line => line['msg'] === 'A deposit was credited' && line['txHash'] === txHash)).toMatchObject({ level: 30, accountId, outputIndex: 0, amount: '7000000' });
+    expect(JSON.stringify(lines)).not.toContain('preprodTestProjectId');
   });
 });

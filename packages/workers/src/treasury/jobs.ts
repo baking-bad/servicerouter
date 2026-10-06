@@ -48,7 +48,8 @@ const holdingsOf = async (wallet: TreasuryWallet, readerFor: (asset: Asset) => B
       }
       catch (error) {
         failed += 1;
-        logger.error({ error, wallet: wallet.name, asset: asset.name }, 'Failed to read a treasury balance');
+        // An RPC's error is reduced to its short message: never the RPC's URL or request (L-9)
+        logger.error({ error, wallet: wallet.name, asset: asset.name, network: asset.network.id }, 'Failed to read a treasury balance');
       }
     }
   }
@@ -66,11 +67,14 @@ export const createTreasuryBalancesJob = ({ wallets, readerFor, payouts, metrics
   readonly payouts: Pick<PayoutRepository, 'runsWithStatus'> | undefined;
   readonly metrics: TreasuryMetrics;
   readonly logger: Logger;
-}) => async (): Promise<void> => {
+}) => async (): Promise<{ readonly wallets: number; readonly balances: number }> => {
   let failed = 0;
-  for (const wallet of (await wallets()).filter(item => item.role !== 'deposits')) {
+  let read = 0;
+  const watched = (await wallets()).filter(item => item.role !== 'deposits');
+  for (const wallet of watched) {
     const result = await holdingsOf(wallet, readerFor, logger);
     failed += result.failed;
+    read += result.held.size;
     for (const [asset, amount] of result.held)
       metrics.balance.set({ wallet: wallet.name, asset }, Number(formatUsd(amount)));
 
@@ -83,6 +87,8 @@ export const createTreasuryBalancesJob = ({ wallets, readerFor, payouts, metrics
   }
   if (failed > 0)
     throw new Error(`${failed} treasury balances couldn't be read`);
+
+  return { wallets: watched.length, balances: read };
 };
 
 /**
@@ -99,7 +105,7 @@ export const createReconciliationJob = ({ db, config, wallets, readerFor, ledger
   readonly clock: Clock;
   readonly ids: IdGenerator;
   readonly logger: Logger;
-}) => async (): Promise<void> => {
+}) => async (): Promise<{ readonly assets: number; readonly alerts: number }> => {
   const chain = new Map<string, MicroUsd>();
   let failed = 0;
   for (const wallet of await wallets()) {
@@ -131,4 +137,6 @@ export const createReconciliationJob = ({ db, config, wallets, readerFor, ledger
     }])),
     alerts,
   });
+
+  return { assets: results.size, alerts };
 };

@@ -1,6 +1,6 @@
 import type { FastifyInstance, onRequestHookHandler } from 'fastify';
 
-import { DocumentError, OutboundHttpError, parseStrictYaml, type OutboundHttp, type ValidationIssue } from '@servicerouter/common';
+import { DocumentError, OutboundHttpError, outboundFields, parseStrictYaml, type OutboundHttp, type ValidationIssue } from '@servicerouter/common';
 import { draftServiceConfig, openApiFetchLimits, RateLimitedError, type LlmDrafter, type PlatformConfig, type RateLimiter } from '@servicerouter/core';
 
 import { authenticatedAccount } from '../accounts/auth.js';
@@ -53,6 +53,13 @@ export const registerAssistantRoutes = (app: FastifyInstance, { http, platform, 
       }
 
       const { openapi, payoutAddress, id } = request.body;
+      // L-7: each draft's outcome, with the document's host and path, never its query or content (L-4)
+      const started = performance.now();
+      const drafted = (result: string, extra: Record<string, unknown> = {}): void => {
+        request.log.info({ accountId, result, ...extra }, 'A config draft was requested');
+      };
+      const fetchFields = (outcome: { readonly status?: number; readonly error?: unknown }) =>
+        outboundFields({ url: openapi, method: 'GET', ...outcome, durationMs: performance.now() - started });
       let document: unknown;
       try {
         const response = await http.request({
@@ -61,30 +68,37 @@ export const registerAssistantRoutes = (app: FastifyInstance, { http, platform, 
         });
         if (response.status < 200 || response.status > 299) {
           response.dispose();
+          drafted('fetch_failed', fetchFields({ status: response.status }));
           throw new DraftFailedError(`The OpenAPI document can't be fetched: ${response.url.hostname} answered with status ${response.status}`);
         }
         document = parseStrictYaml(await response.bytes(), { maxBytes: openApiFetchLimits.maxBytes }).value;
       }
       catch (error) {
-        if (error instanceof OutboundHttpError)
+        if (error instanceof OutboundHttpError) {
+          drafted('fetch_failed', fetchFields({ error }));
           throw new DraftFailedError(`The OpenAPI document can't be fetched: ${error.message}`);
-        if (error instanceof DocumentError)
+        }
+        if (error instanceof DocumentError) {
+          drafted('unparseable', fetchFields({}));
           throw new DraftFailedError(`The OpenAPI document doesn't parse: ${error.reason}`);
+        }
         throw error;
       }
 
-      const drafted = await draftServiceConfig({ document, link: openapi, platform, drafter, payoutAddress, ...id ? { serviceId: id } : {} });
-      if (!drafted.ok) {
+      const result = await draftServiceConfig({ document, link: openapi, platform, drafter, payoutAddress, ...id ? { serviceId: id } : {} });
+      if (!result.ok) {
+        drafted('invalid_config', { ...fetchFields({}), problems: result.errors.length });
         return reply.status(400).send({
-          error: { code: 'invalid_config', message: 'The draft doesn\'t pass validation: check the payout address and the document', details: drafted.errors.map(toDetail) },
+          error: { code: 'invalid_config', message: 'The draft doesn\'t pass validation: check the payout address and the document', details: result.errors.map(toDetail) },
         });
       }
+      drafted('drafted', { ...fetchFields({}), serviceId: result.draft.serviceId, warnings: result.draft.warnings.length });
 
       return {
-        id: drafted.draft.serviceId,
-        config: { mediaType: 'application/yaml', text: drafted.draft.yaml },
-        warnings: drafted.draft.warnings.map(toDetail),
-        notes: drafted.draft.notes,
+        id: result.draft.serviceId,
+        config: { mediaType: 'application/yaml', text: result.draft.yaml },
+        warnings: result.draft.warnings.map(toDetail),
+        notes: result.draft.notes,
         submitted: false,
       };
     });

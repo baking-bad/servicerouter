@@ -200,6 +200,9 @@ jobs:
           push: true
           cache-from: type=gha,scope=runtime
           cache-to: type=gha,scope=runtime,mode=max
+          # Every app's startup line names the commit (L-1)
+          build-args: |
+            GIT_SHA=${{ github.sha }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
 
@@ -223,5 +226,7 @@ jobs:
           push: true
           cache-from: type=gha,scope=web
           cache-to: type=gha,scope=web,mode=max
+          build-args: |
+            GIT_SHA=${{ github.sha }}
           tags: ${{ steps.meta-web.outputs.tags }}
           labels: ${{ steps.meta-web.outputs.labels }}

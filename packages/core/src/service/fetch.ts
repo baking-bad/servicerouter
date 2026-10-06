@@ -1,5 +1,5 @@
 import {
-  DocumentError, OutboundHttpError, parseStrictYaml, type OutboundHttp, type OutboundResponse, type ValidationIssue,
+  DocumentError, OutboundHttpError, outboundFields, parseStrictYaml, type Logger, type OutboundHttp, type OutboundResponse, type ValidationIssue,
 } from '@servicerouter/common';
 
 import { toIssues, type IssueDraft } from '../validation/issues.js';
@@ -19,6 +19,8 @@ export const openApiFetchLimits = {
 export interface FetchOpenApiDocumentsOptions {
   readonly http: Pick<OutboundHttp, 'request'>;
   readonly signal?: AbortSignal;
+  // Each document that can't be fetched logs one line at info: a seller's link is theirs to fix (L-4)
+  readonly logger?: Pick<Logger, 'info'>;
 }
 
 export type FetchOpenApiDocumentsResult =
@@ -37,7 +39,11 @@ const describeFailure = (error: unknown): FetchedDocument => {
   return { ok: false, message: `the linked OpenAPI document can't be fetched: ${error.message.charAt(0).toLowerCase()}${error.message.slice(1)}` };
 };
 
-const fetchDocument = async (link: string, { http, signal }: FetchOpenApiDocumentsOptions): Promise<FetchedDocument> => {
+const fetchDocument = async (link: string, { http, signal, logger }: FetchOpenApiDocumentsOptions): Promise<FetchedDocument> => {
+  const started = performance.now();
+  const failed = (call: { readonly status?: number; readonly error?: unknown }): void => {
+    logger?.info(outboundFields({ url: link, method: 'GET', ...call, durationMs: performance.now() - started }), 'A linked OpenAPI document couldn\'t be fetched');
+  };
   let response: OutboundResponse;
   let bytes: Buffer;
   try {
@@ -51,12 +57,16 @@ const fetchDocument = async (link: string, { http, signal }: FetchOpenApiDocumen
     });
     if (response.status < 200 || response.status > 299) {
       response.dispose();
+      failed({ status: response.status });
       return { ok: false, message: `the linked OpenAPI document can't be fetched: ${response.url.hostname} answered with status ${response.status}` };
     }
     bytes = await response.bytes();
   }
   catch (error) {
-    return describeFailure(error);
+    const described = describeFailure(error);
+    failed({ error });
+
+    return described;
   }
 
   try {

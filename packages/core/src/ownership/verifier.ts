@@ -158,8 +158,9 @@ export const createOwnershipVerifier = ({ store, fetchFile, clock, invalidation,
     const fetched = await mapLimited(hosts, fetchConcurrency, async host => [host, await fetchFile(host)] as const);
     for (const [host, result] of fetched) {
       const { found, problem } = lookFor(result, token);
+      // A seller's host that can't be read is an expected outcome: info (L-4)
       if (!result.ok)
-        logger.info({ accountId, host, problem: result.problem, reason: result.reason }, 'An ownership file check failed');
+        logger.info({ ...result.outbound, accountId, host, problem: result.problem, reason: result.reason }, 'An ownership file check failed');
       await announce(await store.recordHostCheck({ ...who, accountId, host, found, problem, now: clock.now() }));
     }
 

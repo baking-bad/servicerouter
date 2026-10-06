@@ -78,18 +78,24 @@ export const createSettlementFollowUp = ({
           needsReview: payment.receipt === undefined,
         });
         counts.settled += 1;
+        // L-8: each settlement the follow-up finishes
+        logger.info({
+          paymentId: payment.id, rail: 'mpp', network: payment.network ?? null, transaction: request.transactionHash, needsReview: payment.receipt === undefined,
+        }, 'The settlement follow-up settled a payment');
       }
       else if (result.status === 'failed') {
         await payments.changeStatus({ paymentId: payment.id, to: 'failed', settlementRequest: null });
         counts.failed += 1;
-        logger.warn({ paymentId: payment.id, reason: result.reason }, 'An MPP payment failed for good. Nothing was booked.');
+        logger.warn({ paymentId: payment.id, rail: 'mpp', network: payment.network ?? null, transaction: request.transactionHash, reason: result.reason },
+          'An MPP payment failed for good. Nothing was booked.');
       }
       else
         counts.pending += 1;
     }
     catch (error) {
       counts.unknown += 1;
-      logger.warn({ reason: errorReason(error), paymentId: payment.id }, 'An MPP payment is still undecided');
+      // viem's short message only: never the RPC's request (L-9)
+      logger.warn({ reason: errorReason(error), paymentId: payment.id, network: payment.network ?? null }, 'An MPP payment is still undecided');
     }
   };
 
@@ -111,31 +117,37 @@ export const createSettlementFollowUp = ({
         continue;
       }
 
+      const where = { paymentId: payment.id, rail: payment.rail, network: payment.network ?? null, facilitator: facilitator.name };
       try {
         const result = await facilitator.settle(request.paymentPayload, request.paymentRequirements);
         if (result.success) {
+          const transaction = result.transaction || payment.transactionHash;
           await ledger.settle({
             paymentId: payment.id,
             feeBps,
             asset,
-            transactionHash: result.transaction || payment.transactionHash,
+            transactionHash: transaction,
             receipt: payment.receipt ?? encodeSettleReceipt(result),
             // The buyer paid, and the response never went out (PR-12)
             needsReview: payment.receipt === undefined,
           });
           counts.settled += 1;
+          // L-8: each settlement the follow-up finishes
+          logger.info({ ...where, transaction: transaction ?? null, needsReview: payment.receipt === undefined }, 'The settlement follow-up settled a payment');
         }
-        else if (result.errorReason === settlementPending)
+        else if (result.errorReason === settlementPending) {
           counts.pending += 1;
+          logger.debug({ ...where, transaction: result.transaction || null }, 'A settlement is still pending');
+        }
         else {
           await payments.changeStatus({ paymentId: payment.id, to: 'failed', settlementRequest: null });
           counts.failed += 1;
-          logger.warn({ paymentId: payment.id, reason: result.errorReason ?? null }, 'A settlement failed for good. Nothing was booked.');
+          logger.warn({ ...where, reason: result.errorReason ?? null, transaction: result.transaction || null }, 'A settlement failed for good. Nothing was booked.');
         }
       }
       catch (error) {
         counts.unknown += 1;
-        logger.warn({ error, paymentId: payment.id }, 'A settlement is still undecided');
+        logger.warn({ ...where, error }, 'A settlement is still undecided');
       }
     }
     const last = page.at(-1);
@@ -144,8 +156,9 @@ export const createSettlementFollowUp = ({
     after = { createdAt: last.payment.createdAt, id: last.payment.id };
   }
 
+  // The scheduler's line carries these counts at info (L-8)
   if (counts.settled + counts.failed > 0)
-    logger.info(counts, 'Followed up settlements');
+    logger.debug(counts, 'Followed up settlements');
   if (counts.unknown + counts.skipped > 0)
     throw new SettlementFollowUpError(counts);
 

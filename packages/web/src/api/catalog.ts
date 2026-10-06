@@ -2,6 +2,7 @@ import { isMocked, type SiteSettings } from '../config';
 import { catalogQueryParams, defaultPageSize, queryCatalog } from '../catalog/query';
 import { sampleCategoryTitles, sampleServices, toCatalogItem, type SampleLinks } from '../mocks/catalog';
 import { ApiError, callApi } from './http';
+import { logApiFailure } from './failures';
 import type { CatalogPage, CatalogQuery, CatalogService, Sourced } from './types';
 
 // The catalog (CI-5): GET /v1/catalog and GET /v1/catalog/{id}, or sample data while the `catalog` group is on (WB-10).
@@ -27,7 +28,7 @@ export const listCatalog = async (settings: SiteSettings, query: CatalogQuery): 
   // The sample's page size, not the API's default
   const params = catalogQueryParams({ ...query, limit: query.limit ?? defaultPageSize }).toString();
 
-  return { value: await callApi<CatalogPage>(settings.apiUrl, { path: `/v1/catalog${params ? `?${params}` : ''}` }), sample: false };
+  return { value: await callApi<CatalogPage>(settings.apiUrl, { path: `/v1/catalog${params ? `?${params}` : ''}`, onFailure: logApiFailure() }), sample: false };
 };
 
 /** `GET /v1/catalog/{id}`, or undefined for a service the catalog doesn't list. */
@@ -39,7 +40,7 @@ export const getCatalogService = async (settings: SiteSettings, id: string): Pro
   }
 
   try {
-    const service = await callApi<CatalogService>(settings.apiUrl, { path: `/v1/catalog/${encodeURIComponent(id)}` });
+    const service = await callApi<CatalogService>(settings.apiUrl, { path: `/v1/catalog/${encodeURIComponent(id)}`, onFailure: logApiFailure() });
 
     return { value: { ...service, docs: agentDocsFor(settings, service.id) }, sample: false };
   }

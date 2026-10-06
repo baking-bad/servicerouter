@@ -79,8 +79,9 @@ export const createHoldExpiry = ({
   }
 
   const result = { captured, released, failed };
+  // The scheduler's line carries these counts at info (L-8)
   if (captured + released + failed > 0)
-    logger.info(result, 'Finished expired holds');
+    logger.debug(result, 'Finished expired holds');
   if (failed > 0)
     throw new HoldExpiryFailedError(result);
 

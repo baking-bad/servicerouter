@@ -6,6 +6,7 @@
     "src/**/*.ts",
     "src/**/*.tsx",
     "proxy.ts",
+    "instrumentation.ts",
     "next.config.ts",
     "tests/**/*.ts"
   ]

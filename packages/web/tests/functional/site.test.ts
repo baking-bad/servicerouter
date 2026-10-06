@@ -33,6 +33,8 @@ const freePort = async (): Promise<number> => {
 interface Running {
   readonly url: string;
   readonly process: ChildProcess;
+  // The JSON lines the server wrote to stdout (L-1, L-10). Next.js's own text lines are left out.
+  readonly logs: Record<string, unknown>[];
 }
 
 const startSite = async (env: Record<string, string>): Promise<Running> => {
@@ -40,13 +42,27 @@ const startSite = async (env: Record<string, string>): Promise<Running> => {
   const child = spawn(process.execPath, [nextBin, 'start', '-p', String(port), '-H', '127.0.0.1'], {
     cwd: webRoot,
     env: { ...process.env, NODE_ENV: 'production', NEXT_DIST_DIR: distDir, NEXT_TELEMETRY_DISABLED: '1', SITE_URL: site, PAY_URL: pay, ...env },
-    stdio: 'ignore',
+    stdio: ['ignore', 'pipe', 'ignore'],
+  });
+  const logs: Record<string, unknown>[] = [];
+  let pending = '';
+  child.stdout!.setEncoding('utf8').on('data', (chunk: string) => {
+    const parts = `${pending}${chunk}`.split('\n');
+    pending = parts.pop()!;
+    for (const part of parts.filter(text => text.startsWith('{'))) {
+      try {
+        logs.push(JSON.parse(part) as Record<string, unknown>);
+      }
+      catch {
+        // Not one of ours
+      }
+    }
   });
   const url = `http://127.0.0.1:${port}`;
   for (let attempt = 0; attempt < 100; attempt += 1) {
     try {
       if ((await fetch(`${url}/_/health`)).ok)
-        return { url, process: child };
+        return { url, process: child, logs };
     }
     catch {
       // Not listening yet
@@ -75,6 +91,8 @@ const routedItem: CatalogItem = {
 };
 // A buyer's real top-up link, as the API issues it: 32 base64url characters
 const realToken = 'Rk3vQ9xT2mLpA7cZ0yBn4WsE8uHfJd6G';
+// One whose read fails
+const brokenToken = 'Zq8wE2rT6yU0iO4pA9sD3fG7hJ1kL5xC';
 const realTopup: Topup = {
   address: 'addr1q9realbuyeraddressfromtheplatformapi0000000000000000000000000000000000000',
   asset: { name: 'cardano-usdm', symbol: 'USDM', network: 'cardano:mainnet', networkTitle: 'Cardano' },
@@ -92,6 +110,9 @@ const fakeApi: Server = createServer((request, response) => {
     json(200, realService);
   else if (path === `/v1/topup/${realToken}`)
     json(200, realTopup);
+  // A Platform API that fails, for the server's log (L-10)
+  else if (path === '/v1/catalog/broken-service' || path === `/v1/topup/${brokenToken}`)
+    json(500, { error: { code: 'internal_error', message: 'Internal server error' } });
   else
     json(404, { error: { code: 'not_found', message: 'Not found' } });
 });
@@ -113,7 +134,7 @@ beforeAll(async () => {
   [sampled, real] = await Promise.all([
     // The API is never called while everything is sample data
     startSite({ API_URL: 'http://127.0.0.1:9', WEB_MOCKS: 'catalog,agent-docs,topup' }),
-    startSite({ API_URL: apiUrl, WEB_MOCKS: 'agent-docs,topup' }),
+    startSite({ API_URL: apiUrl, WEB_MOCKS: 'agent-docs,topup', GIT_SHA: 'f7b6ffb' }),
   ]);
 }, 300_000);
 
@@ -353,5 +374,25 @@ describe('with the Platform API\'s catalog (WB-2, WB-10, CI-5)', () => {
     expect(sitemap).toContain(`<loc>${site}/discover/real-weather</loc>`);
     expect(sitemap).not.toContain('routed:');
     expect(markdown).toContain(`[${routedItem.title}](${routedItem.link}) (unverified)`);
+  });
+});
+
+describe('the website\'s server log (L-1, L-10)', () => {
+  it('logs one startup line with the commit, the API it reads, and the groups served from sample data', () => {
+    expect(real.logs.filter(line => line['msg'] === 'Started')).toEqual([expect.objectContaining({
+      level: 30, name: 'web', app: 'web', commit: 'f7b6ffb', urls: { website: site, api: expect.stringMatching(/^http:\/\/127\.0\.0\.1:\d+$/), pay }, sampleData: ['agent-docs', 'topup'],
+    })]);
+  });
+
+  it('logs a failed Platform API read with the path without its query, the status, and the code, and never a top-up token', async () => {
+    await page('/discover/broken-service?utm=query-secret', undefined, real);
+    await page(`/topup/${brokenToken}`, undefined, real);
+
+    await expect.poll(() => real.logs.filter(line => line['msg'] === 'Reading the Platform API failed').length).toBeGreaterThanOrEqual(2);
+    expect(real.logs).toEqual(expect.arrayContaining([
+      expect.objectContaining({ level: 40, name: 'web', path: '/v1/catalog/broken-service', status: 500, code: 'internal_error', durationMs: expect.any(Number) }),
+      expect.objectContaining({ level: 40, path: '/v1/topup/{token}', status: 500, code: 'internal_error' }),
+    ]));
+    expect(JSON.stringify(real.logs)).not.toMatch(new RegExp(`query-secret|${brokenToken}|${realToken}`));
   });
 });

@@ -114,6 +114,8 @@ export const registerKeyRoutes = (app: FastifyInstance, { keys, authenticate, cl
       const { view, key } = await keys.create({ accountId, requestId: request.id, limits: changes });
       const value = key.expose();
       key.destroy();
+      // L-7: IDs and the limits' names, never the key
+      request.log.info({ accountId, keyId: view.key.id, limits: Object.keys(changes) }, 'A payment key was created');
 
       return reply.status(201).header('cache-control', 'no-store').send({ ...toKeyBody(view), key: value });
     });
@@ -127,13 +129,16 @@ export const registerKeyRoutes = (app: FastifyInstance, { keys, authenticate, cl
     scope.patch<{ Params: KeyParams; Body: LimitsBody }>('/v1/keys/:id', { schema: { body: updateBodySchema } }, async request => {
       const { accountId } = authenticatedAccount(request);
       const changes = toChanges(request.body, clock.now());
+      const updated = await keys.update({ accountId, requestId: request.id, keyId: request.params.id, changes });
+      request.log.info({ accountId, keyId: updated.key.id, changed: Object.keys(changes) }, 'A payment key was changed');
 
-      return toKeyBody(await keys.update({ accountId, requestId: request.id, keyId: request.params.id, changes }));
+      return toKeyBody(updated);
     });
 
     scope.delete<{ Params: KeyParams }>('/v1/keys/:id', async request => {
       const { accountId } = authenticatedAccount(request);
       const key = await keys.revoke({ accountId, requestId: request.id, keyId: request.params.id });
+      request.log.info({ accountId, keyId: key.id }, 'A payment key was revoked');
 
       return { id: key.id, revokedAt: key.revokedAt!.toISOString() };
     });

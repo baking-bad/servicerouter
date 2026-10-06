@@ -58,7 +58,8 @@ export const registerShutdownHandler = (shutdown: ShutdownHandler, logger: Logge
   });
 
   process.on('unhandledRejection', reason => {
-    logger.fatal({ reason }, 'Unhandled rejection');
+    // Under `error`, so the reason gets the error serializer's safe fields (L-9)
+    logger.fatal({ error: reason }, 'Unhandled rejection');
     void shutdown('unhandledRejection');
   });
 };

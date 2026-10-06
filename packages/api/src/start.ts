@@ -1,7 +1,7 @@
 import {
-  readHost, readPort, readSecret, type AppContext, type RunningApp,
+  readCommit, readHost, readLogLevel, readPort, readSecret, type AppContext, type RunningApp,
 } from '@servicerouter/common';
-import { loadPlatformConfig } from '@servicerouter/core';
+import { loadPlatformConfig, platformSummary } from '@servicerouter/core';
 import { createPostgres, createRedis } from '@servicerouter/db';
 
 import { createApp } from './app.js';
@@ -18,7 +18,8 @@ export const defaultInternalPort = 8082;
 /** Wires the production dependencies from platform config and the environment, then listens. */
 export const startApi = async ({ env, logger }: AppContext): Promise<RunningApp> => {
   const config = await loadPlatformConfig({ env });
-  logger.level = config.logger.level;
+  // LOG_LEVEL overrides the config's level (L-11)
+  logger.level = readLogLevel(env, config.logger.level);
   const listen = {
     host: readHost(env),
     port: readPort(env, 'PORT', defaultPort),
@@ -45,13 +46,25 @@ export const startApi = async ({ env, logger }: AppContext): Promise<RunningApp>
   const server = createApp({
     config, logger, postgres, redis, trustProxy, sealer, internalSecret, corsOrigins, ...(depositAddresses ? { depositAddresses } : {}),
   });
+  let ports;
   try {
-    await server.listen(listen);
+    ports = await server.listen(listen);
   }
   catch (error) {
     await closeConnections();
     throw error;
   }
+  // L-1: once, what this replica runs with. Names, networks, URLs, and origins: never a secret or a key.
+  logger.info({
+    app: 'api',
+    commit: readCommit(env) ?? null,
+    logLevel: logger.level,
+    ...platformSummary(config),
+    // Signup creates deposit addresses only with DEPOSIT_ACCOUNT_PUBLIC_KEY (DP-1)
+    depositAddresses: depositAddresses !== undefined,
+    corsOrigins,
+    ports,
+  }, 'Started');
 
   return {
     close: async () => {

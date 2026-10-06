@@ -26,7 +26,7 @@ import {
   treasuryBalancesIntervalMs, treasuryBalancesJobName, treasuryBalancesLockId,
 } from './treasury/jobs.js';
 import { readerFor } from './treasury/readers.js';
-import { createScheduler, type Scheduler } from './scheduler.js';
+import { createScheduler, type JobOutcome, type Scheduler } from './scheduler.js';
 import { createRoutingLossMetrics, createRoutingLosses, routingLossesIntervalMs, routingLossesJobName, routingLossesLockId } from './routingLosses.js';
 import { createSettlementFollowUp, settlementFollowUpIntervalMs, settlementFollowUpLockId } from './settlementFollowUp.js';
 
@@ -65,7 +65,21 @@ export interface WorkersDependencies {
 
 export interface WorkersServer extends MetricsServer {
   readonly scheduler: Scheduler;
+  // The jobs this replica runs, for its startup line (L-1)
+  readonly jobs: readonly string[];
 }
+
+// A run's counts, for its log line: it did something when any of `acted` is above 0 (L-8)
+const outcomeOf = <TCounts extends { readonly [Name in keyof TCounts]: number | string | boolean | null | undefined }>(
+  counts: TCounts, acted: readonly (keyof TCounts & string)[],
+): JobOutcome => {
+  const values: Readonly<Record<string, number | string | boolean | null | undefined>> = counts;
+
+  return {
+    counts: Object.fromEntries(Object.entries(values).map(([name, value]) => [name, value ?? null])),
+    acted: acted.some(name => typeof values[name] === 'number' ? values[name] > 0 : values[name] !== undefined && values[name] !== null),
+  };
+};
 
 /**
  * Workers have no public listener. Health, readiness (Postgres, and Redis when given), and metrics share
@@ -154,74 +168,63 @@ export const createApp = ({
   const catalog = createCatalogRepository({ db: postgres.db, clock });
   const catalogIndex = createCatalogIndex({ db: postgres.db, catalog, config, logger });
   const serviceStats = createServiceStats({ catalog, clock });
+  // Each run returns its counts; `acted` names those that make its line info (L-8)
+  const jobs = [{
+    name: 'hold_expiry',
+    lockId: holdExpiryLockId,
+    intervalMs: holdExpiryIntervalMs,
+    run: async () => outcomeOf(await holdExpiry(), ['captured', 'released']),
+  }, {
+    name: 'settlement_follow_up',
+    lockId: settlementFollowUpLockId,
+    intervalMs: settlementFollowUpIntervalMs,
+    // Pending ones wait for the next run: polling them isn't news
+    run: async () => outcomeOf(await settlementFollowUp(), ['settled', 'failed']),
+  }, {
+    name: routingLossesJobName,
+    lockId: routingLossesLockId,
+    intervalMs: routingLossesIntervalMs,
+    run: async () => outcomeOf(await routingLosses(), ['booked']),
+  }, {
+    name: ownershipRecheckJobName,
+    lockId: ownershipRecheckLockId,
+    intervalMs: ownershipRecheckJobIntervalMs,
+    run: async () => outcomeOf(await ownershipRecheck(), ['hosts', 'confirmations', 'expired']),
+  }, {
+    name: catalogIndexJobName,
+    lockId: catalogIndexLockId,
+    intervalMs: catalogIndexIntervalMs,
+    // A refresh every minute: debug
+    run: async () => outcomeOf({ entries: await catalogIndex() }, []),
+  }, {
+    name: serviceStatsJobName,
+    lockId: serviceStatsLockId,
+    intervalMs: serviceStatsIntervalMs,
+    run: async () => outcomeOf({ rows: await serviceStats() }, []),
+  }, ...depositWatcher ? [{
+    name: depositWatcherJobName,
+    lockId: depositWatcherLockId,
+    intervalMs: depositWatcherIntervalMs,
+    run: async () => outcomeOf(await depositWatcher(), ['recorded', 'credited', 'dropped']),
+  }] : [], ...payoutsJob ? [{
+    name: payoutsJobName,
+    lockId: payoutsLockId,
+    intervalMs: payoutsIntervalMs,
+    run: async () => outcomeOf(await payoutsJob(), ['built', 'submitted', 'confirmed', 'failed']),
+  }] : [], ...treasuryJobs ? [{
+    name: treasuryBalancesJobName,
+    lockId: treasuryBalancesLockId,
+    intervalMs: treasuryBalancesIntervalMs,
+    run: async () => outcomeOf(await treasuryJobs.balances(), []),
+  }, {
+    name: reconciliationJobName,
+    lockId: reconciliationLockId,
+    intervalMs: reconciliationIntervalMs,
+    // Daily: always news
+    run: async () => outcomeOf(await treasuryJobs.reconciliation(), ['assets']),
+  }] : []];
   const scheduler = createScheduler({
-    jobs: [{
-      name: 'hold_expiry',
-      lockId: holdExpiryLockId,
-      intervalMs: holdExpiryIntervalMs,
-      run: async () => {
-        await holdExpiry();
-      },
-    }, {
-      name: 'settlement_follow_up',
-      lockId: settlementFollowUpLockId,
-      intervalMs: settlementFollowUpIntervalMs,
-      run: async () => {
-        await settlementFollowUp();
-      },
-    }, {
-      name: routingLossesJobName,
-      lockId: routingLossesLockId,
-      intervalMs: routingLossesIntervalMs,
-      run: async () => {
-        await routingLosses();
-      },
-    }, {
-      name: ownershipRecheckJobName,
-      lockId: ownershipRecheckLockId,
-      intervalMs: ownershipRecheckJobIntervalMs,
-      run: async () => {
-        await ownershipRecheck();
-      },
-    }, {
-      name: catalogIndexJobName,
-      lockId: catalogIndexLockId,
-      intervalMs: catalogIndexIntervalMs,
-      run: async () => {
-        await catalogIndex();
-      },
-    }, {
-      name: serviceStatsJobName,
-      lockId: serviceStatsLockId,
-      intervalMs: serviceStatsIntervalMs,
-      run: async () => {
-        await serviceStats();
-      },
-    }, ...depositWatcher ? [{
-      name: depositWatcherJobName,
-      lockId: depositWatcherLockId,
-      intervalMs: depositWatcherIntervalMs,
-      run: async () => {
-        await depositWatcher();
-      },
-    }] : [], ...payoutsJob ? [{
-      name: payoutsJobName,
-      lockId: payoutsLockId,
-      intervalMs: payoutsIntervalMs,
-      run: async () => {
-        await payoutsJob();
-      },
-    }] : [], ...treasuryJobs ? [{
-      name: treasuryBalancesJobName,
-      lockId: treasuryBalancesLockId,
-      intervalMs: treasuryBalancesIntervalMs,
-      run: treasuryJobs.balances,
-    }, {
-      name: reconciliationJobName,
-      lockId: reconciliationLockId,
-      intervalMs: reconciliationIntervalMs,
-      run: treasuryJobs.reconciliation,
-    }] : []],
+    jobs,
     locks: postgres,
     clock,
     timers,
@@ -232,6 +235,7 @@ export const createApp = ({
   return {
     ...server,
     scheduler,
+    jobs: jobs.map(job => job.name),
     listen: async options => {
       const port = await server.listen(options);
       scheduler.start();

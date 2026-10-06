@@ -1,12 +1,18 @@
-import { OutboundHttpError, type OutboundHttp } from '@servicerouter/common';
+import { OutboundHttpError, outboundFields, type OutboundHttp } from '@servicerouter/common';
 
 import { ownershipFileLimits, ownershipFileUrl, parseOwnershipFile, type OwnershipFile } from './file.js';
 import type { HostProblem } from './state.js';
 
 export type FetchOwnershipFileResult =
   | { readonly ok: true; readonly file: OwnershipFile }
-  // `reason` names the host and what went wrong, never anything from the response
-  | { readonly ok: false; readonly problem: Exclude<HostProblem, 'token_missing'>; readonly reason: string };
+  // `reason` names the host and what went wrong, never anything from the response. `outbound` is the
+  // call for the log: host, method, path, status or error code, and duration (L-4).
+  | {
+    readonly ok: false;
+    readonly problem: Exclude<HostProblem, 'token_missing'>;
+    readonly reason: string;
+    readonly outbound?: Readonly<Record<string, string | number>>;
+  };
 
 export type FetchOwnershipFile = (host: string, signal?: AbortSignal) => Promise<FetchOwnershipFileResult>;
 
@@ -27,10 +33,14 @@ const firstLower = (text: string): string => `${text.charAt(0).toLowerCase()}${t
  */
 export const createOwnershipFileFetcher = ({ http, fileUrl = ownershipFileUrl }: OwnershipFileFetcherOptions): FetchOwnershipFile =>
   async (host, signal) => {
+    const url = fileUrl(host);
+    const started = performance.now();
+    const outbound = (call: { readonly status?: number; readonly error?: unknown }) =>
+      outboundFields({ url, method: 'GET', ...call, durationMs: performance.now() - started });
     let bytes: Buffer;
     try {
       const response = await http.request({
-        url: fileUrl(host),
+        url,
         redirect: 'sameHost',
         headers: { accept: 'application/json' },
         totalTimeoutMs: ownershipFileLimits.totalTimeoutMs,
@@ -41,8 +51,8 @@ export const createOwnershipFileFetcher = ({ http, fileUrl = ownershipFileUrl }:
         response.dispose();
 
         return response.status === 404 || response.status === 410
-          ? { ok: false, problem: 'file_not_found', reason: `${host} has no ownership file` }
-          : { ok: false, problem: 'fetch_failed', reason: `${host} answered with status ${response.status}` };
+          ? { ok: false, problem: 'file_not_found', reason: `${host} has no ownership file`, outbound: outbound({ status: response.status }) }
+          : { ok: false, problem: 'fetch_failed', reason: `${host} answered with status ${response.status}`, outbound: outbound({ status: response.status }) };
       }
       bytes = await response.bytes();
     }
@@ -51,6 +61,7 @@ export const createOwnershipFileFetcher = ({ http, fileUrl = ownershipFileUrl }:
         ok: false,
         problem: 'fetch_failed',
         reason: error instanceof OutboundHttpError ? firstLower(error.message) : `${host} can't be reached`,
+        outbound: outbound({ error }),
       };
     }
 

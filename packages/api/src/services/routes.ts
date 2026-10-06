@@ -1,6 +1,6 @@
 import type { FastifyInstance, onRequestHookHandler } from 'fastify';
 
-import { createErrorHandler, Secret, type ValidationIssue } from '@servicerouter/common';
+import { createErrorHandler, recordErrorCode, Secret, type ValidationIssue } from '@servicerouter/common';
 import { InvalidServiceConfigError, isSecretName, type OwnershipServiceStatus } from '@servicerouter/core';
 
 import { authenticatedAccount } from '../accounts/auth.js';
@@ -84,11 +84,15 @@ export const registerServiceRoutes = (app: FastifyInstance, { registry, authenti
   app.register(async scope => {
     scope.addHook('onRequest', authenticate);
     // invalid_config carries every problem in `details`, and the warnings (PA-3, SR-2)
-    scope.setErrorHandler((error, request, reply) => error instanceof InvalidServiceConfigError
-      ? reply.status(errorStatuses[error.code]).send({
+    scope.setErrorHandler((error, request, reply) => {
+      if (!(error instanceof InvalidServiceConfigError))
+        return handleError(error, request, reply);
+
+      recordErrorCode(request, error.code);
+      return reply.status(errorStatuses[error.code]).send({
         error: { code: error.code, message: error.message, details: error.issues.map(toDetail), warnings: error.warnings.map(toDetail) },
-      })
-      : handleError(error, request, reply));
+      });
+    });
 
     // The submit reads its body raw: the envelope's secrets come out before anything parses the config (SC-9)
     scope.register(async submit => {
@@ -99,8 +103,22 @@ export const registerServiceRoutes = (app: FastifyInstance, { registry, authenti
 
       submit.put<{ Params: ServiceParams }>('/v1/services/:id', { bodyLimit: submitBodyLimit }, async (request, reply) => {
         const { accountId } = authenticatedAccount(request);
+        const serviceId = request.params.id;
         const body = parseSubmitBody(request.body, request.headers['content-type']);
-        const result = await registry.submit({ accountId, serviceId: request.params.id, requestId: request.id, body });
+        let result;
+        try {
+          result = await registry.submit({ accountId, serviceId, requestId: request.id, body });
+        }
+        catch (error) {
+          // L-7: an invalid config says how many problems it has, never the config
+          if (error instanceof InvalidServiceConfigError)
+            request.log.info({ accountId, serviceId, result: 'invalid_config', problems: error.issues.length, warnings: error.warnings.length }, 'A service config was submitted');
+          throw error;
+        }
+        request.log.info({
+          accountId, serviceId, result: result.created ? 'created' : result.changed ? 'updated' : 'unchanged', revision: result.revision, state: result.state,
+          warnings: result.warnings.length, payoutChangeWaiting: result.payoutConfirmation !== undefined,
+        }, 'A service config was submitted');
 
         return reply.status(result.created ? 201 : 200).send({
           id: request.params.id,
@@ -164,6 +182,10 @@ export const registerServiceRoutes = (app: FastifyInstance, { registry, authenti
     }, async request => {
       const { accountId } = authenticatedAccount(request);
       const result = await registry.rollback({ accountId, serviceId: request.params.id, requestId: request.id, revision: request.body.revision });
+      request.log.info({
+        accountId, serviceId: request.params.id, revision: result.revision, changed: result.changed, state: result.state,
+        payoutChangeWaiting: result.payoutConfirmation !== undefined,
+      }, 'A service was rolled back');
 
       return { id: request.params.id, revision: result.revision, changed: result.changed, state: result.state, ...toWaiting(result.payoutConfirmation) };
     });
@@ -177,8 +199,14 @@ export const registerServiceRoutes = (app: FastifyInstance, { registry, authenti
     // Checks every host's ownership file now (OV-6). No body.
     scope.post<{ Params: ServiceParams }>('/v1/services/:id/verify', async request => {
       const { accountId } = authenticatedAccount(request);
+      const status = await registry.verify({ accountId, serviceId: request.params.id, requestId: request.id });
+      // L-7: the outcome: the service's state, and how many hosts are in each state
+      const hosts: Record<string, number> = {};
+      for (const host of status.hosts)
+        hosts[host.state] = (hosts[host.state] ?? 0) + 1;
+      request.log.info({ accountId, serviceId: status.serviceId, state: status.state, revision: status.revision, hosts }, 'A service\'s ownership was verified');
 
-      return toStatus(await registry.verify({ accountId, serviceId: request.params.id, requestId: request.id }));
+      return toStatus(status);
     });
 
     scope.put<{ Params: SecretParams; Body: { readonly value: string } }>('/v1/services/:id/secrets/:name', {
@@ -194,6 +222,8 @@ export const registerServiceRoutes = (app: FastifyInstance, { registry, authenti
         throw new InvalidRequestError(problem);
 
       const written = await registry.putSecret({ accountId, serviceId: id, requestId: request.id, name, value: Secret.from(request.body.value) });
+      // The name only, never the value (L-7, rule 10)
+      request.log.info({ accountId, serviceId: id, secretName: written.name }, 'A service secret was written');
 
       return { name: written.name, updatedAt: written.updatedAt.toISOString() };
     });

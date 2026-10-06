@@ -1,4 +1,4 @@
-import type { MicroUsd } from '@servicerouter/common';
+import type { LogSink, MicroUsd } from '@servicerouter/common';
 import type { RailName } from '@servicerouter/core';
 
 import type { Credential } from './credentials.js';
@@ -35,6 +35,8 @@ export interface Quote {
   readonly subject: PaymentSubject;
   // The platform's share, taken at capture or settlement (LG-4)
   readonly feeBps: number;
+  // The request's logger, so a rail's lines carry the request ID (XC-5, L-3). Default: the rail's own.
+  readonly log?: LogSink;
 }
 
 /** One rail's part of the combined `402` (PR-2): headers, and fields of the JSON body. */
@@ -46,6 +48,8 @@ export interface ChallengePart {
 /** Headers that tell the buyer what was paid (PX-6), such as `Servicerouter-Receipt` (AR2). */
 export interface Receipt {
   readonly headers: Readonly<Record<string, string>>;
+  // What an on-chain settlement did, for the log (L-3): settled, or broadcast and still settling
+  readonly settlement?: { readonly status: 'settled' | 'settling'; readonly transaction: string | undefined };
 }
 
 /** An authorized payment: what a rail finalizes after a billable response, or aborts otherwise. */
@@ -59,6 +63,11 @@ export interface Authorization {
   // The receipt, when the rail knows it before finalizing. Credits responses stream (PX-12), so their
   // receipt goes out with the response headers, before the capture.
   readonly receipt: Receipt | undefined;
+  // For the log (L-3): the network and the asset's registry name an on-chain payment uses
+  readonly network?: string;
+  readonly asset?: string;
+  // The request's logger, from the quote, for the lines finalize and abort write
+  readonly log?: LogSink;
 }
 
 /** A payment rail (PR-1 to PR-12). Credits from step 4, x402 from step 5, MPP from step 7. */

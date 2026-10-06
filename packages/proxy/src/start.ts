@@ -1,7 +1,7 @@
 import {
-  readHost, readPort, readSecret, systemClock, type AppContext, type RunningApp,
+  readCommit, readHost, readLogLevel, readPort, readSecret, systemClock, type AppContext, type RunningApp,
 } from '@servicerouter/common';
-import { loadPlatformConfig } from '@servicerouter/core';
+import { loadPlatformConfig, platformSummary } from '@servicerouter/core';
 import { createPostgres, createRedis, createRedisReplayStore } from '@servicerouter/db';
 import { createFacilitators, initializeMpp, initializeX402, type MppSetup } from '@servicerouter/payments';
 
@@ -19,7 +19,8 @@ export const facilitatorStartupTimeoutMs = 10_000;
 /** Wires the production dependencies from platform config and the environment, then listens. */
 export const startProxy = async ({ env, logger }: AppContext): Promise<RunningApp> => {
   const config = await loadPlatformConfig({ env });
-  logger.level = config.logger.level;
+  // LOG_LEVEL overrides the config's level (L-11)
+  logger.level = readLogLevel(env, config.logger.level);
   const listen = {
     host: readHost(env),
     port: readPort(env, 'PORT', defaultPort),
@@ -80,13 +81,25 @@ export const startProxy = async ({ env, logger }: AppContext): Promise<RunningAp
   const server = createApp({
     config, logger, postgres, redis, opener, buyerHeaderKey, trustProxy, x402, mpp, ...signer ? { signer } : {}, ...internalApi ? { internalApi } : {},
   });
+  let ports;
   try {
-    await server.listen(listen);
+    ports = await server.listen(listen);
   }
   catch (error) {
     await closeConnections();
     throw error;
   }
+  // L-1: what this replica runs with, once. Names, networks, and URLs: never a secret or a key.
+  logger.info({
+    app: 'proxy',
+    commit: readCommit(env) ?? null,
+    logLevel: logger.level,
+    ...platformSummary(config),
+    // The rails this replica serves: x402 and MPP need their facilitators and RPC at startup
+    serving: { x402: x402 !== undefined, mpp: mpp !== undefined },
+    routing: { signer: signer !== undefined, internalApi: internalApi !== undefined },
+    ports,
+  }, 'Started');
 
   // Drains in-flight requests before closing the pools (PX-18)
   return {

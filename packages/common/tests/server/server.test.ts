@@ -147,6 +147,47 @@ describe('request log (XC-1, XC-7, CK-3)', () => {
   });
 });
 
+describe('the request line\'s error code (L-7, L-9)', () => {
+  it('logs a domain error\'s 4xx code on the request line, at info, with no line of its own', async () => {
+    const { logger, lines } = captureLogs();
+    const { app } = buildServer({ logger });
+    app.get('/pay', async () => {
+      throw new PaymentRequiredError('Credits don\'t cover the price');
+    });
+
+    await app.inject({ method: 'GET', url: '/pay', headers: { 'x-request-id': 'refused-1' } });
+    await app.inject({ method: 'GET', url: '/missing', headers: { 'x-request-id': 'missing-1' } });
+
+    expect(lines.filter(line => line['requestId'] === 'refused-1')).toEqual([
+      expect.objectContaining({ level: 30, msg: 'Request completed', status: 402, code: 'insufficient_balance' }),
+    ]);
+    expect(lines.find(line => line['requestId'] === 'missing-1')).toMatchObject({ level: 30, status: 404, code: 'not_found' });
+  });
+
+  it('logs a 5xx at error with its cause chain and stack, a coded one too, and its code on the request line', async () => {
+    const { logger, lines } = captureLogs();
+    const { app } = buildServer({ logger });
+    app.get('/boom', async () => {
+      throw new Error('The ledger write failed', { cause: Object.assign(new Error('deadlock detected'), { code: '40P01' }) });
+    });
+    app.get('/unmapped', async () => {
+      throw new UnmappedError('An internal code');
+    });
+
+    await app.inject({ method: 'GET', url: '/boom', headers: { 'x-request-id': 'boom-1' } });
+    await app.inject({ method: 'GET', url: '/unmapped', headers: { 'x-request-id': 'unmapped-1' } });
+
+    expect(lines.find(line => line['requestId'] === 'boom-1' && line['msg'] === 'Request failed')).toMatchObject({
+      level: 50,
+      error: { type: 'Error', message: 'The ledger write failed: deadlock detected', stack: expect.stringContaining('server.test.ts'), cause: { code: '40P01' } },
+    });
+    expect(lines.find(line => line['requestId'] === 'boom-1' && line['msg'] === 'Request completed')).toMatchObject({ status: 500, code: 'internal_error' });
+    expect(lines.find(line => line['requestId'] === 'unmapped-1' && line['msg'] === 'Request failed')).toMatchObject({
+      level: 50, error: { code: 'something_internal' }, stack: expect.stringContaining('server.test.ts'),
+    });
+  });
+});
+
 describe('errors (CK-2, PA-3, XC-7)', () => {
   it('answers a ServiceRouterError with its code, message, and the status from the app\'s table', async () => {
     const { app } = buildServer();

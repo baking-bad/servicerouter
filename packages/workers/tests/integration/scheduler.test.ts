@@ -131,3 +131,72 @@ describe('the job scheduler (WK-1 to WK-4)', () => {
     expect(runs).toBe(2);
   });
 });
+
+describe('the scheduler\'s lines (L-8)', () => {
+  const captured = () => {
+    const lines: Record<string, unknown>[] = [];
+    const capturing = createLogger({ level: 'debug' }, { write: (line: string) => lines.push(JSON.parse(line) as Record<string, unknown>) });
+
+    return { lines, capturing };
+  };
+  const schedulerWith = (run: Job['run'], capturing: ReturnType<typeof createLogger>, locks: Pick<Postgres, 'tryAdvisoryLock'> = database.postgres) => {
+    lockId += 1;
+    const job: Job = { name: 'logged_job', lockId, intervalMs: 60_000, run };
+
+    return { job, scheduler: createScheduler({ jobs: [job], locks, clock: createFakeClock(fixtureTime(0, 5, 12, 0, 0, 0)), timers: createManualTimers(), logger: capturing, registry: new Registry() }) };
+  };
+
+  it('logs a run that did something at info, with the job, its counts, and the duration; a run that did nothing at debug', async () => {
+    const { lines, capturing } = captured();
+    let acted = true;
+    const { scheduler } = schedulerWith(async () => ({ counts: { captured: acted ? 2 : 0, released: 0 }, acted }), capturing);
+
+    await scheduler.runNow('logged_job');
+    acted = false;
+    await scheduler.runNow('logged_job');
+
+    expect(lines.filter(line => line['msg'] === 'A job ran')).toEqual([
+      expect.objectContaining({ level: 30, job: 'logged_job', counts: { captured: 2, released: 0 }, durationMs: expect.any(Number) }),
+      expect.objectContaining({ level: 20, job: 'logged_job', counts: { captured: 0, released: 0 } }),
+    ]);
+  });
+
+  it('logs a failed run at error, with the cause chain and the counts it reached', async () => {
+    const { lines, capturing } = captured();
+    const { scheduler } = schedulerWith(async () => {
+      throw Object.assign(new Error('2 expired holds couldn\'t be finished', { cause: Object.assign(new Error('deadlock detected'), { code: '40P01' }) }), {
+        result: { captured: 1, released: 0, failed: 2 },
+      });
+    }, capturing);
+
+    expect(await scheduler.runNow('logged_job')).toBe('failure');
+
+    expect(lines.filter(line => line['msg'] === 'A job failed')).toEqual([expect.objectContaining({
+      level: 50, job: 'logged_job', counts: { captured: 1, released: 0, failed: 2 }, durationMs: expect.any(Number),
+      error: expect.objectContaining({ message: '2 expired holds couldn\'t be finished: deadlock detected', cause: expect.objectContaining({ code: '40P01' }), stack: expect.any(String) }),
+    })]);
+  });
+
+  it('logs a run skipped for another replica\'s lock at debug', async () => {
+    const { lines, capturing } = captured();
+    const gate = deferred();
+    const started = deferred();
+    const first = schedulerWith(async () => {
+      started.resolve();
+      await gate.promise;
+    }, capturing);
+    const second = createScheduler({
+      jobs: [first.job], locks: replica, clock: createFakeClock(fixtureTime(0, 5, 12, 0, 0, 0)), timers: createManualTimers(), logger: capturing, registry: new Registry(),
+    });
+
+    const running = first.scheduler.runNow('logged_job');
+    await started.promise;
+    const skipped = await second.runNow('logged_job');
+    gate.resolve();
+    await running;
+
+    expect(skipped).toBe('skipped');
+
+    expect(lines.find(line => line['msg'] === 'A job run was skipped: another replica holds its lock')).toMatchObject({ level: 20, job: 'logged_job' });
+  });
+});

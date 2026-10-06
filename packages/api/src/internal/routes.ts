@@ -167,6 +167,8 @@ export const registerInternalRoutes = (app: FastifyInstance, {
     const result = await routing.registerEndpoint({ host, path, ...quote === undefined ? {} : { lastPrice: parseUsd(quote) } });
     if (result === 'created')
       await audit(request, 'routing.endpoint_register', { kind: 'routed_endpoint', id: `${host}${path}` }, { host, path });
+    // Under the routed call's request ID, which the proxy sends along (XC-5, L-2)
+    request.log[result === 'created' ? 'info' : 'debug']({ caller: callerOf(request), host, path, result }, 'A routed endpoint was registered');
 
     return reply.status(result === 'created' ? 201 : 200).send({ host, path, result });
   });
@@ -196,6 +198,7 @@ export const registerInternalRoutes = (app: FastifyInstance, {
       throw new InvalidRequestError('host must be a lowercase DNS name');
     await routing.block({ host, reason: request.body.reason });
     await audit(request, 'routing.block', { kind: 'host', id: host }, { reason: request.body.reason });
+    request.log.info({ caller: callerOf(request), host }, 'A host was blocklisted');
 
     return { host, blocked: true };
   });
@@ -205,6 +208,7 @@ export const registerInternalRoutes = (app: FastifyInstance, {
     if (!await routing.unblock(host))
       throw new NotFoundError('The host isn\'t blocked');
     await audit(request, 'routing.unblock', { kind: 'host', id: host }, {});
+    request.log.info({ caller: callerOf(request), host }, 'A host left the blocklist');
 
     return { host, blocked: false };
   });
@@ -224,6 +228,8 @@ export const registerInternalRoutes = (app: FastifyInstance, {
     await withTransaction(db, tx => auditLog(tx).append({
       actor, action: 'payout.approve', subject: { kind: 'payout_run', id: run }, requestId: request.id, details: { total: approved.total.toString() },
     }));
+    // L-8: a payout run's state change, made by an operator
+    request.log.info({ caller: actor.id, runId: run, from: 'awaiting_approval', to: approved.status, total: formatUsd(approved.total) }, 'A payout run was approved');
 
     return { id: approved.id, status: approved.status, total: formatUsd(approved.total), approvedAt: approved.approvedAt!.toISOString(), approvedBy: approved.approvedBy };
   });
@@ -273,6 +279,10 @@ export const registerInternalRoutes = (app: FastifyInstance, {
 
       return booked;
     });
+
+    request.log.info({
+      caller: actor.id, reference, from: from.asset, fromAmount: formatUsd(fromAmount), to: to.asset, toAmount: formatUsd(toAmount), replayed: result.replayed,
+    }, 'A treasury transfer was recorded');
 
     return reply.status(result.replayed ? 200 : 201).send({
       reference, transactionId: result.transactionId, conversionCost: formatUsd(fromAmount - toAmount), replayed: result.replayed,
@@ -339,6 +349,7 @@ export const registerInternalRoutes = (app: FastifyInstance, {
 
       return credited;
     });
+    request.log.info({ caller, accountId, amount: formatUsd(amount), reference, replayed: result.replayed }, 'An account was credited');
 
     return reply.status(result.replayed ? 200 : 201).send({
       transactionId: result.transactionId,

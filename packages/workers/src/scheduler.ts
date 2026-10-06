@@ -1,7 +1,15 @@
 import { Counter, Gauge, type Registry } from '@prometheus-io/client';
 
-import type { Clock, Logger, Timers } from '@servicerouter/common';
+import { isRecord, type Clock, type Logger, type Timers } from '@servicerouter/common';
 import type { Postgres } from '@servicerouter/db';
+
+/** What a run did, for its log line (L-8). */
+export interface JobOutcome {
+  // Counts by outcome, such as `{ captured: 2, released: 1 }`
+  readonly counts: Readonly<Record<string, number | string | boolean | null>>;
+  // Whether the run did something: its line is info. A run that found nothing to do is debug.
+  readonly acted: boolean;
+}
 
 /** A background job (WK-1 to WK-4). */
 export interface Job {
@@ -12,7 +20,7 @@ export interface Job {
   // The pause between the end of one run and the start of the next
   readonly intervalMs: number;
   /** One run. It must be idempotent and safe to rerun after a crash (WK-2). Throwing marks it failed. */
-  run(): Promise<void>;
+  run(): Promise<JobOutcome | void>;
 }
 
 export type JobRunResult = 'success' | 'failure' | 'skipped';
@@ -35,6 +43,9 @@ export interface SchedulerOptions {
   readonly logger: Logger;
   readonly registry: Registry;
 }
+
+// A run that failed and was logged already
+class JobFailedError extends Error {}
 
 /**
  * Runs each job every interval, under its advisory lock, so one replica runs it at a time (WK-1). A
@@ -68,13 +79,28 @@ export const createScheduler = ({ jobs, locks, clock, timers, logger, registry }
 
   const runLocked = async (job: Job): Promise<JobRunResult> => {
     const unlock = await locks.tryAdvisoryLock(job.lockId);
-    if (!unlock)
+    if (!unlock) {
+      // L-8: another replica runs it now, an ordinary outcome
+      logger.debug({ job: job.name }, 'A job run was skipped: another replica holds its lock');
       return 'skipped';
+    }
 
     const started = performance.now();
+    const durationMs = (): number => Math.round(performance.now() - started);
     try {
-      await job.run();
+      let outcome: JobOutcome | void;
+      try {
+        outcome = await job.run();
+      }
+      catch (error) {
+        // L-8: the cause chain, and the counts the run reached, when its error carries them
+        const counts = isRecord(error) && isRecord(error['result']) ? { counts: error['result'] } : {};
+        logger.error({ error, job: job.name, ...counts, durationMs: durationMs() }, 'A job failed');
+        throw new JobFailedError();
+      }
       lastSuccess.set({ job: job.name }, clock.now().getTime() / 1_000);
+      // L-8: one line per run, info when it did something
+      logger[outcome?.acted ? 'info' : 'debug']({ job: job.name, counts: outcome?.counts ?? {}, durationMs: durationMs() }, 'A job ran');
 
       return 'success';
     }
@@ -90,7 +116,9 @@ export const createScheduler = ({ jobs, locks, clock, timers, logger, registry }
       result = await runLocked(job);
     }
     catch (error) {
-      logger.error({ error, job: job.name }, 'A job failed');
+      // The job's own failure is logged where it happened; this is the lock or its connection
+      if (!(error instanceof JobFailedError))
+        logger.error({ error, job: job.name }, 'A job failed');
       result = 'failure';
     }
     runs.inc({ job: job.name, result });

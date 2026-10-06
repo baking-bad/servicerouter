@@ -15,7 +15,9 @@ import {
 
 import { createOwnershipRecheck } from '../../src/ownershipRecheck.js';
 
-const hosts = ['live.example.com', 'pending.example.com', 'suspended.example.com', 'later.example.com', 'b1.example.com', 'b2.example.com', 'b3.example.com'];
+const hosts = [
+  'live.example.com', 'pending.example.com', 'suspended.example.com', 'later.example.com', 'b1.example.com', 'b2.example.com', 'b3.example.com', 'gone.example.com',
+];
 const day = 24 * 60 * 60 * 1_000;
 
 let database: TestDatabase;
@@ -51,13 +53,13 @@ afterAll(async () => {
 
 const store = () => createOwnershipStore({ db: database.db, clock, ids: randomIdGenerator });
 
-const recheck = (batchSize = 50) => createOwnershipRecheck({
+const recheck = (batchSize = 50, logger = createLogger({ level: 'silent' })) => createOwnershipRecheck({
   verifier: createOwnershipVerifier({
     store: store(),
     fetchFile: createOwnershipFileFetcher({ http, fileUrl: host => upstream.url(host, '/.well-known/servicerouter.json') }),
     clock,
     invalidation: { publish: async () => undefined },
-    logger: createLogger({ level: 'silent' }),
+    logger,
   }),
   batchSize,
 });
@@ -130,5 +132,23 @@ describe('the ownership re-check (OV-6, WK-2)', () => {
     expect(first.hosts).toBe(2);
     expect(second.hosts).toBe(1);
     expect(['b1.example.com', 'b2.example.com', 'b3.example.com'].map(host => files.fetches(host))).toEqual([1, 1, 1]);
+  });
+});
+
+describe('the re-check\'s lines (L-4, L-8)', () => {
+  it('logs each host\'s state change with the account and host, and a file it can\'t read with the call\'s host, path, and status', async () => {
+    const lines: Record<string, unknown>[] = [];
+    const logger = createLogger({ level: 'debug' }, { write: (line: string) => lines.push(JSON.parse(line) as Record<string, unknown>) });
+    const gone = await seed('live', ['gone.example.com'], 'verified');
+    files.remove('gone.example.com');
+
+    await recheck(50, logger)();
+
+    expect(lines.find(line => line['msg'] === 'An ownership file check failed' && line['host'] === 'gone.example.com')).toMatchObject({
+      level: 30, accountId: gone.accountId, problem: 'file_not_found', method: 'GET', path: '/.well-known/servicerouter.json', status: 404, durationMs: expect.any(Number),
+    });
+    expect(lines.find(line => line['host'] === 'gone.example.com' && line['notice'] === true)).toMatchObject({
+      level: 40, accountId: gone.accountId, from: 'verified', to: 'missing',
+    });
   });
 });

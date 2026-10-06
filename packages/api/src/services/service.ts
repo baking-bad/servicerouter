@@ -254,7 +254,8 @@ export const createServiceRegistry = ({
         .filter(secret => !sentNames.includes(secret.name) && !deleted.includes(secret.name))
         .map(secret => [secret.name, secret.origin]));
 
-      const fetched = await fetchOpenApiDocuments(parsed, { http });
+      // A document that can't be fetched logs why, under the request's ID (L-4)
+      const fetched = await fetchOpenApiDocuments(parsed, { http, logger: logger.child({ requestId }) });
       if (!fetched.ok)
         throw new InvalidServiceConfigError(body.locate(fetched.errors));
 

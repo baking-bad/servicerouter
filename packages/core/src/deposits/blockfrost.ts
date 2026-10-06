@@ -1,8 +1,29 @@
 import { isRecord, ServiceRouterError, type Secret } from '@servicerouter/common';
 
+/** What a log line says about a failed Blockfrost call (L-4): the path without its query, the status, the duration. */
+export interface BlockfrostCall {
+  readonly method?: string;
+  readonly path?: string;
+  readonly status?: number;
+  readonly durationMs?: number;
+}
+
 /** Blockfrost didn't answer, or answered something unexpected. The message names the call, never the key. */
 export class BlockfrostError extends ServiceRouterError {
   readonly code = 'blockfrost_unavailable';
+  readonly method: string | undefined;
+  readonly path: string | undefined;
+  readonly status: number | undefined;
+  readonly durationMs: number | undefined;
+
+  constructor(message: string, options?: ErrorOptions & BlockfrostCall) {
+    super(message, options?.cause === undefined ? undefined : { cause: options.cause });
+
+    this.method = options?.method;
+    this.path = options?.path?.split('?', 1)[0];
+    this.status = options?.status;
+    this.durationMs = options?.durationMs === undefined ? undefined : Math.round(options.durationMs);
+  }
 }
 
 /** The chain refused a transaction: it will never land as it is. */
@@ -65,12 +86,14 @@ export const createBlockfrostClient = ({ url, projectId, timeoutMs, fetch = glob
   const base = url.replace(/\/+$/, '');
 
   const get = async (path: string, what: string): Promise<unknown> => {
+    const started = performance.now();
+    const call = (status?: number): BlockfrostCall => ({ method: 'GET', path, ...status === undefined ? {} : { status }, durationMs: performance.now() - started });
     let response: Response;
     try {
       response = await fetch(`${base}${path}`, { headers: { project_id: projectId.expose() }, signal: AbortSignal.timeout(timeoutMs) });
     }
     catch (error) {
-      throw new BlockfrostError(`Blockfrost didn't answer ${what}`, { cause: error });
+      throw new BlockfrostError(`Blockfrost didn't answer ${what}`, { cause: error, ...call() });
     }
     if (response.status === 404) {
       await response.body?.cancel();
@@ -78,13 +101,13 @@ export const createBlockfrostClient = ({ url, projectId, timeoutMs, fetch = glob
     }
     if (!response.ok) {
       await response.body?.cancel();
-      throw new BlockfrostError(`Blockfrost answered ${what} with status ${response.status}`);
+      throw new BlockfrostError(`Blockfrost answered ${what} with status ${response.status}`, call(response.status));
     }
     try {
       return await response.json();
     }
     catch (error) {
-      throw new BlockfrostError(`Blockfrost answered ${what} with invalid JSON`, { cause: error });
+      throw new BlockfrostError(`Blockfrost answered ${what} with invalid JSON`, { cause: error, ...call(response.status) });
     }
   };
 
@@ -163,6 +186,8 @@ export const createBlockfrostClient = ({ url, projectId, timeoutMs, fetch = glob
     },
 
     submitTransaction: async cborHex => {
+      const started = performance.now();
+      const call = (status?: number): BlockfrostCall => ({ method: 'POST', path: '/tx/submit', ...status === undefined ? {} : { status }, durationMs: performance.now() - started });
       let response: Response;
       try {
         response = await fetch(`${base}/tx/submit`, {
@@ -173,7 +198,7 @@ export const createBlockfrostClient = ({ url, projectId, timeoutMs, fetch = glob
         });
       }
       catch (error) {
-        throw new BlockfrostError('Blockfrost didn\'t answer a transaction submission', { cause: error });
+        throw new BlockfrostError('Blockfrost didn\'t answer a transaction submission', { cause: error, ...call() });
       }
       // 400: the node refused it, such as spent inputs or a passed validity window
       if (response.status === 400) {
@@ -182,7 +207,7 @@ export const createBlockfrostClient = ({ url, projectId, timeoutMs, fetch = glob
       }
       if (!response.ok) {
         await response.body?.cancel();
-        throw new BlockfrostError(`Blockfrost answered a transaction submission with status ${response.status}`);
+        throw new BlockfrostError(`Blockfrost answered a transaction submission with status ${response.status}`, call(response.status));
       }
       const hash = await response.json() as unknown;
       if (typeof hash !== 'string' || !/^[0-9a-f]{64}$/.test(hash))

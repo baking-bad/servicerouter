@@ -1,6 +1,8 @@
 import type { FastifyError, FastifyReply, FastifyRequest } from 'fastify';
 
+import { safeStack } from '../diagnostics.js';
 import { ServiceRouterError } from '../errors.js';
+import { recordErrorCode } from './requestLog.js';
 
 /** Maps a `ServiceRouterError` code to the HTTP status an app answers with. One table per app (CK-2). */
 export type ErrorStatusTable = Readonly<Record<string, number>>;
@@ -75,9 +77,15 @@ export const toErrorResponse = (error: unknown, statuses: ErrorStatusTable): Err
 export const createErrorHandler = (statuses: ErrorStatusTable) =>
   (error: unknown, request: FastifyRequest, reply: FastifyReply): FastifyReply => {
     const { status, body } = toErrorResponse(error, statuses);
-    // The stack goes to the log only, never to the client (XC-7)
-    if (status >= 500)
-      request.log.error({ error }, 'Request failed');
+    // A 4xx's code goes on the request line, at info (L-7)
+    recordErrorCode(request, body.error.code);
+    // The error, its cause chain, and its stack go to the log only, never to the client (XC-7, L-9). A
+    // coded error answering internal_error has a code the app doesn't map: a bug, so its stack too.
+    if (status >= 500) {
+      const unmapped = error instanceof ServiceRouterError && body.error.code === serverErrorCodes.internalError;
+      const stack = unmapped ? safeStack(error) : undefined;
+      request.log.error({ error, ...stack === undefined ? {} : { stack } }, 'Request failed');
+    }
 
     return reply.status(status).send(body);
   };

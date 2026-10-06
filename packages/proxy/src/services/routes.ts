@@ -1,7 +1,8 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 
 import {
-  isServiceId, OutboundHttpError, ResponseTooLargeError as OutboundResponseTooLargeError, type OutboundHttp, type OutboundResponse,
+  isServiceId, OutboundHttpError, outboundFields, ResponseTooLargeError as OutboundResponseTooLargeError, upstreamRequestIdOf, type OutboundHttp,
+  type OutboundResponse,
 } from '@servicerouter/common';
 import { declaresStatus, normalizePathText, type RuntimeOperation } from '@servicerouter/core';
 
@@ -143,9 +144,9 @@ export const registerProxyRoutes = (app: FastifyInstance, { cache, http, payUrl,
     reply: FastifyReply,
     call: PaidCall,
     response: OutboundResponse,
-    answer: { readonly headers: Record<string, string | string[]>; readonly bodyless: boolean; readonly latencyMs: number },
+    answer: { readonly headers: Record<string, string | string[]>; readonly bodyless: boolean; readonly latencyMs: number; readonly upstreamRequestId: string | undefined },
   ): Promise<FastifyReply> => {
-    const decision = await payments.decide(call, { status: response.status, latencyMs: answer.latencyMs });
+    const decision = await payments.decide(call, { status: response.status, latencyMs: answer.latencyMs, upstreamRequestId: answer.upstreamRequestId });
     if (decision !== 'billable') {
       await payments.finish(call, decision);
       reply.status(response.status).headers(answer.headers);
@@ -183,7 +184,7 @@ export const registerProxyRoutes = (app: FastifyInstance, { cache, http, payUrl,
     let forwardHeaders = upstreamRequest.headers;
     if (operation.price > 0n) {
       const payment = await payments.begin({
-        headers: request.headers, ip: request.ip, requestId: request.id, serviceId, ownerAccountId, operation, path,
+        headers: request.headers, ip: request.ip, log: request.log, requestId: request.id, serviceId, ownerAccountId, operation, path,
       });
       if (payment.kind === 'challenge')
         return reply.status(payment.response.status).headers(payment.response.headers).send(payment.response.body);
@@ -198,6 +199,11 @@ export const registerProxyRoutes = (app: FastifyInstance, { cache, http, payUrl,
 
     const started = performance.now();
     const seconds = () => (performance.now() - started) / 1_000;
+    // L-4: host, method, path without its query, status or error code, duration. Never the URL: a
+    // seller's credential can be in its query.
+    const call = (outcome: { readonly status?: number; readonly error?: unknown }) => ({
+      serviceId, ...outboundFields({ url: upstreamRequest.url, method: request.method, ...outcome, durationMs: seconds() * 1_000 }),
+    });
     // No usable answer: nothing is billable, and the payment goes back before the opaque 503 (PX-7)
     const unavailable = async (): Promise<never> => {
       if (paid)
@@ -218,19 +224,25 @@ export const registerProxyRoutes = (app: FastifyInstance, { cache, http, payUrl,
     }
     catch (error) {
       metrics.upstream(serviceId, { reason: reasonOf(error) }, seconds());
-      request.log.warn({ serviceId, error }, 'The upstream call failed');
+      request.log.warn({ ...call({ error }), error }, 'The upstream call failed');
       return unavailable();
     }
+    const upstreamRequestId = upstreamRequestIdOf(response.headers);
 
     // PX-7: a status the operation doesn't declare is as opaque as a failure
     if (!declaresStatus(operation, response.status)) {
       response.dispose();
       metrics.upstream(serviceId, { reason: 'undeclared_status' }, seconds());
-      request.log.warn({ serviceId, status: response.status }, 'The upstream answered with a status the operation doesn\'t declare');
+      request.log.warn({ ...call({ status: response.status }), upstreamRequestId }, 'The upstream answered with a status the operation doesn\'t declare');
       return unavailable();
     }
 
     metrics.upstream(serviceId, { status: response.status }, seconds());
+    // L-4: a seller's upstream answering 5xx is an expected outcome: info. Anything else is debug.
+    if (response.status >= 500)
+      request.log.info({ ...call({ status: response.status }), upstreamRequestId }, 'The upstream answered with a server error');
+    else
+      request.log.debug({ ...call({ status: response.status }), upstreamRequestId }, 'The upstream answered');
     // The body can fail while the decision is recorded, before anyone reads it: past the size limit,
     // or cut off. Unheard, that error would crash the process. Whoever reads the body still gets it.
     response.body.on('error', () => undefined);
@@ -238,21 +250,21 @@ export const registerProxyRoutes = (app: FastifyInstance, { cache, http, payUrl,
     const headers = filterResponseHeaders(response.headers, rewrite);
     const bodyless = request.method === 'HEAD' || response.status === 204 || response.status === 304;
     if (paid?.rail.settlesBeforeResponse)
-      return settleThenSend(reply, paid, response, { headers, bodyless, latencyMs: Math.round(seconds() * 1_000) });
+      return settleThenSend(reply, paid, response, { headers, bodyless, latencyMs: Math.round(seconds() * 1_000), upstreamRequestId });
 
     reply.status(response.status).headers(headers);
     if (paid) {
       // Decide and record (rule 5, PX-11), then finalize once the response is out or the client has
       // gone, even while the decision is still being written. A client that leaves after the decision
       // still follows it.
-      const call = paid;
-      const deciding = payments.decide(call, { status: response.status, latencyMs: Math.round(seconds() * 1_000) });
+      const paidCall = paid;
+      const deciding = payments.decide(paidCall, { status: response.status, latencyMs: Math.round(seconds() * 1_000), upstreamRequestId });
       reply.raw.once('close', () => {
-        void (async () => payments.finish(call, await deciding))();
+        void (async () => payments.finish(paidCall, await deciding))();
       });
       const decision = await deciding;
       if (decision === 'billable')
-        reply.headers(call.authorization.receipt?.headers ?? {});
+        reply.headers(paidCall.authorization.receipt?.headers ?? {});
     }
     if (bodyless) {
       response.dispose();

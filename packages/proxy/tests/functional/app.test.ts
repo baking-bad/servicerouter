@@ -403,6 +403,49 @@ describe('the facilitators at startup (PR-6, PX-17)', () => {
     }
   });
 
+  it('logs one startup line with the commit, the environment, the URLs, the rails, and payment routing, at LOG_LEVEL, and no secret (L-1, L-11)', async () => {
+    const facilitator = await startFakeFacilitator({ networks: ['eip155:84532', 'solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1'], feePayer: '11111111111111111111111111111112' });
+    const { logger, lines } = captureLogs();
+    const environment = {
+      ...env(facilitator.url), GIT_SHA: 'f7b6ffb', LOG_LEVEL: 'debug', SIGNER_URL: 'http://signer.internal:8083', SIGNER_SECRET: 'signer-secret-for-the-startup-line-0123',
+    };
+    try {
+      const app = await startProxy({ env: environment, logger });
+      await app.close();
+
+      expect(logger.level).toBe('debug');
+      expect(lines.filter(line => line['msg'] === 'Started')).toEqual([expect.objectContaining({
+        level: 30,
+        app: 'proxy',
+        commit: 'f7b6ffb',
+        logLevel: 'debug',
+        environment: 'staging',
+        urls: { website: 'https://staging.servicerouter.ai', api: 'https://api.staging.servicerouter.ai', pay: 'https://pay.staging.servicerouter.ai' },
+        rails: { credits: true, x402: [{ facilitator: 'cdp', networks: ['eip155:84532', 'solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1'] }], mpp: false },
+        deposits: { network: 'cardano:preprod', asset: 'cardano-usdm', confirmations: 15 },
+        serving: { x402: true, mpp: false },
+        routing: { signer: true, internalApi: false },
+        ports: { port: expect.any(Number), metricsPort: expect.any(Number) },
+      })]);
+      const logged = JSON.stringify(lines);
+      for (const secret of [environment.CDP_API_KEY_SECRET, environment.SIGNER_SECRET, buyerHeaderKey, keys.privateKey.split('\n')[1]!, database.url.expose()])
+        expect(logged).not.toContain(secret);
+    }
+    finally {
+      await facilitator.close();
+    }
+  });
+
+  it('exits with 1 and names the variable when LOG_LEVEL isn\'t a level (L-11)', async () => {
+    const { logger, lines } = captureLogs();
+    const exit = vi.fn();
+
+    await runApp({ name: 'proxy', start: startProxy, logger, exit, env: { ...env('https://facilitator.invalid'), LOG_LEVEL: 'loud' } });
+
+    expect(exit).toHaveBeenCalledWith(1);
+    expect(lines.find(line => line['msg'] === 'Failed to start')).toMatchObject({ error: { code: 'invalid_environment', message: expect.stringContaining('LOG_LEVEL must be one of') } });
+  });
+
   it('exits with 1 when a facilitator needs a CDP key that isn\'t set', async () => {
     const { logger, lines } = captureLogs();
     const exit = vi.fn();

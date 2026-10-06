@@ -19,5 +19,8 @@ RUN --mount=type=cache,target=/root/.npm npm ci --omit=dev
 # which applies packages/db/migrations/ to DATABASE_URL.
 # Platform configs, one per deployment (PC-1). The stack picks one with CONFIG_PATH.
 COPY config ./config
+# The commit the image is built from: every app's startup line names it (L-1). CI passes it.
+ARG GIT_SHA=""
+ENV GIT_SHA=${GIT_SHA}
 USER node
 CMD ["node", "packages/proxy/dist/main.js"]

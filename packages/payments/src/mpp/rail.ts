@@ -2,7 +2,7 @@ import { Challenge, Credential, Errors, Receipt as MppReceipt, Store } from 'mpp
 import { formatUnits, isAddressEqual, keccak256, type Address, type Hex } from 'viem';
 import { Transaction } from 'viem/tempo';
 
-import { isRecord, usdToAtomic, withTimeout, type Clock, type Logger, type Secret } from '@servicerouter/common';
+import { isRecord, usdToAtomic, withTimeout, type Clock, type Logger, type LogSink, type Secret } from '@servicerouter/common';
 
 import { detectMpp, type Credential as RailCredential } from '../credentials.js';
 import { PaymentInvalidError, PaymentUnavailableError, SettlementFailedError } from '../errors.js';
@@ -91,27 +91,29 @@ export const createMppRail = ({ setup, recorder, ledger, logger, clock, settleTi
     supportedModes: ['pull'],
   });
 
-  const validate = async (header: string, request: MppChargeRequest, scope: string): Promise<unknown> => {
+  const validate = async (header: string, request: MppChargeRequest, scope: string, log: LogSink): Promise<unknown> => {
     try {
       return await setup.validator.validateCredential(header, { request, scope });
     }
     catch (error) {
       if (error instanceof Errors.PaymentError)
-        throw new PaymentInvalidError(`The payment was refused: ${reasonOf(error)}`);
+        throw new PaymentInvalidError(`The payment was refused: ${reasonOf(error)}`, { reason: reasonOf(error) });
       const failure = rpcFailure(error);
+      // viem's short message only: its full message carries the signed transaction (L-9)
       if (failure === 'unavailable' || failure === 'pending') {
-        logger.warn({ reason: errorReason(error) }, 'The Tempo RPC didn\'t answer while an MPP payment was checked');
+        log.warn({ reason: errorReason(error), network: setup.network }, 'The Tempo RPC didn\'t answer while an MPP payment was checked');
         throw new PaymentUnavailableError();
       }
       if (failure === 'refused')
-        throw new PaymentInvalidError('The Tempo node refused the payment\'s transaction in simulation, such as for an insufficient balance');
+        throw new PaymentInvalidError('The Tempo node refused the payment\'s transaction in simulation, such as for an insufficient balance', { reason: errorReason(error) });
 
-      logger.warn({ reason: errorReason(error) }, 'An MPP credential failed its check');
-      throw new PaymentInvalidError('The MPP credential isn\'t a valid payment for this call');
+      log.warn({ reason: errorReason(error), network: setup.network }, 'An MPP credential failed its check');
+      throw new PaymentInvalidError('The MPP credential isn\'t a valid payment for this call', { reason: errorReason(error) });
     }
   };
 
   const authorize = async (header: string, quote: Quote): Promise<Omit<MppAuthorization, 'credential'>> => {
+    const log = quote.log ?? logger;
     let challenge;
     try {
       challenge = Credential.deserialize(header).challenge;
@@ -125,7 +127,7 @@ export const createMppRail = ({ setup, recorder, ledger, logger, clock, settleTi
       throw new PaymentInvalidError('The payment doesn\'t match an option for this price. Request the resource again for the current options.');
 
     const request = chargeRequest(asset, quote);
-    const { serialized, sender } = pulledTransaction(await validate(header, request, quote.resource));
+    const { serialized, sender } = pulledTransaction(await validate(header, request, quote.resource, log));
     const transaction = Transaction.deserialize(serialized);
     // The hash of the canonical envelope, as the node derives it: known before the broadcast
     const transactionHash = keccak256(await Transaction.serialize(transaction as Parameters<typeof Transaction.serialize>[0]));
@@ -143,7 +145,7 @@ export const createMppRail = ({ setup, recorder, ledger, logger, clock, settleTi
       claimed = await Store.tryClaim(setup.store, authorizedKey(transactionHash), claimUntil);
     }
     catch (error) {
-      logger.error({ reason: errorReason(error) }, 'The MPP replay store failed');
+      log.error({ reason: errorReason(error) }, 'The MPP replay store failed');
       throw new PaymentUnavailableError();
     }
     if (!claimed)
@@ -178,6 +180,8 @@ export const createMppRail = ({ setup, recorder, ledger, logger, clock, settleTi
       feeBps: quote.feeBps,
       buyer: `address:${setup.network}:${sender.toLowerCase()}`,
       receipt: undefined,
+      network: setup.network,
+      ...quote.log ? { log: quote.log } : {},
       request,
       scope: quote.resource,
       asset: asset.name,
@@ -234,7 +238,8 @@ export const createMppRail = ({ setup, recorder, ledger, logger, clock, settleTi
       }
     },
     finalize: async (authorization): Promise<Receipt> => {
-      const { paymentId, credential, request, scope, asset, feeBps, settlement } = mppOnly(authorization);
+      const { paymentId, credential, request, scope, asset, feeBps, settlement, log = logger } = mppOnly(authorization);
+      const { transactionHash: transaction } = settlement;
       let paid: MppReceipt.Receipt;
       try {
         const header = credential.expose();
@@ -244,16 +249,18 @@ export const createMppRail = ({ setup, recorder, ledger, logger, clock, settleTi
         );
       }
       catch (error) {
-        if (refused(error)) {
-          logger.warn({ paymentId, reason: errorReason(error) }, 'The MPP payment was refused or reverted. Nothing was charged.');
+        const reason = errorReason(error);
+        const failed = refused(error);
+        if (failed) {
+          log.warn({ paymentId, reason, transaction, network: setup.network }, 'The MPP payment was refused or reverted. Nothing was charged.');
           await recorder.changeStatus({ paymentId, to: 'failed' });
         }
         else {
           // A timeout or a failed RPC call: the outcome is unknown. The follow-up reads the receipt (WK-6).
-          logger.warn({ paymentId, reason: errorReason(error) }, 'The MPP broadcast\'s outcome is unknown. The settlement follow-up reads its receipt.');
+          log.warn({ paymentId, reason, transaction, network: setup.network }, 'The MPP broadcast\'s outcome is unknown. The settlement follow-up reads its receipt.');
           await recorder.changeStatus({ paymentId, to: 'settling', transactionHash: settlement.transactionHash, settlementRequest: toMppSettlementRequest(settlement) });
         }
-        throw new SettlementFailedError();
+        throw new SettlementFailedError({ outcome: failed ? 'failed' : 'unknown', reason, transaction, network: setup.network, cause: error });
       }
       finally {
         credential.destroy();
@@ -263,7 +270,7 @@ export const createMppRail = ({ setup, recorder, ledger, logger, clock, settleTi
       await ledger.settle({ paymentId, feeBps, asset, transactionHash: paid.reference, receipt, needsReview: false });
 
       // Private: a shared cache must not serve one buyer's paid answer to another (PR-9)
-      return { headers: { [paymentReceiptHeader]: receipt, 'cache-control': 'private' } };
+      return { headers: { [paymentReceiptHeader]: receipt, 'cache-control': 'private' }, settlement: { status: 'settled', transaction: paid.reference } };
     },
     abort: async authorization => {
       const { paymentId, credential } = mppOnly(authorization);

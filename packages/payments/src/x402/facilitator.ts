@@ -4,15 +4,42 @@ import type { PaymentPayload, PaymentRequirements, SettleResponse, SupportedResp
 
 import type { CdpRequestSigner } from './cdp.js';
 
+/** What a log line says about a facilitator call that failed (L-3, L-4). */
+export interface FacilitatorCall {
+  readonly network?: string;
+  // `/supported`, `/verify`, or `/settle`
+  readonly path?: string;
+  readonly method?: string;
+  // The answer's status, when there was one
+  readonly status?: number;
+  // The answer's errorReason or invalidReason, when it carried one
+  readonly errorReason?: string;
+  readonly durationMs?: number;
+}
+
 /**
  * The facilitator didn't answer usably: a timeout, a connection failure, or a `5xx`. For a settle the
  * outcome is unknown, so the payment is repeated later rather than treated as failed (PR-12).
  */
 export class FacilitatorUnavailableError extends ServiceRouterError {
   readonly code = 'facilitator_unavailable';
+  readonly network: string | undefined;
+  readonly path: string | undefined;
+  readonly method: string | undefined;
+  readonly status: number | undefined;
+  // The answer's errorReason, else what went wrong: `timeout`, `connection failed`, or the status
+  readonly reason: string;
+  readonly durationMs: number | undefined;
 
-  constructor(readonly facilitator: string, reason: string, options?: ErrorOptions) {
-    super(`The ${facilitator} facilitator is unavailable: ${reason}`, options);
+  constructor(readonly facilitator: string, reason: string, options?: ErrorOptions & FacilitatorCall) {
+    super(`The ${facilitator} facilitator is unavailable: ${reason}`, options?.cause === undefined ? undefined : { cause: options.cause });
+
+    this.network = options?.network;
+    this.path = options?.path;
+    this.method = options?.method;
+    this.status = options?.status;
+    this.reason = options?.errorReason ?? reason;
+    this.durationMs = options?.durationMs === undefined ? undefined : Math.round(options.durationMs);
   }
 }
 
@@ -54,6 +81,13 @@ const retryableReasons = new Set(['exact_cardano_facilitator_chain_lookup_failed
 const retryable = (answer: unknown): boolean =>
   isRecord(answer) && [answer['errorReason'], answer['invalidReason']].some(reason => typeof reason === 'string' && retryableReasons.has(reason));
 
+// The answer's own reason, for the log (L-3)
+const reasonOf = (answer: unknown): string | undefined => {
+  const reason = isRecord(answer) ? answer['errorReason'] ?? answer['invalidReason'] : undefined;
+
+  return typeof reason === 'string' && reason !== '' ? reason.slice(0, 200) : undefined;
+};
+
 const isVerifyResponse = (value: unknown): value is VerifyResponse => isRecord(value) && typeof value['isValid'] === 'boolean';
 
 const isSettleResponse = (value: unknown): value is SettleResponse =>
@@ -82,8 +116,13 @@ export const createFacilitator = ({
     accept: (value: unknown) => value is TAnswer,
     // The answer to a request the facilitator refused, such as CDP's 400 for a malformed payload
     refused?: () => TAnswer,
+    network?: string,
   ): Promise<TAnswer> => {
     const target = new URL(`${base}${path}`);
+    const started = performance.now();
+    const failure = (extra: Pick<FacilitatorCall, 'status' | 'errorReason'> = {}): FacilitatorCall => ({
+      method, path, ...network === undefined ? {} : { network }, ...extra, durationMs: performance.now() - started,
+    });
     let response: Response;
     try {
       response = await send(target, {
@@ -98,7 +137,7 @@ export const createFacilitator = ({
       });
     }
     catch (error) {
-      throw new FacilitatorUnavailableError(name, error instanceof Error && error.name === 'TimeoutError' ? 'timeout' : 'connection failed', { cause: error });
+      throw new FacilitatorUnavailableError(name, error instanceof Error && error.name === 'TimeoutError' ? 'timeout' : 'connection failed', { cause: error, ...failure() });
     }
     const answer = await body(response);
     if (response.status < 500 && accept(answer) && !retryable(answer))
@@ -107,7 +146,8 @@ export const createFacilitator = ({
     if (refused && response.status >= 400 && response.status < 500 && !notRefusals.has(response.status))
       return refused();
 
-    throw new FacilitatorUnavailableError(name, `${path} answered ${response.status}`);
+    const errorReason = reasonOf(answer);
+    throw new FacilitatorUnavailableError(name, `${path} answered ${response.status}`, failure({ status: response.status, ...errorReason === undefined ? {} : { errorReason } }));
   };
 
   return {
@@ -115,10 +155,10 @@ export const createFacilitator = ({
     getSupported: () => call('GET', '/supported', undefined, requestTimeoutMs, isSupportedResponse),
     verify: (paymentPayload: PaymentPayload, paymentRequirements: PaymentRequirements) =>
       call('POST', '/verify', { x402Version: paymentPayload.x402Version, paymentPayload, paymentRequirements }, requestTimeoutMs, isVerifyResponse,
-        () => ({ isValid: false, invalidReason: 'invalid_payload' })),
+        () => ({ isValid: false, invalidReason: 'invalid_payload' }), paymentRequirements.network),
     // Refused before anything was submitted: a failed settlement, not an unknown one
     settle: (paymentPayload: PaymentPayload, paymentRequirements: PaymentRequirements) =>
       call('POST', '/settle', { x402Version: paymentPayload.x402Version, paymentPayload, paymentRequirements }, settleTimeoutMs, isSettleResponse,
-        () => ({ success: false, errorReason: 'invalid_payload', transaction: '', network: paymentRequirements.network })),
+        () => ({ success: false, errorReason: 'invalid_payload', transaction: '', network: paymentRequirements.network }), paymentRequirements.network),
   };
 };

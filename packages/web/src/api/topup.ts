@@ -1,6 +1,7 @@
 import { isMocked, type SiteSettings } from '../config';
 import { sampleTopup } from '../mocks/topup';
 import { ApiError, callApi } from './http';
+import { logApiFailure } from './failures';
 import type { Sourced, Topup } from './types';
 
 // The top-up data (DP-5): GET /v1/topup/{token}, or sample data for a sample link while the `topup`
@@ -19,7 +20,8 @@ export const getTopup = async (settings: SiteSettings, token: string): Promise<S
     return { value: sampleTopup(token), sample: true };
 
   try {
-    return { value: await callApi<Topup>(settings.apiUrl, { path: `/v1/topup/${token}` }), sample: false };
+    // The token opens a buyer's top-up page: the log names the route, never the token (L-10)
+    return { value: await callApi<Topup>(settings.apiUrl, { path: `/v1/topup/${token}`, onFailure: logApiFailure('/v1/topup/{token}') }), sample: false };
   }
   catch (error) {
     if (error instanceof ApiError && error.status === 404)

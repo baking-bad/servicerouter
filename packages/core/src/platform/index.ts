@@ -8,3 +8,5 @@ export {
 } from './builder.js';
 export { ConfigLoadError, loadPlatformConfig, loadPlatformConfigDocument } from './loader.js';
 export type { ConfigEnvironment, LoadPlatformConfigOptions } from './loader.js';
+export { platformSummary } from './summary.js';
+export type { PlatformSummary } from './summary.js';

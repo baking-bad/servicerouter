@@ -1,14 +1,55 @@
 import type { IncomingHttpHeaders } from 'node:http';
 
-import { formatUsd, withTimeout, type Logger, type MicroUsd, type OutboundHeaders, type OutboundHttp, type Secret } from '@servicerouter/common';
+import {
+  formatUsd, isRecord, outboundErrorCode, outboundFields, withTimeout, type Logger, type LogSink, type MicroUsd, type OutboundHeaders, type OutboundHttp,
+  type Secret,
+} from '@servicerouter/common';
 import { createOwnershipFileFetcher, type PlatformConfig } from '@servicerouter/core';
 import type { Redis } from '@servicerouter/db';
 import type { PaymentRequirements } from '@x402/core/types';
 
 import { forwardedRequestHeaders } from '../services/forward.js';
 
+/** What a log line says about a Signer call that failed (L-4, L-5). */
+export interface SignerFailure {
+  readonly host: string;
+  readonly method: 'POST';
+  readonly path: string;
+  // The Signer's answer, when there was one
+  readonly status?: number;
+  // `signing_refused` with the Signer's reason, or the transport's error code, such as `ECONNREFUSED`
+  readonly code?: string;
+  readonly reason?: string;
+  readonly durationMs: number;
+}
+
 /** The Signer can't be reached, or refused: the buyer pays nothing (SG-4, SG-6). */
-export class SignerUnavailableError extends Error {}
+export class SignerUnavailableError extends Error {
+  readonly failure: SignerFailure | undefined;
+
+  constructor(message: string, options?: ErrorOptions & { readonly failure?: SignerFailure }) {
+    super(message, options?.cause === undefined ? undefined : { cause: options.cause });
+
+    this.failure = options?.failure;
+  }
+}
+
+const signPath = '/internal/v1/sign';
+
+// The Signer's error envelope: its code and reason, never anything else of the body
+const refusalOf = async (response: Response): Promise<{ readonly code?: string; readonly reason?: string }> => {
+  try {
+    const body: unknown = await response.json();
+    const error = isRecord(body) && isRecord(body['error']) ? body['error'] : undefined;
+    const code = typeof error?.['code'] === 'string' ? error['code'].slice(0, 64) : undefined;
+    const reason = typeof error?.['message'] === 'string' ? error['message'].split('\n', 1)[0]!.slice(0, 200) : undefined;
+
+    return { ...code === undefined ? {} : { code }, ...reason === undefined ? {} : { reason } };
+  }
+  catch {
+    return {};
+  }
+};
 
 /** What the Signer gives back for a target payment (SG-2). */
 export interface SignedPayment {
@@ -41,21 +82,31 @@ export const createSignerClient = ({ url, secret, timeoutMs, fetch = globalThis.
   readonly fetch?: typeof globalThis.fetch;
 }): SignerClient => ({
   sign: async input => {
+    const target = `${url.replace(/\/+$/, '')}${signPath}`;
+    const started = performance.now();
+    const failure = (extra: Pick<SignerFailure, 'status' | 'code' | 'reason'>): SignerFailure => {
+      const { host, path } = outboundFields({ url: target, method: 'POST' });
+
+      return { host: String(host), method: 'POST', path: String(path), ...extra, durationMs: Math.round(performance.now() - started) };
+    };
     let response: Response;
     try {
-      response = await fetch(`${url.replace(/\/+$/, '')}/internal/v1/sign`, {
+      response = await fetch(target, {
         method: 'POST',
+        // The request ID goes along, so one ID finds the call in both apps' logs (XC-5, L-2)
         headers: { 'content-type': 'application/json', 'x-signer-secret': secret.expose(), 'x-request-id': input.requestId },
         body: JSON.stringify({ ...input, quotedPrice: input.quotedPrice.toString() }),
         signal: AbortSignal.timeout(timeoutMs),
       });
     }
     catch (error) {
-      throw new SignerUnavailableError('The Signer didn\'t answer', { cause: error });
+      const code = outboundErrorCode(error);
+      throw new SignerUnavailableError('The Signer didn\'t answer', { cause: error, failure: failure(code === undefined ? {} : { code }) });
     }
     if (!response.ok) {
-      const reason = await response.text().catch(() => '');
-      throw new SignerUnavailableError(`The Signer answered ${response.status}: ${reason.slice(0, 200)}`);
+      // A 422 signing_refused says why (L-5): its code and reason, never the rest of the body
+      const refusal = await refusalOf(response);
+      throw new SignerUnavailableError(`The Signer answered ${response.status}${refusal.code ? ` ${refusal.code}` : ''}`, { failure: failure({ status: response.status, ...refusal }) });
     }
     const body = await response.json() as Record<string, string>;
 
@@ -121,7 +172,8 @@ export const createOptOutCheck = ({ http, redis, logger, fileUrl }: {
 }) => {
   const fetchFile = createOwnershipFileFetcher({ http, ...fileUrl ? { fileUrl } : {} });
 
-  return async (host: string): Promise<boolean> => {
+  // `log`: the request's logger, so its lines carry the request ID
+  return async (host: string, log: LogSink = logger): Promise<boolean> => {
     const key = `${redis.prefix}optout:${host}`;
     try {
       const cached = await redis.client.get(key);
@@ -129,21 +181,25 @@ export const createOptOutCheck = ({ http, redis, logger, fileUrl }: {
         return cached === '1';
     }
     catch (error) {
-      logger.warn({ error, host }, 'The opt-out cache is unavailable');
+      log.warn({ error, host }, 'The opt-out cache is unavailable');
     }
     let optedOut = false;
     try {
       const result = await withTimeout(() => fetchFile(host), { timeoutMs: optOutTimeoutMs });
       optedOut = result.ok && result.file.routing === false;
+      // Most hosts have no file: that is no opt-out. A file that can't be read is too, and says why (L-4).
+      if (!result.ok)
+        log[result.problem === 'file_not_found' ? 'debug' : 'info']({ ...result.outbound, host, problem: result.problem }, 'The routing opt-out file couldn\'t be read: no opt-out');
     }
-    catch {
-      // No answer: no opt-out
+    catch (error) {
+      // No answer in time: no opt-out
+      log.info({ host, code: outboundErrorCode(error) ?? 'timeout', timeoutMs: optOutTimeoutMs }, 'The routing opt-out file didn\'t arrive in time: no opt-out');
     }
     try {
       await redis.client.set(key, optedOut ? '1' : '0', { expiration: { type: 'EX', value: optOutTtlSeconds } });
     }
     catch (error) {
-      logger.warn({ error, host }, 'Failed to cache an opt-out');
+      log.warn({ error, host }, 'Failed to cache an opt-out');
     }
 
     return optedOut;
@@ -159,7 +215,7 @@ export const createEndpointRegistrar = ({ url, secret, logger, fetch = globalThi
   readonly capacity?: number;
 }) => {
   const seen = new Set<string>();
-  const queue: { host: string; path: string; quote?: string }[] = [];
+  const queue: { readonly endpoint: { host: string; path: string; quote?: string }; readonly requestId: string | undefined }[] = [];
   let running = false;
 
   const drain = async (): Promise<void> => {
@@ -168,18 +224,33 @@ export const createEndpointRegistrar = ({ url, secret, logger, fetch = globalThi
     running = true;
     try {
       while (queue.length > 0) {
-        const endpoint = queue.shift()!;
+        const { endpoint, requestId } = queue.shift()!;
+        const target = `${url!.replace(/\/+$/, '')}/internal/v1/routed-endpoints`;
+        const started = performance.now();
+        // The routed call's request ID goes along, so the internal API's lines carry it too (XC-5, L-2)
+        const failed = (outcome: { readonly status?: number; readonly error?: unknown }, message: string): void => {
+          logger.warn({
+            ...outboundFields({ url: target, method: 'PUT', ...outcome, durationMs: performance.now() - started }),
+            ...requestId === undefined ? {} : { requestId }, endpointHost: endpoint.host, ...outcome.error === undefined ? {} : { error: outcome.error },
+          }, message);
+        };
         try {
-          await fetch(`${url!.replace(/\/+$/, '')}/internal/v1/routed-endpoints`, {
+          const response = await fetch(target, {
             method: 'PUT',
-            headers: { 'content-type': 'application/json', 'x-internal-secret': secret!.expose(), 'x-internal-caller': 'proxy' },
+            headers: {
+              'content-type': 'application/json', 'x-internal-secret': secret!.expose(), 'x-internal-caller': 'proxy',
+              ...requestId === undefined ? {} : { 'x-request-id': requestId },
+            },
             body: JSON.stringify(endpoint),
             signal: AbortSignal.timeout(5_000),
           });
+          await response.body?.cancel();
+          if (!response.ok)
+            failed({ status: response.status }, 'The internal API refused to register a routed endpoint');
         }
         catch (error) {
           seen.delete(`${endpoint.host}${endpoint.path}`);
-          logger.warn({ error, host: endpoint.host }, 'Failed to register a routed endpoint: the next call registers it');
+          failed({ error }, 'Failed to register a routed endpoint: the next call registers it');
         }
       }
     }
@@ -189,14 +260,14 @@ export const createEndpointRegistrar = ({ url, secret, logger, fetch = globalThi
   };
 
   return {
-    register: (host: string, path: string, quote?: MicroUsd): void => {
+    register: (host: string, path: string, quote?: MicroUsd, requestId?: string): void => {
       if (!url || !secret)
         return;
       const key = `${host}${path}`;
       if (seen.has(key) || queue.length >= capacity)
         return;
       seen.add(key);
-      queue.push({ host, path, ...quote === undefined ? {} : { quote: formatUsd(quote) } });
+      queue.push({ endpoint: { host, path, ...quote === undefined ? {} : { quote: formatUsd(quote) } }, requestId });
       void drain();
     },
     /** For tests and shutdown: waits until the queue is empty. */

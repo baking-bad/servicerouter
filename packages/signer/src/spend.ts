@@ -7,10 +7,17 @@ export const spendKeyPrefix = 'spend:';
 
 export type SpendRefusal = 'hourly_limit' | 'daily_limit';
 
+/** A reservation's result: the refusal, if any, and each window's total, with this amount when it passed. */
+export interface SpendReservation {
+  readonly refusal: SpendRefusal | undefined;
+  readonly hour: MicroUsd;
+  readonly day: MicroUsd;
+}
+
 /** Port: the spend limits per network (SG-4). */
 export interface SpendLimits {
-  /** Checks both limits and adds the amount, atomically. Returns why it refused, or undefined. */
-  reserve(input: { readonly network: string; readonly amount: MicroUsd }): Promise<SpendRefusal | undefined>;
+  /** Checks both limits and adds the amount, atomically. Says why it refused, and the windows' totals (L-6). */
+  reserve(input: { readonly network: string; readonly amount: MicroUsd }): Promise<SpendReservation>;
 }
 
 // Check both windows, then add to both, in one script: two Signers never pass a limit together
@@ -20,13 +27,13 @@ local day = tonumber(redis.call('GET', KEYS[2]) or '0')
 local amount = tonumber(ARGV[1])
 local hourLimit = tonumber(ARGV[2])
 local dayLimit = tonumber(ARGV[3])
-if hourLimit >= 0 and hour + amount > hourLimit then return 1 end
-if day + amount > dayLimit then return 2 end
-redis.call('INCRBY', KEYS[1], ARGV[1])
+if hourLimit >= 0 and hour + amount > hourLimit then return {1, hour, day} end
+if day + amount > dayLimit then return {2, hour, day} end
+local newHour = redis.call('INCRBY', KEYS[1], ARGV[1])
 redis.call('EXPIRE', KEYS[1], 7200)
-redis.call('INCRBY', KEYS[2], ARGV[1])
+local newDay = redis.call('INCRBY', KEYS[2], ARGV[1])
 redis.call('EXPIRE', KEYS[2], 172800)
-return 0`;
+return {0, newHour, newDay}`;
 
 /**
  * Spend limits per network in Redis (SG-4): per clock hour and per UTC day, in micro-USD. A hourly
@@ -47,8 +54,13 @@ export const createRedisSpendLimits = ({ redis, clock, hourly, daily }: {
     const result = await redis.client.eval(reserveScript, {
       keys: [`${base}:hour:${now.slice(0, 13)}`, `${base}:day:${now.slice(0, 10)}`],
       arguments: [amount.toString(), hourly === undefined ? '-1' : hourly.toString(), daily.toString()],
-    });
+    }) as unknown as readonly [number, number, number];
+    const [code, hour, day] = result;
 
-    return result === 1 ? 'hourly_limit' : result === 2 ? 'daily_limit' : undefined;
+    return {
+      refusal: code === 1 ? 'hourly_limit' : code === 2 ? 'daily_limit' : undefined,
+      hour: BigInt(hour) as MicroUsd,
+      day: BigInt(day) as MicroUsd,
+    };
   },
 });

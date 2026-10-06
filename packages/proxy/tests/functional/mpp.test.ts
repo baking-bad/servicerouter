@@ -31,6 +31,9 @@ const generous = { requests: 100_000, windowSeconds: 60 };
 const settleTimeoutMs = 1_000;
 const clock = { now: () => new Date() };
 const logger = createLogger({ level: 'silent' });
+// Every line the first proxy writes, debug included (T24)
+const lines: Record<string, unknown>[] = [];
+const proxyLogger = createLogger({ level: 'debug' }, { write: (line: string) => lines.push(JSON.parse(line) as Record<string, unknown>) });
 
 const openapi = {
   openapi: '3.1.0',
@@ -159,11 +162,11 @@ beforeAll(async () => {
   mpp = first;
 
   api = createApi({ config, logger, postgres: database.postgres, redis, sealer: keys.sealer, openApiHttp: apiHttp, ownership: assumeHostsVerified, internalSecret: Secret.from('internal-secret-0123456789abcdef-xyz') });
-  const proxyOf = (setup: MppSetup | undefined, connection: Redis) => createApp({
-    config, logger, postgres: database.postgres, redis: connection, opener: keys.opener, http: proxyHttp, buyerHeaderKey: Secret.from(buyerHeaderKey), x402,
+  const proxyOf = (setup: MppSetup | undefined, connection: Redis, appLogger = logger) => createApp({
+    config, logger: appLogger, postgres: database.postgres, redis: connection, opener: keys.opener, http: proxyHttp, buyerHeaderKey: Secret.from(buyerHeaderKey), x402,
     ...(setup ? { mpp: setup } : {}),
   });
-  proxy = proxyOf(first, redis);
+  proxy = proxyOf(first, redis, proxyLogger);
   replica = proxyOf(second, replicaRedis);
   proxyOff = proxyOf(undefined, redis);
   const listen = { host: '127.0.0.1', port: 0, metricsPort: 0 };
@@ -485,5 +488,65 @@ describe('readiness with MPP (PX-17, PR-9)', () => {
     expect(await failing.json()).toEqual({ status: 'not_ready', checks: { postgres: 'ok', redis: 'ok', 'facilitator:cdp': 'ok', mpp: 'failed' } });
     rpc.unavailable(false);
     expect((await fetch(`${proxyUrl}/_/ready`)).status).toBe(200);
+  });
+});
+
+describe('MPP diagnostics (L-3, L-9)', () => {
+  const linesOf = (requestId: string) => lines.filter(line => line['requestId'] === requestId);
+
+  it('logs a paid MPP call once, with its network, asset, and transaction', async () => {
+    const { response, requestId } = await paidCall('/weather/oslo', 'mpp-logs');
+
+    expect(response.status).toBe(200);
+    expect(linesOf(requestId).filter(line => line['msg'] === 'Paid call finished')).toEqual([expect.objectContaining({
+      level: 30, rail: 'mpp', network: tempo, asset: 'tempo-pathusd', amount: '0.001', decision: 'billable', paymentStatus: 'settled',
+      transaction: expect.stringMatching(/^0x[0-9a-f]{64}$/), upstreamStatus: 200,
+    })]);
+  });
+
+  it('logs an RPC error with viem\'s short message only: never the signed transaction its request carried', async () => {
+    const credential = await pay('/weather/oslo');
+    rpc.broadcast('fail');
+
+    const { response, requestId } = await send('/weather/oslo', credential, { label: 'mpp-rpc-error' });
+
+    expect(response.status).toBe(502);
+    expect(linesOf(requestId).find(line => line['msg'] === 'The MPP broadcast\'s outcome is unknown. The settlement follow-up reads its receipt.')).toMatchObject({
+      level: 40, reason: 'HTTP request failed.', network: tempo, transaction: expect.stringMatching(/^0x[0-9a-f]{64}$/),
+    });
+    expect(linesOf(requestId).find(line => line['msg'] === 'Paid call failed to settle')).toMatchObject({
+      level: 40, rail: 'mpp', paymentStatus: 'settling', outcome: 'unknown', reason: 'HTTP request failed.',
+    });
+    expect(linesOf(requestId).find(line => line['msg'] === 'Request failed')).toMatchObject({
+      error: { code: 'settlement_failed', cause: { type: 'HttpRequestError', message: 'HTTP request failed.', status: 503 } },
+    });
+    const logged = JSON.stringify(linesOf(requestId));
+    expect(rpc.rawTransactions.length).toBeGreaterThan(0);
+    for (const raw of rpc.rawTransactions)
+      expect(logged).not.toContain(raw.slice(2, 66));
+    expect(logged).not.toContain(credential.slice(-40));
+    expect(logged).not.toMatch(/Request body|eth_sendRawTransaction/);
+  });
+
+  it('logs a Tempo RPC that doesn\'t answer the check as the platform\'s fault, with its short message', async () => {
+    const credential = await pay('/weather/oslo');
+    rpc.unavailable(true);
+
+    const { response, requestId } = await send('/weather/oslo', credential, { label: 'mpp-rpc-down' });
+
+    expect(response.status).toBe(503);
+    expect(linesOf(requestId).find(line => line['msg'] === 'The Tempo RPC didn\'t answer while an MPP payment was checked')).toMatchObject({
+      level: 40, network: tempo, reason: expect.any(String),
+    });
+    expect(linesOf(requestId).find(line => line['msg'] === 'Paid call refused: the payment couldn\'t be checked')).toMatchObject({ level: 40, rail: 'mpp', code: 'payment_unavailable' });
+  });
+
+  it('never logs an MPP credential, the challenges\' key, or a seller secret', async () => {
+    const credential = await pay('/weather/bergen');
+    await send('/weather/bergen', credential, { label: 'mpp-secrets' });
+
+    const logged = JSON.stringify(lines);
+    for (const secret of [credential, credential.slice(-40), mppSecretKey, buyerHeaderKey, 'sk-weather', seller.masterKey])
+      expect(logged).not.toContain(secret);
   });
 });
