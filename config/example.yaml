@@ -77,6 +77,12 @@ mpp:                            # PR-9. The Tempo charge: pull mode, charged aft
   enabled: true                 # Optional. Default: true. A disabled MPP isn't offered, and its RPC isn't checked
   # rpcUrl: https://rpc.moderato.tempo.xyz   # Optional. HTTPS, without credentials. Default: the chain's public RPC
 
+deposits:                       # Optional. DP-1 to DP-4: each buyer's Cardano deposit address. Absent: off
+  asset: cardano-usdm           # A Cardano asset of the registry, credited 1:1 in USD. Its network is the addresses'
+  confirmations: 15             # Optional. Default: 15 blocks, the deposit's own included
+  enabled: true                 # Optional. Default: true. The API then needs DEPOSIT_ACCOUNT_PUBLIC_KEY, the workers BLOCKFROST_PROJECT_ID
+  # blockfrostUrl: https://cardano-preprod.blockfrost.io/api/v0   # Optional. Default: Blockfrost's for the network
+
 payouts:
   assets: [cardano-usdm]        # PO-2: USDM on Cardano only in v1
   minimum: "10"                 # Optional. B6
