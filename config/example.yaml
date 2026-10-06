@@ -63,6 +63,7 @@ facilitators:                   # PR-6. One facilitator per network
   - name: cardano
     url: http://cardano-facilitator:4022  # Internal network only (CF-2)
     networks: [cardano:preprod]
+    enabled: false              # Optional. Default: true. Off until step 6: not checked, and Cardano isn't offered
 
 mpp:                            # PR-9. Tempo charge recipient
   network: eip155:42431         # Tempo Moderato
