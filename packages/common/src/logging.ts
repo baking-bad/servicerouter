@@ -2,6 +2,8 @@ import pino, { type DestinationStream, type Logger, type LoggerOptions } from 'p
 
 import { redactedMessage } from './secret.js';
 
+export type { Logger };
+
 // Request and response headers that carry credentials or payment data (CK-3)
 export const redactedHeaders = [
   'authorization',
