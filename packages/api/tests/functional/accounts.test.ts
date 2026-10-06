@@ -4,7 +4,9 @@ import { afterAll, beforeAll, describe, expect, it, vi, type MockInstance } from
 import { createLogger, type Server } from '@servicerouter/common';
 import { generateApiKey, loadPlatformConfig, type ApiKeyRepository, type PlatformConfig } from '@servicerouter/core';
 import { accounts, auditLog, createApiKeyRepository } from '@servicerouter/db';
-import { createTestDatabase, createTestRedis, type TestDatabase, type TestRedis } from '@servicerouter/testing';
+import {
+  createTestDatabase, createTestRedis, createTestSecretKeys, type TestDatabase, type TestRedis, type TestSecretKeys,
+} from '@servicerouter/testing';
 
 import { lostKeyNotice } from '../../src/accounts/routes.js';
 import { createApp } from '../../src/app.js';
@@ -23,6 +25,7 @@ interface Started {
 let database: TestDatabase;
 let redis: TestRedis;
 let config: PlatformConfig;
+let keys: TestSecretKeys;
 const servers: Server[] = [];
 
 const start = async ({ config: appConfig = config, trustProxy }: { config?: PlatformConfig; trustProxy?: string } = {}): Promise<Started> => {
@@ -30,7 +33,7 @@ const start = async ({ config: appConfig = config, trustProxy }: { config?: Plat
   const logger = createLogger({}, { write: (line: string) => logs.push(JSON.parse(line) as Record<string, unknown>) });
   const apiKeys = createApiKeyRepository({ db: database.db });
   const lookups = vi.spyOn(apiKeys, 'findActiveByHash');
-  const server = createApp({ config: appConfig, logger, postgres: database.postgres, redis, apiKeys, trustProxy });
+  const server = createApp({ config: appConfig, logger, postgres: database.postgres, redis, apiKeys, trustProxy, sealer: keys.sealer });
   servers.push(server);
   const { port } = await server.listen({ host: '127.0.0.1', port: 0, metricsPort: 0 });
 
@@ -64,7 +67,9 @@ const rotate = async (headers: Record<string, string>) => {
 };
 
 beforeAll(async () => {
-  [database, redis, config] = await Promise.all([createTestDatabase(), createTestRedis(), loadConfig('{ requests: 1000, windowSeconds: 60 }')]);
+  [database, redis, config, keys] = await Promise.all([
+    createTestDatabase(), createTestRedis(), loadConfig('{ requests: 1000, windowSeconds: 60 }'), createTestSecretKeys(),
+  ]);
   app = await start();
 });
 

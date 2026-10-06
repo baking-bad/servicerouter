@@ -19,10 +19,11 @@ describe('scripts/secrets-keygen.mjs (SC-2, SC-4)', () => {
 
     const sealer = createSecretSealer(publicKey!);
     const opener = createSecretOpener([Secret.from(privateKey!)]);
-    const sealed = sealer.seal({ serviceId: 'my-app', name: 'weather-key', value: Secret.from('value') });
+    const where = { serviceId: 'my-app', name: 'weather-key', origin: 'https://api.example.com' };
+    const sealed = sealer.seal({ ...where, value: Secret.from('value') });
 
     expect(sealer.keyId).toBe(keyId);
     expect(opener.keyIds).toEqual([keyId]);
-    expect(opener.open({ serviceId: 'my-app', name: 'weather-key', sealed }).expose()).toBe('value');
+    expect(opener.open({ ...where, sealed }).expose()).toBe('value');
   });
 });

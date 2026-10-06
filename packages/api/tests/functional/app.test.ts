@@ -5,7 +5,9 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest
 import { createLogger, runApp, Secret, type Logger, type Server } from '@servicerouter/common';
 import { loadPlatformConfig, type PlatformConfig } from '@servicerouter/core';
 import { createPostgres, createRedis, type Postgres, type Redis } from '@servicerouter/db';
-import { createTestDatabase, createTestRedis, type TestDatabase, type TestRedis } from '@servicerouter/testing';
+import {
+  createTestDatabase, createTestRedis, createTestSecretKeys, type TestDatabase, type TestRedis, type TestSecretKeys,
+} from '@servicerouter/testing';
 
 import { createApp } from '../../src/app.js';
 import { startApi } from '../../src/start.js';
@@ -22,6 +24,7 @@ interface RunningServer {
 let config: PlatformConfig;
 let database: TestDatabase;
 let redis: TestRedis;
+let keys: TestSecretKeys;
 const started: Server[] = [];
 
 const start = async (dependencies: { postgres?: Postgres; redis?: Redis; logger?: Logger } = {}): Promise<RunningServer> => {
@@ -30,6 +33,7 @@ const start = async (dependencies: { postgres?: Postgres; redis?: Redis; logger?
     logger: dependencies.logger ?? silentLogger,
     postgres: dependencies.postgres ?? database.postgres,
     redis: dependencies.redis ?? redis,
+    sealer: keys.sealer,
   });
   server.app.get('/test/boom', async () => {
     throw new Error('upstream 10.0.0.5 said: secret detail');
@@ -75,7 +79,7 @@ const captureLogs = () => {
 
 beforeAll(async () => {
   config = await loadPlatformConfig({ env: exampleConfig });
-  [database, redis] = await Promise.all([createTestDatabase(), createTestRedis()]);
+  [database, redis, keys] = await Promise.all([createTestDatabase(), createTestRedis(), createTestSecretKeys()]);
 });
 
 afterEach(async () => {
@@ -243,5 +247,45 @@ describe('startup (PC-1)', () => {
     expect(lines.find(line => line['msg'] === 'Failed to start')).toMatchObject({
       error: { message: 'Secret DATABASE_URL is not set' },
     });
+  });
+});
+
+describe('the secrets public key (S2-D4, SC-2)', () => {
+  const connections = () => ({ DATABASE_URL: database.url.expose(), REDIS_URL: redis.url.expose() });
+  const listen = { HOST: '127.0.0.1', PORT: '0', METRICS_PORT: '0' };
+  const oneLine = (pem: string) => pem.trim().replaceAll('\n', '\\n');
+
+  it('starts with the PEM key on one line, each newline written as \\n', async () => {
+    const app = await startApi({ env: { ...exampleConfig, ...connections(), ...listen, SECRETS_PUBLIC_KEY: oneLine(keys.publicKey) }, logger: silentLogger });
+
+    await app.close();
+    expect(oneLine(keys.publicKey)).not.toContain('\n');
+  });
+
+  it.each([
+    ['unset', undefined, 'SECRETS_PUBLIC_KEY is not set. It holds the PEM public key that seals seller secrets. Generate a pair with node scripts/secrets-keygen.mjs'],
+    ['empty', ' ', 'SECRETS_PUBLIC_KEY is not set. It holds the PEM public key that seals seller secrets. Generate a pair with node scripts/secrets-keygen.mjs'],
+    ['not a key', 'not a key', 'SECRETS_PUBLIC_KEY can\'t seal secrets: The public key is not a valid PEM public key. Generate a pair with node scripts/secrets-keygen.mjs'],
+  ])('exits with 1 and says why when the key is %s', async (_case, value, message) => {
+    const { logger, lines } = captureLogs();
+    const exit = vi.fn();
+
+    await runApp({ name: 'api', start: startApi, logger, exit, env: { ...exampleConfig, ...connections(), ...listen, SECRETS_PUBLIC_KEY: value } });
+
+    expect(exit).toHaveBeenCalledWith(1);
+    expect(lines.find(line => line['msg'] === 'Failed to start')).toMatchObject({ error: { message } });
+  });
+
+  it('exits with 1 when handed the private key, without logging it', async () => {
+    const { logger, lines } = captureLogs();
+    const exit = vi.fn();
+
+    await runApp({ name: 'api', start: startApi, logger, exit, env: { ...exampleConfig, ...connections(), ...listen, SECRETS_PUBLIC_KEY: oneLine(keys.privateKey) } });
+
+    expect(exit).toHaveBeenCalledWith(1);
+    expect(lines.find(line => line['msg'] === 'Failed to start')).toMatchObject({
+      error: { message: 'SECRETS_PUBLIC_KEY can\'t seal secrets: The sealer takes the public key only, and this is a private key. Generate a pair with node scripts/secrets-keygen.mjs' },
+    });
+    expect(JSON.stringify(lines)).not.toContain(keys.privateKey.split('\n')[1]);
   });
 });

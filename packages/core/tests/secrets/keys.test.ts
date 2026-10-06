@@ -77,3 +77,41 @@ describe('createSecretOpener (SC-4)', () => {
       expect(shown(error)).not.toContain(keyBody(text));
   });
 });
+
+describe('keys the secrets pair can\'t use (backlog D-6)', () => {
+  const sec1EcPrivateKey = () => generateKeyPairSync('ec', {
+    namedCurve: 'P-256',
+    publicKeyEncoding: { type: 'spki', format: 'pem' },
+    privateKeyEncoding: { type: 'sec1', format: 'pem' },
+  }).privateKey;
+  const rsaPssKeyPair = () => generateKeyPairSync('rsa-pss', {
+    modulusLength: 3072,
+    publicKeyEncoding: { type: 'spki', format: 'pem' },
+    privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
+  });
+
+  it.each([
+    ['a SEC1 EC private key', sec1EcPrivateKey, 'The sealer takes the public key only, and this is a private key'],
+    ['an RSA-PSS public key', () => rsaPssKeyPair().publicKey, 'The key must be an RSA key, not rsa-pss'],
+  ])('the sealer refuses %s with secret_key_invalid', (_name, pem, message) => {
+    const text = pem();
+    const error = thrown(() => createSecretSealer(text));
+
+    expect(text).toMatch(/^-----BEGIN (EC PRIVATE|PUBLIC) KEY-----/);
+    expect(error).toBeInstanceOf(SecretKeyInvalidError);
+    expect(error).toMatchObject({ code: 'secret_key_invalid', message });
+    expect(shown(error)).not.toContain(keyBody(text));
+  });
+
+  it.each([
+    ['a SEC1 EC private key', sec1EcPrivateKey, 'The key must be an RSA key, not ec'],
+    ['an RSA-PSS private key', () => rsaPssKeyPair().privateKey, 'The key must be an RSA key, not rsa-pss'],
+  ])('the opener refuses %s with secret_key_invalid', (_name, pem, message) => {
+    const text = pem();
+    const error = thrown(() => createSecretOpener([Secret.from(text)]));
+
+    expect(error).toBeInstanceOf(SecretKeyInvalidError);
+    expect(error).toMatchObject({ code: 'secret_key_invalid', message });
+    expect(shown(error)).not.toContain(keyBody(text));
+  });
+});

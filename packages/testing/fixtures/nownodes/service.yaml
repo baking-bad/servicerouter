@@ -1,0 +1,184 @@
+# Multi-chain service fixture with one
+# credential and secret per host. The demo shares one secret, `nownodes-api-key`, across four hosts,
+# which host binding (SC-10) refuses: a secret is sealed for one upstream origin. Each host here sends
+# the same NOWNodes API key under its own secret name.
+#
+# Filled in:
+#   service.category        blockchain. Not in config/example.yaml: add it to the test's platform config.
+#   payouts.default.address a placeholder Cardano preprod address, for the staging-shaped example config.
+#
+# Load it with `nownodesServiceConfig()` from @servicerouter/testing.
+
+servicerouter:
+  version: "1"
+
+service:
+  id: nownodes
+  title: NOWNodes
+  summary: Blockchain JSON-RPC and explorer API for Ethereum, Base, Solana, and Bitcoin
+  description: |
+    Full-node access through NOWNodes, paid per call.
+
+    JSON-RPC: send one JSON-RPC 2.0 request per HTTP call, as you would to any node.
+    - POST /eth   Ethereum mainnet (eth_blockNumber, eth_getBalance, eth_call, ...)
+    - POST /base  Base mainnet
+    - POST /sol   Solana mainnet (getSlot, getBalance, ...)
+
+    Explorer (Blockbook REST) for Bitcoin mainnet: addresses, transactions, blocks,
+    UTXOs, and fee estimates. Add `details=basic` to address calls to keep responses small.
+  category: blockchain
+  tags: [rpc, json-rpc, blockbook, ethereum, base, solana, bitcoin, nodes]
+  links:
+    homepage: https://nownodes.io
+    docs: https://docs.nownodes.io
+  contact:
+    name: NOWNodes
+    url: https://nownodes.io
+
+payouts:
+  default:
+    asset: cardano-usdm
+    address: addr_test1vq3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zygswahgq5
+
+payments:
+  default:                              # One JSON-RPC call
+    amount: "0.0005"
+  explorer:                             # One Blockbook call
+    amount: "0.001"
+
+upstreams:
+  - baseUrl: https://eth.nownodes.io
+    name: eth
+    paths:
+      /eth:
+        post:
+          operationId: ethRpc
+          summary: Ethereum JSON-RPC
+          requestBody:
+            required: true
+            content:
+              application/json:
+                example: { jsonrpc: "2.0", id: 1, method: eth_blockNumber, params: [] }
+          responses:
+            "200": { description: JSON-RPC response. Errors also come as 200 with an `error` field. }
+    auth: eth-key
+
+  - baseUrl: https://base.nownodes.io
+    name: base
+    paths:
+      /base:
+        post:
+          operationId: baseRpc
+          summary: Base JSON-RPC
+          requestBody:
+            required: true
+            content:
+              application/json:
+                example: { jsonrpc: "2.0", id: 1, method: eth_blockNumber, params: [] }
+          responses:
+            "200": { description: JSON-RPC response }
+    auth: base-key
+
+  - baseUrl: https://sol.nownodes.io
+    name: sol
+    paths:
+      /sol:
+        post:
+          operationId: solRpc
+          summary: Solana JSON-RPC
+          requestBody:
+            required: true
+            content:
+              application/json:
+                example: { jsonrpc: "2.0", id: 1, method: getSlot, params: [] }
+          responses:
+            "200": { description: JSON-RPC response }
+    auth: sol-key
+
+  - baseUrl: https://btcbook.nownodes.io
+    name: btc
+    paths:                              # Blockbook declares 400 for bad input. 400 passes through and isn't charged.
+      /btc/api/v2/address/{address}:
+        get:
+          operationId: btcAddress
+          summary: Balance and transactions of a Bitcoin address
+          parameters:
+            - { name: address, in: path, required: true, schema: { type: string } }
+            - { name: details, in: query, schema: { type: string, enum: [basic, txids, txs] } }
+            - { name: page, in: query, schema: { type: integer } }
+            - { name: pageSize, in: query, schema: { type: integer } }
+          responses: { "200": { description: Address }, "400": { description: Bad input } }
+      /btc/api/v2/tx/{txid}:
+        get:
+          operationId: btcTx
+          summary: A Bitcoin transaction
+          parameters:
+            - { name: txid, in: path, required: true, schema: { type: string } }
+          responses: { "200": { description: Transaction }, "400": { description: Bad input } }
+      /btc/api/v2/block/{block}:
+        get:
+          operationId: btcBlock
+          summary: A Bitcoin block by height or hash
+          parameters:
+            - { name: block, in: path, required: true, schema: { type: string } }
+          responses: { "200": { description: Block }, "400": { description: Bad input } }
+      /btc/api/v2/utxo/{descriptor}:
+        get:
+          operationId: btcUtxo
+          summary: Unspent outputs of an address or xpub
+          parameters:
+            - { name: descriptor, in: path, required: true, schema: { type: string } }
+          responses: { "200": { description: UTXOs }, "400": { description: Bad input } }
+      /btc/api/v2/estimatefee/{blocks}:
+        get:
+          operationId: btcEstimateFee
+          summary: Fee estimate for confirmation within N blocks
+          parameters:
+            - { name: blocks, in: path, required: true, schema: { type: integer } }
+          responses: { "200": { description: Fee estimate }, "400": { description: Bad input } }
+    auth: btc-key
+
+routes:
+  ethRpc:
+    target: { path: / }
+  baseRpc:
+    target: { path: / }
+  solRpc:
+    target: { path: / }
+  btcAddress:
+    payment: explorer
+    target: { path: "/api/v2/address/{address}" }
+  btcTx:
+    payment: explorer
+    target: { path: "/api/v2/tx/{txid}" }
+  btcBlock:
+    payment: explorer
+    target: { path: "/api/v2/block/{block}" }
+  btcUtxo:
+    payment: explorer
+    target: { path: "/api/v2/utxo/{descriptor}" }
+  btcEstimateFee:
+    payment: explorer
+    target: { path: "/api/v2/estimatefee/{blocks}" }
+
+credentials:                            # One per host: a secret is bound to one upstream origin (SC-10)
+  eth-key:
+    type: apiKey
+    in: header
+    name: api-key                       # → api-key: <secret>
+    secret: nownodes-eth-api-key        # PUT /v1/services/nownodes/secrets/nownodes-eth-api-key
+  base-key:
+    type: apiKey
+    in: header
+    name: api-key
+    secret: nownodes-base-api-key
+  sol-key:
+    type: apiKey
+    in: header
+    name: api-key
+    secret: nownodes-sol-api-key
+  btc-key:
+    type: apiKey
+    in: header
+    name: api-key
+    secret: nownodes-btc-api-key
