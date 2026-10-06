@@ -5,12 +5,27 @@ on:
     branches:
       - master
       - dev
+    paths-ignore:
+      - 'docs/**'
+      - 'demo/**'
+      - '**.md'
   pull_request:
+    paths-ignore:
+      - 'docs/**'
+      - 'demo/**'
+      - '**.md'
   workflow_dispatch:
+    inputs:
+      publish:
+        description: 'Build and push the image after the checks pass.'
+        type: boolean
+        required: false
+        default: true
 
+# Every pushed commit gets its own image (stacks deploy by commit SHA), so only PR runs are cancelled.
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -21,12 +36,57 @@ env:
   DOCKER_IMAGE_NAME: ${{ github.repository }}
 
 jobs:
-  check:
-    name: Build, typecheck, and test
+  build:
+    name: Build and typecheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Typecheck
+        run: npm run typecheck
+
+  unit:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run unit tests
+        run: npm test
+
+  integration:
+    name: Integration tests
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
-    services:
+    services: &test-services
       postgres:
         image: postgres:18
         env:
@@ -63,25 +123,40 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Typecheck
-        run: npm run typecheck
-
-      - name: Build
-        run: npm run build
-
-      - name: Unit tests
-        run: npm test
-
-      - name: Integration tests
+      - name: Run integration tests
         run: npm run test:integration
 
-      - name: Functional tests
+  functional:
+    name: Functional tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    services: *test-services
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run functional tests
         run: npm run test:functional
 
   publish:
     name: Build and push image
-    needs: check
-    if: github.event_name != 'pull_request'
+    needs:
+      - build
+      - unit
+      - integration
+      - functional
+    if: github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || inputs.publish)
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
