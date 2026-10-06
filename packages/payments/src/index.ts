@@ -28,3 +28,4 @@ export {
 export type { MppSettlementCheck, MppSettlementCheckOptions, MppSettlementRequest, MppSettlementStatus } from './mpp/settlement.js';
 export { initializeMpp } from './mpp/setup.js';
 export type { MppAsset, MppSetup, MppSetupOptions, MppxServer } from './mpp/setup.js';
+export * from './routing/index.js';
