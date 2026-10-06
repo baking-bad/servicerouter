@@ -8,7 +8,13 @@ export interface Operation {
   // The OpenAPI path template, such as /forecast/{city}
   readonly path: string;
   readonly operationId: string | undefined;
+  // The operation's own, or else the path item's
+  readonly summary: string | undefined;
+  readonly description: string | undefined;
 }
+
+const optionalText = (...values: readonly unknown[]): string | undefined =>
+  values.find((value): value is string => typeof value === 'string');
 
 export type OperationsResult =
   | { readonly ok: true; readonly operations: readonly Operation[] }
@@ -50,7 +56,13 @@ export const operationsFromPaths = (paths: unknown): OperationsResult => {
       if (operationId !== undefined && (typeof operationId !== 'string' || !operationId))
         return { ok: false, message: `the operationId of ${method.toUpperCase()} ${path} must be a non-empty string` };
 
-      operations.push({ method, path, operationId });
+      operations.push({
+        method,
+        path,
+        operationId,
+        summary: optionalText(operation['summary'], pathItem['summary']),
+        description: optionalText(operation['description'], pathItem['description']),
+      });
     }
   }
 

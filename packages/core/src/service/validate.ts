@@ -3,13 +3,13 @@ import {
 } from '@servicerouter/common';
 
 import { createDocumentLocator, toIssues, toPointer, type IssueDraft, type IssueLocator } from '../validation/issues.js';
-import { ajv, toSchemaDrafts } from '../validation/schema.js';
+import { toSchemaDrafts } from '../validation/schema.js';
 import { checkServiceConfig, type ServiceConfigContext } from './checks.js';
+import { compileRuntimeDrafts } from './compile.js';
 import type { ServiceConfigDocument } from './document.js';
 import { findReservedFields } from './reserved.js';
-import { serviceConfigSchema } from './schema.js';
-
-const validateDocument = ajv.compile<ServiceConfigDocument>(serviceConfigSchema);
+import type { ServiceRuntime, ServiceState } from './runtime.js';
+import { validateConfigShape } from './shape.js';
 
 /** YAML or JSON text, its bytes, or a JSON object, such as the `config` of a submit envelope (SR-12). */
 export type ServiceConfigSource = string | Uint8Array | Readonly<Record<string, unknown>>;
@@ -36,7 +36,7 @@ const fromDocumentError = (error: DocumentError): ValidationIssue => ({
   ...(error.line === undefined ? {} : { line: error.line, column: error.column ?? 1 }),
 });
 
-const locatorFor = (document: StrictYamlDocument | undefined): IssueLocator | undefined =>
+export const locatorFor = (document: StrictYamlDocument | undefined): IssueLocator | undefined =>
   document ? createDocumentLocator([document]) : undefined;
 
 /**
@@ -70,9 +70,9 @@ export const parseServiceConfig = (source: ServiceConfigSource): ParseServiceCon
 
   const reserved = findReservedFields(value);
   const reservedPointers = new Set(reserved.map(draft => toPointer(draft.path)));
-  const schemaDrafts: readonly IssueDraft[] = validateDocument(value)
+  const schemaDrafts: readonly IssueDraft[] = validateConfigShape(value)
     ? []
-    : toSchemaDrafts(validateDocument.errors ?? [])
+    : toSchemaDrafts(validateConfigShape.errors ?? [])
       .filter(draft => !reservedPointers.has(toPointer(draft.path)));
   const drafts = [...reserved, ...schemaDrafts];
   if (drafts.length > 0)
@@ -103,4 +103,46 @@ export const validateServiceConfig = (source: ServiceConfigSource, context: Serv
   return parsed.ok
     ? checkParsedServiceConfig(parsed.parsed, context)
     : { ok: false, errors: parsed.errors, warnings: [] };
+};
+
+export interface ServiceRuntimeContext extends ServiceConfigContext {
+  readonly revision: number;
+  readonly state: ServiceState;
+}
+
+export type CompiledServiceConfigResult =
+  | {
+    readonly ok: true;
+    readonly config: ServiceConfigDocument;
+    readonly runtime: ServiceRuntime;
+    readonly warnings: readonly ValidationIssue[];
+  }
+  | { readonly ok: false; readonly errors: readonly ValidationIssue[]; readonly warnings: readonly ValidationIssue[] };
+
+/**
+ * All three passes of SR-2: schema, semantic checks, and compiling (SR-5). Returns every problem of
+ * the first failing pass, each with its path and, for text, its line and column. The runtime takes
+ * its service ID from the config.
+ */
+export const validateAndCompileServiceConfig = (source: ServiceConfigSource, context: ServiceRuntimeContext): CompiledServiceConfigResult => {
+  const parsed = parseServiceConfig(source);
+  if (!parsed.ok)
+    return { ok: false, errors: parsed.errors, warnings: [] };
+
+  const checked = checkParsedServiceConfig(parsed.parsed, context);
+  if (!checked.ok)
+    return checked;
+
+  const compiled = compileRuntimeDrafts({
+    serviceId: checked.config.service.id,
+    revision: context.revision,
+    state: context.state,
+    config: checked.config,
+    openapiDocuments: context.openapiDocuments ?? new Map(),
+    platform: context.platform,
+  });
+
+  return compiled.ok
+    ? { ok: true, config: checked.config, runtime: compiled.runtime, warnings: checked.warnings }
+    : { ok: false, errors: toIssues(compiled.errors, locatorFor(parsed.parsed.document)), warnings: checked.warnings };
 };

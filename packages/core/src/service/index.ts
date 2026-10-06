@@ -5,5 +5,17 @@ export { normalizeTemplate, operationsFromDocument, operationsFromPaths, pathPar
 export type { Operation, OperationsResult } from './openapi.js';
 export { checkServiceConfig, getOpenApiLinks } from './checks.js';
 export type { ServiceConfigChecks, ServiceConfigContext } from './checks.js';
-export { checkParsedServiceConfig, parseServiceConfig, validateServiceConfig } from './validate.js';
-export type { ParsedServiceConfig, ParseServiceConfigResult, ServiceConfigResult, ServiceConfigSource } from './validate.js';
+export { checkParsedServiceConfig, parseServiceConfig, validateAndCompileServiceConfig, validateServiceConfig } from './validate.js';
+export type {
+  CompiledServiceConfigResult, ParsedServiceConfig, ParseServiceConfigResult, ServiceConfigResult, ServiceConfigSource,
+  ServiceRuntimeContext,
+} from './validate.js';
+export { normalizePathText, targetPath } from './runtime.js';
+export type {
+  CredentialApplication, CredentialReference, OperationDocs, OperationMatch, RuntimeOperation, RuntimeUpstream, ServiceRuntime,
+  ServiceState,
+} from './runtime.js';
+export { compileServiceRuntime } from './compile.js';
+export type { CompileServiceRuntimeInput, CompileServiceRuntimeResult } from './compile.js';
+export { fetchOpenApiDocuments, openApiFetchLimits } from './fetch.js';
+export type { FetchOpenApiDocumentsOptions, FetchOpenApiDocumentsResult } from './fetch.js';
