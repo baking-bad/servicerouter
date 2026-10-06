@@ -5,6 +5,7 @@ import { loadPlatformConfig } from '@servicerouter/core';
 import { createPostgres, createRedis } from '@servicerouter/db';
 
 import { createApp } from './app.js';
+import { readSecretsOpener } from './keys.js';
 
 export const defaultPort = 8080;
 export const defaultMetricsPort = 9080;
@@ -20,13 +21,15 @@ export const startProxy = async ({ env, logger }: AppContext): Promise<RunningAp
   };
   const databaseUrl = readSecret('DATABASE_URL', env);
   const redisUrl = readSecret('REDIS_URL', env);
+  // Missing or unusable, the app stops here with the reason (SC-4, S2-D4)
+  const opener = readSecretsOpener(env);
 
   const postgres = createPostgres({ url: databaseUrl, logger });
   const redis = createRedis({ url: redisUrl, logger });
   const closeConnections = async () => {
     await Promise.all([postgres.close(), redis.close()]);
   };
-  const server = createApp({ config, logger, postgres, redis });
+  const server = createApp({ config, logger, postgres, redis, opener });
   try {
     await server.listen(listen);
   }
