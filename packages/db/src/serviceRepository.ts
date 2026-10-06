@@ -104,6 +104,7 @@ export const createServiceRepository = ({ db }: ServiceRepositoryOptions): Servi
 
       return {
         serviceId: revision.serviceId,
+        ownerAccountId: row.service.ownerAccountId,
         state: row.service.state,
         revision: revision.number,
         config: revision.config,

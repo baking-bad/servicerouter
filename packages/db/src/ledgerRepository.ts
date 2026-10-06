@@ -1,4 +1,5 @@
 import { and, eq, inArray, sql } from 'drizzle-orm';
+import { PgTransaction } from 'drizzle-orm/pg-core';
 
 import type { Clock, IdGenerator, MicroUsd } from '@servicerouter/common';
 import {
@@ -74,7 +75,21 @@ const platformFees: LedgerAccount = { id: ledgerAccountIds.fees, accountId: unde
 // Money enters through it, so its balance is minus everything deposited
 const depositsClearing: LedgerAccount = { id: ledgerAccountIds.depositsClearing, accountId: undefined, type: 'deposits_clearing', mayGoNegative: true };
 
+const isPlatformAccount = (ledgerAccountId: string): boolean => ledgerAccountId.startsWith('platform:');
+
+/**
+ * The one order every transaction updates balances in, so none deadlock: the platform's accounts
+ * last, since every capture shares the fee row and holds it only until the commit, then by ID.
+ */
+const lockOrder = (left: Posting, right: Posting): number =>
+  Number(isPlatformAccount(left.ledgerAccountId)) - Number(isPlatformAccount(right.ledgerAccountId))
+  || (left.ledgerAccountId < right.ledgerAccountId ? -1 : left.ledgerAccountId > right.ledgerAccountId ? 1 : 0);
+
 export const createLedger = ({ db, clock, ids }: LedgerOptions): Ledger => {
+  // Ledger accounts known to exist, so a capture skips creating them. Kept only when the ledger runs
+  // on the database itself: inside a caller's transaction a rollback could undo them.
+  const known = db instanceof PgTransaction ? undefined : new Set<string>();
+
   const ensureAccounts = async (tx: DatabaseTransaction, list: readonly LedgerAccount[], now: Date): Promise<void> => {
     await tx.insert(ledgerAccounts)
       .values(list.map(account => ({ id: account.id, accountId: account.accountId ?? null, type: account.type, createdAt: now })))
@@ -94,17 +109,9 @@ export const createLedger = ({ db, clock, ids }: LedgerOptions): Ledger => {
     return row?.id;
   };
 
-  /**
-   * Posts the entries and updates the balances (LG-2). Balances change in account ID order, so
-   * concurrent postings lock rows in one order and never deadlock. Returns the first account that
-   * would go below zero, or doesn't exist: the caller rolls back.
-   */
-  const post = async (tx: DatabaseTransaction, transactionId: string, postings: readonly Posting[], now: Date): Promise<string | undefined> => {
-    const entries = postings.filter(posting => posting.amount !== 0n);
-    if (entries.reduce((sum, posting) => sum + posting.amount, 0n) !== 0n)
-      throw new Error('A ledger transaction\'s entries must sum to zero');
-
-    for (const { ledgerAccountId, amount } of [...entries].sort((left, right) => left.ledgerAccountId < right.ledgerAccountId ? -1 : 1)) {
+  // Adds to each balance in turn. The first account that would go below zero, or doesn't exist.
+  const updateBalances = async (tx: DatabaseTransaction, postings: readonly Posting[], now: Date): Promise<string | undefined> => {
+    for (const { ledgerAccountId, amount } of postings) {
       const updated = await tx.update(balances)
         .set({ balance: sql`${balances.balance} + ${amount}::bigint`, updatedAt: now })
         .where(and(eq(balances.ledgerAccountId, ledgerAccountId), sql`(${balances.mayGoNegative} or ${balances.balance} + ${amount}::bigint >= 0)`))
@@ -112,10 +119,29 @@ export const createLedger = ({ db, clock, ids }: LedgerOptions): Ledger => {
       if (updated.length === 0)
         return ledgerAccountId;
     }
+
+    return undefined;
+  };
+
+  /**
+   * Posts the entries and updates the balances (LG-2) in `lockOrder`, so concurrent postings never
+   * deadlock. The platform's balances, which every capture shares, are updated last, after the
+   * entries, so their row locks are held only until the commit. Returns the first account that would
+   * go below zero, or doesn't exist: the caller rolls back.
+   */
+  const post = async (tx: DatabaseTransaction, transactionId: string, postings: readonly Posting[], now: Date): Promise<string | undefined> => {
+    const entries = postings.filter(posting => posting.amount !== 0n);
+    if (entries.reduce((sum, posting) => sum + posting.amount, 0n) !== 0n)
+      throw new Error('A ledger transaction\'s entries must sum to zero');
+
+    const ordered = [...entries].sort(lockOrder);
+    const refused = await updateBalances(tx, ordered.filter(posting => !isPlatformAccount(posting.ledgerAccountId)), now);
+    if (refused !== undefined)
+      return refused;
     if (entries.length > 0)
       await tx.insert(ledgerEntries).values(entries.map(posting => ({ id: ids.next(), transactionId, ...posting })));
 
-    return undefined;
+    return updateBalances(tx, ordered.filter(posting => isPlatformAccount(posting.ledgerAccountId)), now);
   };
 
   // A held amount counts against the key's spend; a release gives it back (LG-6)
@@ -152,13 +178,12 @@ export const createLedger = ({ db, clock, ids }: LedgerOptions): Ledger => {
       .where(eq(keyTotalSpend.keyId, keyId));
   };
 
-  // A held credits payment, locked for the rest of the transaction
-  const lockHeld = async (tx: DatabaseTransaction, paymentId: string, to: 'captured' | 'released'): Promise<Payment> => {
-    const payment = await createPaymentRepository({ db: tx, clock }).lock(paymentId);
+  // A locked payment that must be a held credits payment
+  const heldCredits = (paymentId: string, payment: Payment | undefined, to: 'captured' | 'released'): Payment & { readonly buyerAccountId: string } => {
     if (!payment || payment.status !== 'held' || payment.rail !== 'credits' || !payment.buyerAccountId)
       throw new InvalidPaymentStatusChangeError(paymentId, payment?.status, to);
 
-    return payment;
+    return payment as Payment & { readonly buyerAccountId: string };
   };
 
   return {
@@ -190,8 +215,10 @@ export const createLedger = ({ db, clock, ids }: LedgerOptions): Ledger => {
     hold: async ({ payment, dailyBudget, allowance }) => {
       try {
         return await withTransaction(db, async (tx): Promise<HoldResult> => {
+          // One clock read: the day the spend counts on is the day of the payment's createdAt, which a
+          // release gives the spend back to
           const now = clock.now();
-          const payments = createPaymentRepository({ db: tx, clock });
+          const payments = createPaymentRepository({ db: tx, clock: { now: () => new Date(now) } });
           const transactionId = await insertTransaction(tx, 'hold', payment.id, payment.requestId, now);
           if (!transactionId) {
             // The same hold again: the first one stands
@@ -203,6 +230,8 @@ export const createLedger = ({ db, clock, ids }: LedgerOptions): Ledger => {
           }
 
           const { buyerAccountId, keyId, amount } = payment;
+          // The row first, which locks nothing that others update (PR-10)
+          const created = await payments.create({ ...payment, status: 'held' });
           // Balance, then today's spend, then the total: every hold locks rows in the same order
           if (await post(tx, transactionId, [
             { ledgerAccountId: ledgerAccountIds.available(buyerAccountId), amount: -amount },
@@ -213,7 +242,7 @@ export const createLedger = ({ db, clock, ids }: LedgerOptions): Ledger => {
           if (refusal)
             throw new HoldRefused(refusal);
 
-          return { ok: true, payment: await payments.create({ ...payment, status: 'held' }) };
+          return { ok: true, payment: created };
         });
       }
       catch (error) {
@@ -223,30 +252,44 @@ export const createLedger = ({ db, clock, ids }: LedgerOptions): Ledger => {
       }
     },
 
-    capture: ({ paymentId, feeBps }) => withTransaction(db, async tx => {
-      const payments = createPaymentRepository({ db: tx, clock });
-      const current = await payments.lock(paymentId);
-      // A second capture moves nothing (LG-3)
-      if (current?.status === 'captured')
-        return { payment: current, fee: current.fee ?? 0n, sellerAmount: current.amount - (current.fee ?? 0n) };
+    capture: async ({ paymentId, feeBps }) => {
+      let created: readonly LedgerAccount[] = [];
+      const result = await withTransaction(db, async (tx): Promise<CaptureResult> => {
+        const payments = createPaymentRepository({ db: tx, clock });
+        const current = await payments.lock(paymentId);
+        // A second capture moves nothing (LG-3)
+        if (current?.status === 'captured')
+          return { payment: current, fee: current.fee ?? 0n, sellerAmount: current.amount - (current.fee ?? 0n) };
 
-      const payment = await lockHeld(tx, paymentId, 'captured');
-      if (!payment.sellerAccountId)
-        throw new InvalidPaymentStatusChangeError(paymentId, payment.status, 'captured');
+        const payment = heldCredits(paymentId, current, 'captured');
+        if (!payment.sellerAccountId)
+          throw new InvalidPaymentStatusChangeError(paymentId, payment.status, 'captured');
 
-      const now = clock.now();
-      const { fee, sellerAmount } = splitFee(payment.amount, feeBps);
-      await ensureAccounts(tx, [...accountsOf(payment.sellerAccountId, 'earned'), platformFees], now);
-      const transactionId = await insertTransaction(tx, 'capture', paymentId, payment.requestId, now);
-      if (!transactionId || await post(tx, transactionId, [
-        { ledgerAccountId: ledgerAccountIds.held(payment.buyerAccountId!), amount: -payment.amount },
-        { ledgerAccountId: ledgerAccountIds.earned(payment.sellerAccountId), amount: sellerAmount },
-        { ledgerAccountId: platformFees.id, amount: fee },
-      ], now))
-        throw new Error('The held amount is missing from the buyer\'s held balance');
+        const now = clock.now();
+        const { fee, sellerAmount } = splitFee(payment.amount, feeBps);
+        created = [...accountsOf(payment.sellerAccountId, 'earned'), platformFees].filter(account => !known?.has(account.id));
+        if (created.length > 0)
+          await ensureAccounts(tx, created, now);
+        const transactionId = await insertTransaction(tx, 'capture', paymentId, payment.requestId, now);
+        if (!transactionId)
+          throw new Error('A capture transaction exists for a payment still held');
+        // The status first, on the row already locked; the balances, and the shared fee row, last
+        const captured = await payments.changeStatus({ paymentId, to: 'captured', fee });
+        if (await post(tx, transactionId, [
+          { ledgerAccountId: ledgerAccountIds.held(payment.buyerAccountId), amount: -payment.amount },
+          { ledgerAccountId: ledgerAccountIds.earned(payment.sellerAccountId), amount: sellerAmount },
+          { ledgerAccountId: platformFees.id, amount: fee },
+        ], now))
+          throw new Error('The held amount is missing from the buyer\'s held balance');
 
-      return { payment: await payments.changeStatus({ paymentId, to: 'captured', fee }), fee, sellerAmount };
-    }),
+        return { payment: captured, fee, sellerAmount };
+      });
+      // Committed: they exist from now on
+      for (const account of created)
+        known?.add(account.id);
+
+      return result;
+    },
 
     release: ({ paymentId }) => withTransaction(db, async tx => {
       const payments = createPaymentRepository({ db: tx, clock });
@@ -255,11 +298,14 @@ export const createLedger = ({ db, clock, ids }: LedgerOptions): Ledger => {
       if (current?.status === 'released')
         return { payment: current };
 
-      const payment = await lockHeld(tx, paymentId, 'released');
-      const buyer = payment.buyerAccountId!;
+      const payment = heldCredits(paymentId, current, 'released');
+      const buyer = payment.buyerAccountId;
       const now = clock.now();
       const transactionId = await insertTransaction(tx, 'release', paymentId, payment.requestId, now);
-      if (!transactionId || await post(tx, transactionId, [
+      if (!transactionId)
+        throw new Error('A release transaction exists for a payment still held');
+      const released = await payments.changeStatus({ paymentId, to: 'released' });
+      if (await post(tx, transactionId, [
         { ledgerAccountId: ledgerAccountIds.held(buyer), amount: -payment.amount },
         { ledgerAccountId: ledgerAccountIds.available(buyer), amount: payment.amount },
       ], now))
@@ -268,7 +314,7 @@ export const createLedger = ({ db, clock, ids }: LedgerOptions): Ledger => {
       if (payment.keyId)
         await giveBackSpend(tx, payment.keyId, utcDay(payment.createdAt), payment.amount);
 
-      return { payment: await payments.changeStatus({ paymentId, to: 'released' }) };
+      return { payment: released };
     }),
 
     balance: async accountId => {

@@ -26,6 +26,12 @@ export interface Postgres {
   readonly db: Database;
   /** Readiness: one round trip to the server. */
   ping(): Promise<void>;
+  /**
+   * Takes a session-level advisory lock on a connection of its own, without waiting: one runner per
+   * job across replicas (WK-1). Undefined when another session holds it. The returned function unlocks
+   * and gives the connection back. A crashed holder's session ends, and the lock with it.
+   */
+  tryAdvisoryLock(lockId: number): Promise<(() => Promise<void>) | undefined>;
   /** Waits for running queries, then closes every connection. */
   close(): Promise<void>;
 }
@@ -41,6 +47,43 @@ export const createPostgres = ({ url, logger, connectTimeoutMs = defaultConnectT
     db: drizzle({ client: pool, schema }),
     ping: async () => {
       await pool.query('select 1');
+    },
+    tryAdvisoryLock: async lockId => {
+      const client = await pool.connect();
+      // A checked-out connection that fails emits here, not on the pool: without a listener the process
+      // would crash. Its session is gone, and the lock with it.
+      const onError = (error: Error) => logger.error({ error, lockId }, 'An advisory lock\'s connection failed, so the lock is gone');
+      client.on('error', onError);
+      let locked = false;
+      try {
+        const { rows: [row] } = await client.query<{ locked: boolean }>('select pg_try_advisory_lock($1) as locked', [lockId]);
+        locked = row?.locked === true;
+      }
+      finally {
+        if (!locked) {
+          client.off('error', onError);
+          client.release();
+        }
+      }
+      if (!locked)
+        return undefined;
+
+      let unlocking: Promise<void> | undefined;
+      const unlock = async (): Promise<void> => {
+        try {
+          await client.query('select pg_advisory_unlock($1)', [lockId]);
+          client.release();
+        }
+        catch (error) {
+          // Dropping the connection ends the session, which releases the lock
+          client.release(error as Error);
+        }
+        finally {
+          client.off('error', onError);
+        }
+      };
+
+      return () => unlocking ??= unlock();
     },
     close: () => closing ??= pool.end(),
   };

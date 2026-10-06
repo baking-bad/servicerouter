@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, lt, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, inArray, lt, or, sql } from 'drizzle-orm';
 
 import type { Clock } from '@servicerouter/common';
 import {
@@ -42,6 +42,15 @@ export interface PaymentRepository {
   listForBuyer(input: { readonly buyerAccountId: string; readonly limit: number; readonly after?: string }): Promise<PaymentPage>;
   /** A service's earnings from captured and settled payments (LG-10). */
   earnings(serviceId: string): Promise<ServiceEarnings>;
+  /**
+   * Payments still `held` that were created before `createdBefore`, oldest first: the holds a crash
+   * left behind (LG-9). `after` is the last payment of the previous page.
+   */
+  listExpiredHolds(input: {
+    readonly createdBefore: Date;
+    readonly limit: number;
+    readonly after?: { readonly createdAt: Date; readonly id: string };
+  }): Promise<readonly Payment[]>;
 }
 
 const optional = <TValue>(value: TValue | null): TValue | undefined => value ?? undefined;
@@ -189,6 +198,18 @@ export const createPaymentRepository = ({ db, clock }: PaymentRepositoryOptions)
       }
 
       return { calls, earnedByRail, earned, fee, paidOut: 0n };
+    },
+    listExpiredHolds: async ({ createdBefore, limit, after }) => {
+      const rows = await db.select().from(payments)
+        .where(and(
+          eq(payments.status, 'held'),
+          lt(payments.createdAt, createdBefore),
+          after && or(gt(payments.createdAt, after.createdAt), and(eq(payments.createdAt, after.createdAt), gt(payments.id, after.id))),
+        ))
+        .orderBy(asc(payments.createdAt), asc(payments.id))
+        .limit(limit);
+
+      return rows.map(toPayment);
     },
   };
 };
