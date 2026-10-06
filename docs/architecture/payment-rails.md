@@ -18,8 +18,9 @@ Credits, x402, and MPP behind one interface. Used for registered services and fo
 ```ts
 interface PaymentRail {
   readonly name: RailName;
+  readonly settlesBeforeResponse: boolean;               // x402: buffer, settle, then send (PX-12)
   detect(headers: RequestHeaders): Credential | undefined;
-  challenge(quote: Quote): ChallengePart | undefined;   // Headers and JSON body fields for the 402
+  challenge(quote: Quote): Promise<ChallengePart | undefined>; // Headers and JSON body fields for the 402
   authorize(credential: Credential, quote: Quote): Promise<Authorization>;
   finalize(authorization: Authorization): Promise<Receipt>;
   abort(authorization: Authorization): Promise<void>;
@@ -60,7 +61,8 @@ Detection runs a detector for every kind of credential, served or not, so two of
 
   None → the combined `402`. Two or more → `400 multiple_payment_methods`. A master key → `401 wrong_key_type` ([AK-4](accounts-and-keys.md)).
   - Any `Authorization: Bearer` counts as a credits credential. One that isn't a well-formed payment key gets `401 invalid_key`.
-  - `PAYMENT-SIGNATURE` and `X-PAYMENT` together are one x402 credential.
+  - `PAYMENT-SIGNATURE` and `X-PAYMENT` together are one x402 credential. The header stays in a `Secret` until the rail decodes it.
+  - x402 v1 (`X-PAYMENT` alone) gets `402 payment_invalid`: the SDK's v2 resource server reads only `PAYMENT-SIGNATURE`.
 - **PR-2** The combined `402` is one response, assembled from each rail's `challenge()`:
   - `PAYMENT-REQUIRED` (x402): one `accepts` entry per enabled asset. At launch: USDC on Base, USDC on Solana, USDM on Cardano, all scheme `exact`. Amounts are converted from USD with the asset registry ([PC-6](platform-config.md)).
   - `WWW-Authenticate: Payment` (MPP): the Tempo charge.
@@ -84,6 +86,11 @@ Detection runs a detector for every kind of credential, served or not, so two of
   - Base and Solana go through Coinbase's CDP facilitator, with a CDP JWT per endpoint.
   - Cardano goes through the [Cardano facilitator](cardano-facilitator.md) service on the internal network. It takes no auth header.
   - Check every facilitator's `/supported` at startup, with a timeout. Fail fast.
+  - A facilitator with `enabled: false` isn't checked, and its networks aren't offered. Cardano is off until step 6.
+  - Our own client implements the SDK's `FacilitatorClient`, with a verify timeout (the connect timeout) and a settle timeout (`timeouts.settleMs`). The startup check gets 10 s.
+  - The CDP JWT, one per request: `sub` the key ID, `iss: "cdp"`, `uris: ["<METHOD> <host><path>"]`, `iat`, `nbf`, `exp` 120 s later, with `kid` and a random `nonce` in the header. Ed25519 keys (base64 of 64 bytes) sign EdDSA. P-256 PEM keys sign ES256. Checked against live CDP.
+  - On verify or settle, a `4xx` without a verify or settle answer refuses the payment, as CDP's `400` for a malformed one does. `401`, `403`, `408`, `429`, a `5xx`, a timeout, or a failed connection mean the facilitator is unavailable: `503 facilitator_unavailable` at verify, an unknown outcome at settle.
+  - An EVM asset's EIP-712 domain comes from the SDK's default assets. An asset it doesn't know stops startup.
 - **PR-7** x402 Bazaar: Coinbase lists services that settle through the CDP facilitator in its x402 Bazaar automatically. For registered services, the x402 challenge carries the discovery metadata from [AD-3](agent-docs.md), so each service is listed under its pay URL.
 - **PR-8** The Cardano `accepts` entry sets `extra.confirmationPolicy.l1Confirmations` ([AR12](README.md#8-open-questions)). The transfer method is `default`.
 - **PR-9** MPP: an `mppx` server with the Tempo charge intent. The recipient is the platform's Tempo address. The replay store is in Redis, shared by all replicas. Add the receipt (`Payment-Receipt`) to the response, with private cache control.
@@ -99,3 +106,7 @@ Detection runs a detector for every kind of credential, served or not, so two of
 | Timeout or `503` | The outcome is unknown. Don't send the response: `502 settlement_failed`. Record the payment as `settling` without a hash. The worker repeats the identical `settle`. If it confirms, the payment is flagged for review: the buyer paid and got no response. |
 
   A broadcast that later fails is rare, and the amounts are small. Holding a response for minutes is worse.
+
+  - "The buyer got no response" means no `PAYMENT-RESPONSE` was sent: a `settling` payment without a receipt. The follow-up flags it for review when it confirms.
+  - The settle request is kept on the payment (`settlement_request`) while it's `settling`, so the worker repeats it exactly.
+  - A non-billable or too-large answer cancels the payment: `verified` → `cancelled`.

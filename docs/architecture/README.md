@@ -103,7 +103,7 @@ Dependency rules:
 | Validation | ajv, JSON Schema |
 | YAML | `yaml`, strict mode |
 | Logging | pino, JSON to stdout |
-| x402 | `@x402/core`, `@x402/evm`, `@x402/svm`, `@x402/cardano`. Upgrade them together. |
+| x402 | `@x402/core`, `@x402/evm`, `@x402/svm`, `@x402/cardano`, pinned to one exact version and upgraded together: 2.28.0 since step 5. `@x402/svm` brings `@solana/kit` 5.x as its peer. |
 | MPP | `mppx`, pinned to an exact version. It is pre-1.0. |
 | EVM and Tempo | `viem` |
 | Cardano | Evolution SDK (`@evolution-sdk/evolution`), Blockfrost |

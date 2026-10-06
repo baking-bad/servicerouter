@@ -54,6 +54,8 @@ Serves `pay.servicerouter.ai`: registered services, routed calls, and platform p
   - An operation priced at `"0"` is free: no payment step, and any credential on it is dropped (PX-5).
   - A failed decision write is logged, and finalizing goes on. Without a recorded decision, the hold expiry worker releases, so a buyer is never charged by mistake. The opaque `503` records `not_billable` and releases before answering.
 - **PX-12** Credits and MPP responses stream. x402 responses are buffered until the settlement is confirmed or broadcast ([PR-12](payment-rails.md)), so no upstream bytes reach an unpaid client. Above the buffer limit ([AR3](README.md#8-open-questions)), cancel and return `502 response_too_large`. The buyer isn't charged.
+  - The upstream's status and headers go out only with the settled response, never with the `502`.
+  - A body that fails before anyone reads it, while the decision is recorded, must not crash the process: the proxy listens for its error at once.
 - **PX-13** Rate limits in Redis: per payment key, per service, and per IP for unpaid requests that only get a `402`. Over a limit → `429` with `Retry-After`. Limits are keyed by service ID, not by hostname.
   - Fixed windows under `rl:proxy:paymentKey:<key hash>`, `rl:proxy:service:<id>`, and `rl:proxy:unpaidIp:<client>`, from `rateLimits` in platform config. The key limit counts before any lookup. The service limit counts paid attempts only, so unpaid floods can't use it up. An IPv6 client counts by its /64.
   - While Redis fails, a limit lets the request through, logged and counted. The Ledger still guards the money.
@@ -63,6 +65,7 @@ Serves `pay.servicerouter.ai`: registered services, routed calls, and platform p
   - The input is `<buyer>\n<service ID>`, with the buyer as `account:<id>` for credits. The key is `BUYER_HEADER_KEY`, at least 32 characters, the same on every replica. Rotating it gives every buyer a new value.
 - **PX-16** CORS: expose `PAYMENT-REQUIRED`, `PAYMENT-RESPONSE`, `WWW-Authenticate`, `Payment-Receipt`, the credits receipt header, and `x-request-id`. Allow the `Authorization`, `PAYMENT-SIGNATURE`, `X-PAYMENT`, and `Content-Type` request headers.
 - **PX-17** `/_/health` for liveness. `/_/ready` checks Postgres, Redis, and every facilitator's `/supported`. Metrics on an internal port.
+  - One check per enabled facilitator, named `facilitator:<name>`.
 - **PX-18** Shutdown: stop accepting, drain in-flight requests, finish or release their holds, close pools. A credits payment is finished when its response closes, and shutdown waits for every finish in flight.
 - **PX-19** Credits overhead stays under 50 ms p95.
   - Checked by `npm run loadtest` at 300 paid requests per second per replica ([AR20](README.md#8-open-questions)), sent at a fixed rate, against the free path at the same rate. It also reports each path's capacity, without a pass or fail: past it, latency is queueing.
@@ -87,7 +90,7 @@ Every `401` carries `WWW-Authenticate: Bearer`, and every `402` carries `Cache-C
 | `402` | `key_budget_exceeded` | The key's daily budget is used up. |
 | `402` | `key_allowance_exceeded` | The key's allowance is used up. |
 | `402` | `key_price_limit` | The price is above the key's per-call maximum. |
-| `402` | `payment_invalid` | A facilitator rejected the x402 payment, or MPP verification failed. |
+| `402` | `payment_invalid` | A facilitator rejected the x402 payment (the message names its reason), the payment doesn't match an option for the price, it isn't x402 v2, or MPP verification failed. |
 | `403` | `service_suspended` | The service is suspended. |
 | `404` | `not_found` | Unknown service or operation, or a disabled route. |
 | `413` | `request_too_large` | The request body is over the limit (PX-8). |
@@ -99,3 +102,4 @@ Every `401` carries `WWW-Authenticate: Bearer`, and every `402` carries `Cache-C
 | `502` | `response_too_large` | x402: the response is over the buffer limit. |
 | `502` | `settlement_failed` | x402: settlement failed or its outcome is unknown. No response bytes were sent. |
 | `503` | `upstream_unavailable` | The opaque upstream failure. Also used when the Signer refuses. |
+| `503` | `facilitator_unavailable` | A facilitator didn't answer an x402 verify. Nothing was paid. |

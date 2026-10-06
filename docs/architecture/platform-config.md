@@ -17,7 +17,7 @@ Everything about a deployment that isn't a seller config or a secret.
 - **PC-2** It holds:
   - canonical public URLs and the hosts we own;
   - the asset registry (PC-6);
-  - the facilitator registry: name, URL, networks, auth reference;
+  - the facilitator registry: name, URL, networks, auth reference, and `enabled` (default true: a disabled one isn't checked, and its networks aren't offered);
   - `payTo` addresses per network and the MPP recipient on Tempo;
   - `feeBps` (registered services) and `routingFeeBps` (payment routing);
   - the minimum payout;
