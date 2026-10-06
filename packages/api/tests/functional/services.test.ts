@@ -731,6 +731,37 @@ describe('GET /v1/services/{id} and its revisions', () => {
   });
 });
 
+describe('GET /v1/services: the account\'s services, for the console (WB-8)', () => {
+  it('lists only the caller\'s services, newest first, with the active revision\'s title', async () => {
+    const key = await signup();
+    const other = await signup();
+    const [first, second, theirs] = [nextId(), nextId(), nextId()];
+    await submitYaml(key, first, serviceYaml({ id: first }));
+    await submitYaml(key, second, serviceYaml({ id: second }).replace('title: Weather', 'title: Forecasts'));
+    await submitYaml(other, theirs, serviceYaml({ id: theirs }));
+    // A new revision brings its title along
+    await submitYaml(key, first, serviceYaml({ id: first, amount: '0.002' }).replace('title: Weather', 'title: Weather Pro'));
+
+    const { status, body } = await call(key, 'GET', '/v1/services');
+
+    expect(status).toBe(200);
+    expect(body).toEqual({
+      services: [
+        { id: second, state: 'live', revision: 1, title: 'Forecasts', createdAt: expect.any(String), updatedAt: expect.any(String) },
+        { id: first, state: 'live', revision: 2, title: 'Weather Pro', createdAt: expect.any(String), updatedAt: expect.any(String) },
+      ],
+    });
+  });
+
+  it('answers an account without services with an empty list, and a payment key with 401 wrong_key_type', async () => {
+    const key = await signup();
+    const paymentKey = (await call(key, 'POST', '/v1/keys', '{}')).body as { key: string };
+
+    expect(await call(key, 'GET', '/v1/services')).toMatchObject({ status: 200, body: { services: [] } });
+    expect(await call(paymentKey.key, 'GET', '/v1/services')).toMatchObject({ status: 401, body: { error: { code: 'wrong_key_type' } } });
+  });
+});
+
 describe('another account\'s service', () => {
   it('answers 403 forbidden to a PUT, and leaves the service as it was', async () => {
     const [owner, other] = [await signup(), await signup()];

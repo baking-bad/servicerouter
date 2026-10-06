@@ -67,13 +67,19 @@ const realService: CatalogService = {
   docs: { openapi: 'unused', llms: 'unused', skill: 'unused' }, payUrl: `${pay}/service/real-weather`,
 };
 const { description: _description, links: _links, contact: _contact, routes: _routes, docs: _docs, payUrl: _payUrl, ...realItem } = realService;
+// A routed endpoint, as GET /v1/catalog lists it after the registered services (CI-2)
+const routedItem: CatalogItem = {
+  id: 'routed:api.paid.example/v1/data', title: 'api.paid.example/v1/data', summary: 'A paid API that Service Router routes payments to. Unverified: its owner hasn\'t registered it.',
+  category: '', tags: [], priceFrom: '0.01', currency: 'USD', methods: ['credits', 'x402', 'mpp'], stats: { calls30d: 0, successRate: 0, p50Ms: 0, p95Ms: 0 },
+  verified: false, updatedAt: fixtureTime(0, 6, 10, 0, 0, 0), link: `${pay}/api.paid.example/v1/data`,
+};
 const apiRequests: string[] = [];
 const fakeApi: Server = createServer((request, response) => {
   apiRequests.push(request.url ?? '');
   const path = (request.url ?? '').split('?')[0];
   const json = (status: number, body: unknown) => response.writeHead(status, { 'content-type': 'application/json' }).end(JSON.stringify(body));
   if (path === '/v1/catalog')
-    json(200, { services: [realItem satisfies CatalogItem], categories: [{ id: 'weather', title: 'Weather', count: 1 }], next: null });
+    json(200, { services: [realItem satisfies CatalogItem, routedItem], categories: [{ id: 'weather', title: 'Weather', count: 1 }], next: null });
   else if (path === '/v1/catalog/real-weather')
     json(200, realService);
   else
@@ -233,6 +239,20 @@ describe('for agents (WB-11)', () => {
   });
 });
 
+describe('the console (WB-8, WB-10)', () => {
+  it.each(['/console', '/console/overview', '/console/keys', '/console/payments', '/console/services', '/console/services/skycast-weather', '/console/topup', '/console/account'])(
+    '%s renders in the browser, noindex, with the Platform API as the only place to connect to',
+    async path => {
+      const { response, body } = await page(path);
+
+      expect(response.status).toBe(200);
+      expect(body).toContain('<meta name="robots" content="noindex, nofollow"/>');
+      expect(response.headers.get('content-security-policy')).toContain('connect-src \'self\' http://127.0.0.1:9;');
+      expect(response.headers.get('set-cookie')).toBeNull();
+    },
+  );
+});
+
 describe('security headers (WB-12)', () => {
   it('sends a CSP whose fresh nonce every script on the page carries, with only the Platform API to connect to', async () => {
     const first = await page('/discover/chain-rpc');
@@ -276,7 +296,8 @@ describe('the top-up page (WB-3)', () => {
     expect(body).toMatch(/<div class="qr"[^>]*><svg/);
     expect(body).toContain('USDM');
     expect(body).toContain('Never send funds to it');
-    expect(body).toContain('3<!-- -->/<!-- -->10');
+    expect(body).toContain('3<!-- -->/<!-- -->15');
+    expect(body).toContain('Not credited');
   });
 });
 
@@ -284,9 +305,9 @@ describe('with the Platform API\'s catalog (WB-2, WB-10, CI-5)', () => {
   it('lists what the API answers, unlabeled, passing the page\'s query on', async () => {
     const { body } = await page('/discover?category=weather&sort=price', undefined, real);
 
-    expect(listed(body)).toEqual(['real-weather']);
+    expect(listed(body)).toEqual(['real-weather', routedItem.id]);
     expect(body).not.toContain('data-sample="true"');
-    expect(apiRequests).toContain('/v1/catalog?category=weather&sort=price');
+    expect(apiRequests).toContain('/v1/catalog?category=weather&sort=price&limit=24');
   });
 
   it('shows a service from GET /v1/catalog/{id}, and 404 for one the API doesn\'t know', async () => {
@@ -296,5 +317,16 @@ describe('with the Platform API\'s catalog (WB-2, WB-10, CI-5)', () => {
     expect(found.body).toContain('Real Weather');
     expect(found.body).not.toContain('data-sample="true"');
     expect((await page('/discover/skycast-weather', undefined, real)).response.status).toBe(404);
+  });
+
+  it('labels a routed endpoint Unverified and links its routing link, with no page or sitemap entry of its own (CI-2, AR14)', async () => {
+    const { body } = await page('/discover', undefined, real);
+    const sitemap = (await page('/sitemap.xml', undefined, real)).body;
+    const markdown = (await page('/discover.md', undefined, real)).body;
+
+    expect(body).toContain(`<a href="${routedItem.link}" class="card card-link service-card" data-service="${routedItem.id}" rel="nofollow"><span class="label">Unverified</span>`);
+    expect(sitemap).toContain(`<loc>${site}/discover/real-weather</loc>`);
+    expect(sitemap).not.toContain('routed:');
+    expect(markdown).toContain(`[${routedItem.title}](${routedItem.link}) (unverified)`);
   });
 });

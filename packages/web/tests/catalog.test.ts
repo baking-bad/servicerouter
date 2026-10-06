@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { agentDocsFor, getCatalogService, listAllCatalog, listCatalog } from '../src/api/catalog';
 import type { CatalogItem } from '../src/api/types';
-import { catalogQueryParams, parseCatalogQuery, queryCatalog } from '../src/catalog/query';
+import { catalogQueryParams, parseCatalogQuery, queryCatalog, serviceHref } from '../src/catalog/query';
 import { readSettings } from '../src/config';
 import { sampleCategoryTitles, sampleServices, toCatalogItem } from '../src/mocks/catalog';
 import { parseUsd } from '../src/money';
@@ -18,6 +18,20 @@ describe('the catalog query (CI-5)', () => {
     expect(parseCatalogQuery({ category: 'finance/market-data', q: ' rates ', method: 'mpp', maxPrice: '0.005', sort: 'price', cursor: '24' }))
       .toEqual({ category: 'finance/market-data', q: 'rates', method: 'mpp', maxPrice: '0.005', sort: 'price', cursor: '24' });
     expect(parseCatalogQuery({ category: 'Finance!', method: 'card', maxPrice: 'cheap', sort: 'random', cursor: '-1' })).toEqual({ sort: 'popular' });
+  });
+
+  it('leaves out a category longer than GET /v1/catalog takes', () => {
+    expect(parseCatalogQuery({ category: 'a'.repeat(64) })).toEqual({ category: 'a'.repeat(64), sort: 'popular' });
+    expect(parseCatalogQuery({ category: 'a'.repeat(65) })).toEqual({ sort: 'popular' });
+  });
+
+  it('links a registered service to its page, and a routed endpoint to its routing link (CI-2, AR14)', () => {
+    const routed: CatalogItem = {
+      ...items[0]!, id: 'routed:api.paid.example/v1/data', category: '', verified: false, link: 'https://pay.test/api.paid.example/v1/data',
+    };
+
+    expect(serviceHref(items[0]!)).toBe(`/discover/${items[0]!.id}`);
+    expect(serviceHref(routed)).toBe('https://pay.test/api.paid.example/v1/data');
   });
 
   it('writes a query back as URL parameters, without its defaults', () => {

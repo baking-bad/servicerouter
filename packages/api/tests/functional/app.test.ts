@@ -355,3 +355,53 @@ describe('the deposit account public key (DP-1)', () => {
     await app.close();
   });
 });
+
+describe('CORS for the website\'s console (PA-7, WB-8)', () => {
+  const website = 'https://staging.servicerouter.ai';
+  const preflight = (url: string, origin: string) => fetch(`${url}/v1/keys`, {
+    method: 'OPTIONS',
+    headers: { origin, 'access-control-request-method': 'POST', 'access-control-request-headers': 'authorization, content-type' },
+  });
+
+  it('answers the website\'s preflight with 204, the methods and headers the console uses, cached for 10 minutes', async () => {
+    const { url } = await start();
+
+    const response = await preflight(url, website);
+
+    expect(response.status).toBe(204);
+    expect(Object.fromEntries([...response.headers].filter(([name]) => name.startsWith('access-control-') || name === 'vary'))).toEqual({
+      'access-control-allow-origin': website,
+      'access-control-allow-methods': 'GET, POST, PUT, PATCH, DELETE',
+      'access-control-allow-headers': 'Authorization, Content-Type',
+      'access-control-max-age': '600',
+      'access-control-expose-headers': 'x-request-id',
+      vary: 'Origin',
+    });
+  });
+
+  it('lets the website read every answer, errors included, and no other origin', async () => {
+    const { url } = await start();
+
+    const refused = await fetch(`${url}/v1/account`, { headers: { origin: website, authorization: 'Bearer srm_test_nope' } });
+    const signup = await fetch(`${url}/v1/accounts`, { method: 'POST', headers: { origin: website } });
+    const other = await fetch(`${url}/v1/account`, { headers: { origin: 'https://evil.example.com' } });
+    const otherPreflight = await preflight(url, 'https://evil.example.com');
+
+    expect(refused.status).toBe(401);
+    expect(refused.headers.get('access-control-allow-origin')).toBe(website);
+    expect(signup.status).toBe(201);
+    expect(signup.headers.get('access-control-allow-origin')).toBe(website);
+    expect(other.headers.get('access-control-allow-origin')).toBeNull();
+    expect(otherPreflight.status).not.toBe(204);
+    expect(otherPreflight.headers.get('access-control-allow-origin')).toBeNull();
+  });
+
+  it('adds the origins of CORS_ORIGINS for local development, and refuses one that isn\'t an origin', async () => {
+    const { readCorsOrigins } = await import('../../src/cors.js');
+
+    expect(readCorsOrigins({ CORS_ORIGINS: 'http://localhost:3000, http://127.0.0.1:3000' }, website)).toEqual([website, 'http://localhost:3000', 'http://127.0.0.1:3000']);
+    expect(readCorsOrigins({}, `${website}/`)).toEqual([website]);
+    expect(() => readCorsOrigins({ CORS_ORIGINS: 'http://localhost:3000/console' }, website)).toThrow('CORS_ORIGINS holds "http://localhost:3000/console"');
+    expect(() => readCorsOrigins({ CORS_ORIGINS: 'localhost' }, website)).toThrow('CORS_ORIGINS');
+  });
+});

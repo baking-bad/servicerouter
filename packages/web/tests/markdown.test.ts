@@ -68,4 +68,24 @@ describe('Markdown versions of the pages (WB-11)', () => {
     expect(service).toContain('[OpenAPI](https://site.test/discover/chain-rpc/openapi.json)');
     expect(agentsMarkdown(settings)).toContain('[llms.txt](https://site.test/llms.txt)');
   });
+
+  it('lists a routed endpoint with its routing link, labeled unverified (CI-2, AR14)', () => {
+    const routed = {
+      ...toCatalogItem(services[0]!), id: 'routed:api.paid.example/v1/data', title: 'api.paid.example/v1/data', summary: 'A paid API that Service Router routes payments to.',
+      category: '', verified: false, link: 'https://pay.test/api.paid.example/v1/data',
+    };
+
+    const discover = discoverMarkdown(settings, { services: [routed], categories: [], next: null }, { sort: 'popular' }, false);
+
+    expect(discover).toContain('[api.paid.example/v1/data](https://pay.test/api.paid.example/v1/data) (unverified)');
+    expect(discover).not.toContain('/discover/routed:');
+  });
+
+  it('shows each deposit\'s status as DP-5 gives it, and a dash for one without the deposit asset', () => {
+    const topup = topupMarkdown(sampleTopup('t'), true);
+
+    expect(topup).toContain('| $25.00 | Confirming | 3/15 |');
+    expect(topup).toContain('| $10.00 | Credited | 15/15 |');
+    expect(topup).toContain('| — | Not credited | 15/15 |');
+  });
 });
