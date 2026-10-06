@@ -6,7 +6,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { createApp as createApi, type ApiServer } from '@servicerouter/api';
 import { createAddressPolicy, createLogger, OutboundHttp, Secret, type ServiceId } from '@servicerouter/common';
-import { assumeHostsVerified, loadPlatformConfig, type Payment, type PlatformConfig } from '@servicerouter/core';
+import { assumeHostsVerified, facilitatorFee, loadPlatformConfig, type Payment, type PlatformConfig } from '@servicerouter/core';
 import { createLedger, createPaymentRepository, createRedis, createRedisReplayStore, type Redis, type RedisReplayStore } from '@servicerouter/db';
 import {
   createAssetLookup, createFacilitators, createMppRail, createMppSettlementCheck, initializeMpp, initializeX402, type MppSetup, type Quote,
@@ -128,7 +128,8 @@ beforeAll(async () => {
         rateLimits: { signup: generous, paymentKey: generous, service: generous, unpaidIp: generous },
         timeouts: { settleMs: settleTimeoutMs },
         facilitators: [
-          { name: 'cdp', url: facilitator.url, networks: [base, solana] },
+          // P-2: CDP's flat fee on x402, which MPP never pays
+          { name: 'cdp', url: facilitator.url, networks: [base, solana], feePerPayment: '0.0005' },
           { name: 'cardano', url: 'http://cardano-facilitator:4022', networks: ['cardano:preprod'], enabled: false },
         ],
       })).toString('base64'),
@@ -264,6 +265,7 @@ const followUp = (now = clock) => createSettlementFollowUp({
   assetName: createAssetLookup(config),
   mppCheck: createMppSettlementCheck({ rpc: mpp.rpc, timeoutMs: 1_000, clock: now }),
   feeBps: config.feeBps,
+  feePerPayment: network => facilitatorFee(config, network),
   logger,
 })();
 
@@ -419,6 +421,15 @@ describe('an MPP payment (PR-9, PR-10, PX-5, PX-12, PX-15, step 7)', () => {
     expect(response.status).toBe(503);
     expect(JSON.parse(body)).toMatchObject({ error: { code: 'payment_unavailable' } });
     expect(upstreamCalls()).toBe(0);
+  });
+
+  it('takes no flat fee, though CDP takes one on x402: feeBps\'s share only (P-2)', async () => {
+    expect([facilitatorFee(config, base), facilitatorFee(config, tempo)]).toEqual([500n, 0n]);
+
+    const { response, requestId } = await paidCall('/weather/oslo');
+
+    expect(response.status).toBe(200);
+    expect(await paymentFor(requestId)).toMatchObject({ status: 'settled', rail: 'mpp', amount: 1_000n, fee: 25n });
   });
 });
 

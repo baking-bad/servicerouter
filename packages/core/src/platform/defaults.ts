@@ -10,6 +10,8 @@ export const platformDefaults = {
   minimumPayout: '10',
   // An asset is offered for every price unless the deployment sets a minimum (PC-6)
   assetMinPrice: '0',
+  // P-2: no flat fee on a facilitator's payments unless the deployment sets one
+  facilitatorFeePerPayment: '0',
   // OH-4 and PR-12
   timeouts: { connectMs: 5_000, requestMs: 30_000, settleMs: 30_000 },
   // PX-8: request body 1 MiB. AR3: x402 response buffer 10 MiB.

@@ -168,6 +168,37 @@ describe('x402 payments through the facilitator (PR-5, PR-10, PR-12)', () => {
     expect(facilitator.requests.map(request => request.path)).toEqual(expect.arrayContaining(['/verify', '/settle']));
   });
 
+  it('books the settling facilitator\'s flat fee with the quote\'s feeBps, and none for a facilitator without one (P-2)', async () => {
+    const document = await configWith(facilitator.url, {
+      facilitators: [
+        { name: 'cdp', url: facilitator.url, networks: [base, solana], feePerPayment: '0.0005' },
+        { name: 'cardano', url: 'http://cardano-facilitator:4022', networks: ['cardano:preprod'], enabled: false },
+      ],
+    });
+    const flat = { ...document, assets: config.assets };
+    const flatSetup = await initializeX402({ config: flat, facilitators: createFacilitators({ config: flat, cdpApiKey: () => { throw new Error('none'); }, clock }), timeoutMs: 5_000 });
+    const settled: SettleInput[] = [];
+    const recorder = { create: async (payment: unknown) => payment, changeStatus: async (change: unknown) => change } as unknown as PaymentRecorder;
+    const ledger: SettlementLedger = {
+      settle: async input => {
+        settled.push(input);
+
+        return { payment: {} as never, fee: 0n, sellerAmount: 0n };
+      },
+    };
+    const withFee = createX402Rail({ setup: flatSetup, recorder, ledger, logger });
+    const quote = quoteOf();
+    const plain = createPorts();
+    const plainQuote = quoteOf();
+
+    await withFee.finalize(await withFee.authorize(paidCredential(withFee, await pay(await requiredOf(withFee, quote), base)), quote));
+    await plain.rail.finalize(await plain.rail.authorize(paidCredential(plain.rail, await pay(await requiredOf(plain.rail, plainQuote), base)), plainQuote));
+
+    expect(flatSetup.feePerPayment(base)).toBe(500n);
+    expect(settled).toEqual([expect.objectContaining({ paymentId: quote.paymentId, feeBps: 250, feePerPayment: 500n, asset: 'base-usdc' })]);
+    expect(plain.settled).toEqual([expect.objectContaining({ paymentId: plainQuote.paymentId, feeBps: 250, feePerPayment: 0n })]);
+  });
+
   it('refuses a payment the facilitator rejects with payment_invalid, recording nothing', async () => {
     const { rail, created } = createPorts();
     const quote = quoteOf();

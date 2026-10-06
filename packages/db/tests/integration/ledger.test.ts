@@ -11,7 +11,7 @@ import {
 import { createFakeClock, createTestDatabase, type FakeClock, type TestDatabase } from '@servicerouter/testing';
 
 import {
-  balances, createAccountRepository, createLedger, createPaymentKeyRepository, createPaymentRepository, createServiceRepository,
+  balances, createAccountRepository, createLedger, createPaymentKeyRepository, createPaymentRepository, createRoutingRepository, createServiceRepository,
   ledgerAccountIds, type Ledger,
 } from '../../src/index.js';
 
@@ -635,5 +635,90 @@ describe('settled on-chain payments (LG-4, LG-8, PR-12, step 5)', () => {
     expect(mine.map(item => item.settlementRequest)).toEqual([{ index: 0 }, { index: 1 }, { index: 2 }]);
     expect(mine[0]?.payment.transactionHash).toBe('0x1');
     clock.set(fixtureTime(0, 5, 12, 0, 0, 0));
+  });
+});
+
+describe('the flat fee per payment on a settlement (P-2, LG-4, LG-10)', () => {
+  const verified = async (amount: bigint, changes: Partial<NewPayment> = {}) => {
+    const seller = await newAccount();
+    const serviceId = await newService(seller);
+    counter += 1;
+    const payments = createPaymentRepository({ db: database.db, clock });
+    const payment = await payments.create({
+      id: `pay_flat_${counter}`, requestId: `req-flat-${counter}`, kind: 'service', rail: 'x402', buyerAccountId: undefined, keyId: undefined,
+      sellerAccountId: seller, serviceId, routeKey: 'getWeather', targetHost: undefined, targetPath: undefined,
+      network: 'eip155:84532', asset: '0x036CbD53842c5426634e7929541eC2318f3dCF7e', atomicAmount: amount, amount, status: 'verified', ...changes,
+    });
+
+    return { payments, payment, seller, serviceId };
+  };
+  const balanceOf = async (ledgerAccountId: string) =>
+    (await database.db.select().from(balances).where(sql`${balances.ledgerAccountId} = ${ledgerAccountId}`))[0]?.balance ?? 0n;
+  const settle = (paymentId: string, feeBps: number, feePerPayment?: bigint) => ledger.settle({
+    paymentId, feeBps, ...(feePerPayment === undefined ? {} : { feePerPayment }), asset: 'base-usdc', transactionHash: '0xflat', receipt: undefined, needsReview: false,
+  });
+
+  it('books $0.0005 of a $0.001 payment as the platform\'s fee and $0.0005 as the seller\'s, and the earnings view shows it', async () => {
+    const { payments, payment, seller, serviceId } = await verified(usd('0.001'));
+    const feesBefore = await balanceOf(ledgerAccountIds.fees);
+
+    const result = await settle(payment.id, 0, usd('0.0005'));
+
+    expect(result).toMatchObject({ fee: 500n, sellerAmount: 500n, payment: { status: 'settled', fee: 500n } });
+    expect(await balanceOf(ledgerAccountIds.earned(seller))).toBe(500n);
+    expect(await balanceOf(ledgerAccountIds.fees) - feesBefore).toBe(500n);
+    expect(await payments.earnings(serviceId)).toMatchObject({ calls: 1, earned: 500n, earnedByRail: { x402: 500n }, fee: 500n });
+    expect(await unbalancedTransactions()).toEqual([]);
+  });
+
+  it('caps the fee at a $0.0003 payment\'s amount: the seller earns 0 and nothing goes negative', async () => {
+    const { payments, payment, seller, serviceId } = await verified(usd('0.0003'));
+    const feesBefore = await balanceOf(ledgerAccountIds.fees);
+
+    const result = await settle(payment.id, 0, usd('0.0005'));
+
+    expect(result).toMatchObject({ fee: 300n, sellerAmount: 0n, payment: { fee: 300n } });
+    expect(await balanceOf(ledgerAccountIds.earned(seller))).toBe(0n);
+    expect(await balanceOf(ledgerAccountIds.fees) - feesBefore).toBe(300n);
+    expect(await payments.earnings(serviceId)).toMatchObject({ earned: 0n, fee: 300n });
+    expect(await negativeBalances()).toEqual([]);
+    expect(await unbalancedTransactions()).toEqual([]);
+  });
+
+  it('adds the flat fee to feeBps\'s share: $0.0015 on a $0.01 payment at 1000 bps', async () => {
+    const { payment, seller } = await verified(usd('0.01'));
+
+    const result = await settle(payment.id, 1_000, usd('0.0005'));
+
+    expect(result).toMatchObject({ fee: 1_500n, sellerAmount: 8_500n });
+    expect(await balanceOf(ledgerAccountIds.earned(seller))).toBe(8_500n);
+  });
+
+  it('takes no flat fee when none is given, as for MPP and a facilitator without one', async () => {
+    const { payment } = await verified(usd('0.001'), { rail: 'mpp', network: 'eip155:42431', asset: '0x20c0000000000000000000000000000000000000' });
+
+    expect(await settle(payment.id, 250)).toMatchObject({ fee: 25n, sellerAmount: 975n });
+  });
+
+  it('keeps a routed payment\'s fee to the routing fee in its quote, flat fee or not (RT-5)', async () => {
+    counter += 1;
+    const payments = createPaymentRepository({ db: database.db, clock });
+    const payment = await payments.create({
+      id: `pay_flat_routed_${counter}`, requestId: undefined, kind: 'routed', rail: 'x402', buyerAccountId: undefined, keyId: undefined,
+      sellerAccountId: undefined, serviceId: undefined, routeKey: undefined, targetHost: 'api.target.dev', targetPath: '/v1/pools',
+      network: 'eip155:84532', asset: '0x036CbD53842c5426634e7929541eC2318f3dCF7e', atomicAmount: 1_100n, amount: 1_100n, status: 'verified',
+    });
+    await createRoutingRepository({ db: database.db, clock }).recordTargetPayment({
+      paymentId: payment.id, protocol: 'x402', network: 'eip155:84532', asset: 'base-usdc', amount: 1_000n, atomicAmount: 1_000n,
+      payTo: '0x3333333333333333333333333333333333333333', signatureId: `sig_${counter}`,
+    });
+    const [feesBefore, routingFeesBefore] = [await balanceOf(ledgerAccountIds.fees), await balanceOf(ledgerAccountIds.routingFees)];
+
+    const result = await settle(payment.id, 0, usd('0.0005'));
+
+    expect(result).toMatchObject({ fee: 100n, sellerAmount: 0n, payment: { kind: 'routed', status: 'settled', fee: 100n } });
+    expect(await balanceOf(ledgerAccountIds.routingFees) - routingFeesBefore).toBe(100n);
+    expect(await balanceOf(ledgerAccountIds.fees) - feesBefore).toBe(0n);
+    expect(await unbalancedTransactions()).toEqual([]);
   });
 });

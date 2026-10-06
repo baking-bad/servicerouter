@@ -62,6 +62,7 @@ export const platformConfigSchema: SchemaObject = {
       networks: array(networkId, { minItems: 1, uniqueItems: true }),
       auth: object({ type: constant('cdp'), apiKeyId: secretName, apiKeySecret: secretName }, ['type', 'apiKeyId', 'apiKeySecret']),
       enabled: boolean,
+      feePerPayment: usdAmount,
     }, ['name', 'url', 'networks']), { minItems: 1 }),
     mpp: object({ network: networkId, recipient: addressText, enabled: boolean, rpcUrl: httpsUrl }, ['network', 'recipient']),
     deposits: object({ asset: assetName, confirmations: integer(1, 2160), enabled: boolean, blockfrostUrl: httpUrl }, ['asset']),

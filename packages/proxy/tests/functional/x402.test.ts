@@ -10,7 +10,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { createApp as createApi, type ApiServer } from '@servicerouter/api';
 import { createAddressPolicy, createLogger, OutboundHttp, Secret, type ServiceId } from '@servicerouter/common';
-import { assumeHostsVerified, loadPlatformConfig, type Payment, type PlatformConfig } from '@servicerouter/core';
+import { assumeHostsVerified, facilitatorFee, loadPlatformConfig, type Payment, type PlatformConfig } from '@servicerouter/core';
 import { createLedger, createPaymentRepository } from '@servicerouter/db';
 import { createAssetLookup, createFacilitatorLookup, createFacilitators, initializeX402, type X402Setup } from '@servicerouter/payments';
 import {
@@ -231,6 +231,7 @@ const followUp = () => createSettlementFollowUp({
   facilitatorFor: createFacilitatorLookup(config, setup.facilitators),
   assetName: createAssetLookup(config),
   feeBps: config.feeBps,
+  feePerPayment: network => facilitatorFee(config, network),
   logger: createLogger({ level: 'silent' }),
 })();
 

@@ -54,8 +54,9 @@ export interface Ledger {
   release(input: { readonly paymentId: string }): Promise<{ readonly payment: Payment }>;
   /**
    * Books a settled on-chain payment (x402, MPP): the asset's treasury → seller earned plus platform
-   * fees (LG-4), with the status change to `settled` in the same transaction. From `verified` or
-   * `settling` (LG-8). A second settle moves nothing (LG-3). Clears the settle request.
+   * fees (LG-4): feeBps's share plus the settling facilitator's flat fee (P-2), capped at the amount.
+   * With the status change to `settled` in the same transaction. From `verified` or `settling`
+   * (LG-8). A second settle moves nothing (LG-3). Clears the settle request.
    */
   settle(input: SettleInput): Promise<CaptureResult>;
   balance(accountId: string): Promise<CreditsBalance>;
@@ -361,7 +362,7 @@ export const createLedger = ({ db, clock, ids }: LedgerOptions): Ledger => {
       return result;
     },
 
-    settle: async ({ paymentId, feeBps, asset, transactionHash, receipt, needsReview }) => {
+    settle: async ({ paymentId, feeBps, feePerPayment = 0n, asset, transactionHash, receipt, needsReview }) => {
       let created: readonly LedgerAccount[] = [];
       const result = await withTransaction(db, async (tx): Promise<CaptureResult> => {
         const payments = createPaymentRepository({ db: tx, clock });
@@ -400,7 +401,8 @@ export const createLedger = ({ db, clock, ids }: LedgerOptions): Ledger => {
         if (!current.sellerAccountId)
           throw new InvalidPaymentStatusChangeError(paymentId, current.status, 'settled');
 
-        const { fee, sellerAmount } = splitFee(current.amount, feeBps);
+        // feeBps's share plus the settling facilitator's flat fee, never more than the amount (LG-4, P-2)
+        const { fee, sellerAmount } = splitFee(current.amount, feeBps, feePerPayment);
         // Money arrives on chain, outside the ledger, so the treasury's balance is minus what it took in
         const treasury: LedgerAccount = { id: ledgerAccountIds.treasury(asset), accountId: undefined, type: 'treasury', mayGoNegative: true };
         created = [...accountsOf(current.sellerAccountId, 'earned'), platformFees, treasury].filter(account => !known?.has(account.id));

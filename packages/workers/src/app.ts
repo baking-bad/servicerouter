@@ -3,7 +3,7 @@ import {
   type MetricsServer, type Timers,
 } from '@servicerouter/common';
 import {
-  createOwnershipFileFetcher, createOwnershipVerifier, cryptoRandomSource, findAsset, ownershipFileLimits, treasuryWallets, type BalanceReader,
+  createOwnershipFileFetcher, createOwnershipVerifier, cryptoRandomSource, facilitatorFee, findAsset, ownershipFileLimits, treasuryWallets, type BalanceReader,
   type BlockfrostClient, type InvalidationBus, type PlatformConfig, type RandomSource,
 } from '@servicerouter/core';
 import {
@@ -133,6 +133,7 @@ export const createApp = ({
     assetName: createAssetLookup(config),
     ...(mppCheck ? { mppCheck } : {}),
     feeBps: config.feeBps,
+    feePerPayment: network => facilitatorFee(config, network),
     logger,
   });
   const routingLosses = createRoutingLosses({

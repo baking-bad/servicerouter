@@ -20,6 +20,28 @@ describe('the fee split (LG-4, AR6)', () => {
   });
 });
 
+describe('the flat fee per payment (P-2, LG-4)', () => {
+  it.each([
+    ['a $0.001 call with a $0.0005 flat fee: half each', 1_000n, 0, 500n, 500n, 500n],
+    ['a $0.0003 call: the fee is capped at the amount, and the seller gets 0', 300n, 0, 500n, 300n, 0n],
+    ['a call of exactly the flat fee', 500n, 0, 500n, 500n, 0n],
+    ['a $0.01 call at 1000 bps plus the flat fee', 10_000n, 1_000, 500n, 1_500n, 8_500n],
+    ['a $0.001 call at 10000 bps: never more than the amount', 1_000n, 10_000, 500n, 1_000n, 0n],
+    ['a free call', 0n, 0, 500n, 0n, 0n],
+    ['no flat fee: feeBps alone', 1_000n, 250, 0n, 25n, 975n],
+  ])('splits %s', (_case, amount, feeBps, feePerPayment, fee, sellerAmount) => {
+    const split = splitFee(amount, feeBps, feePerPayment);
+
+    expect(split).toEqual({ fee, sellerAmount });
+    expect(split.fee + split.sellerAmount).toBe(amount);
+    expect(split.sellerAmount >= 0n).toBe(true);
+  });
+
+  it('refuses a negative flat fee', () => {
+    expect(() => splitFee(1_000n, 0, -1n)).toThrow(RangeError);
+  });
+});
+
 describe('payment status changes (LG-8)', () => {
   it.each([
     ['held', 'captured'],

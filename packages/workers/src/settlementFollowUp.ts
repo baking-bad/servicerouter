@@ -1,4 +1,4 @@
-import type { Logger } from '@servicerouter/common';
+import type { Logger, MicroUsd } from '@servicerouter/common';
 import type { JsonObject, Payment } from '@servicerouter/core';
 import type { Ledger, PaymentRepository } from '@servicerouter/db';
 import {
@@ -21,6 +21,8 @@ export interface SettlementFollowUpOptions {
   readonly mppCheck?: MppSettlementCheck;
   // The platform's fee on a settlement (LG-4)
   readonly feeBps: number;
+  // The flat fee of the facilitator that settles on a network (P-2), as the proxy books it: `facilitatorFee` of platform config
+  readonly feePerPayment: (network: string) => MicroUsd;
   readonly logger: Logger;
   readonly batchSize?: number;
 }
@@ -46,12 +48,13 @@ export class SettlementFollowUpError extends Error {
 /**
  * Settlement follow-up (WK-6, PR-12): repeats the identical settle for every `settling` x402 payment,
  * and reads the receipt of every `settling` MPP payment's transaction (PR-9), never broadcasting it.
- * Settled → books the earnings, flagged for review when the buyer got no response (no receipt was
- * sent). Definitively failed or expired → `failed`, nothing booked. Pending → next run. The Ledger's
- * settle moves money once, so a rerun after a crash books nothing twice (WK-2).
+ * Settled → books the earnings with the same fee the proxy would have, the facilitator's flat fee
+ * included (P-2), flagged for review when the buyer got no response (no receipt was sent).
+ * Definitively failed or expired → `failed`, nothing booked. Pending → next run. The Ledger's settle
+ * moves money once, so a rerun after a crash books nothing twice (WK-2).
  */
 export const createSettlementFollowUp = ({
-  payments, ledger, facilitatorFor, assetName, mppCheck, feeBps, logger, batchSize = defaultBatchSize,
+  payments, ledger, facilitatorFor, assetName, mppCheck, feeBps, feePerPayment, logger, batchSize = defaultBatchSize,
 }: SettlementFollowUpOptions) => async (): Promise<SettlementFollowUpResult> => {
   const counts = { settled: 0, failed: 0, pending: 0, unknown: 0, skipped: 0 };
 
@@ -108,16 +111,17 @@ export const createSettlementFollowUp = ({
         await followMpp(payment, settlementRequest);
         continue;
       }
+      const { network } = payment;
       const request = fromSettlementRequest(settlementRequest);
-      const facilitator = payment.network === undefined ? undefined : facilitatorFor(payment.network);
-      const asset = payment.network === undefined || payment.asset === undefined ? undefined : assetName(payment.network, payment.asset);
-      if (!request || !facilitator || !asset) {
+      const facilitator = network === undefined ? undefined : facilitatorFor(network);
+      const asset = network === undefined || payment.asset === undefined ? undefined : assetName(network, payment.asset);
+      if (!request || network === undefined || !facilitator || !asset) {
         counts.skipped += 1;
-        logger.error({ paymentId: payment.id, network: payment.network ?? null }, 'A settling payment has no settle request, facilitator, or asset to repeat it with');
+        logger.error({ paymentId: payment.id, network: network ?? null }, 'A settling payment has no settle request, facilitator, or asset to repeat it with');
         continue;
       }
 
-      const where = { paymentId: payment.id, rail: payment.rail, network: payment.network ?? null, facilitator: facilitator.name };
+      const where = { paymentId: payment.id, rail: payment.rail, network, facilitator: facilitator.name };
       try {
         const result = await facilitator.settle(request.paymentPayload, request.paymentRequirements);
         if (result.success) {
@@ -125,6 +129,8 @@ export const createSettlementFollowUp = ({
           await ledger.settle({
             paymentId: payment.id,
             feeBps,
+            // The same flat fee the proxy books when it finishes a settlement itself (P-2)
+            feePerPayment: feePerPayment(network),
             asset,
             transactionHash: transaction,
             receipt: payment.receipt ?? encodeSettleReceipt(result),

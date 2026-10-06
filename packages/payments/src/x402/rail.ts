@@ -98,7 +98,8 @@ const decode = (credential: Credential): PaymentPayload => {
  * x402 (PR-5, PR-12): requirements per request from the quote, with the SDK's resource server, one
  * `exact` option per offered asset at or above its minimum price (PR-3). Verifies through the
  * network's facilitator before forwarding, and records the payment as `verified`. Settles after a
- * billable response, before any byte goes out, and books it. Otherwise cancels: nothing settles.
+ * billable response, before any byte goes out, and books it with the quote's feeBps and the settling
+ * facilitator's flat fee (P-2). Otherwise cancels: nothing settles.
  */
 export const createX402Rail = ({ setup, recorder, ledger, logger }: X402RailOptions): PaymentRail => {
   const { server } = setup;
@@ -211,7 +212,9 @@ export const createX402Rail = ({ setup, recorder, ledger, logger }: X402RailOpti
 
       if (result.success) {
         const receipt = encodePaymentResponseHeader(result);
-        await ledger.settle({ paymentId, feeBps, asset, transactionHash: result.transaction || undefined, receipt, needsReview: false });
+        await ledger.settle({
+          paymentId, feeBps, feePerPayment: setup.feePerPayment(network), asset, transactionHash: result.transaction || undefined, receipt, needsReview: false,
+        });
 
         return { headers: { [paymentResponseHeader]: receipt }, settlement: { status: 'settled', transaction: result.transaction || undefined } };
       }

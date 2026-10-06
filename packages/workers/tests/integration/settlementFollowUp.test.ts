@@ -3,7 +3,7 @@ import { fixtureTime } from '@servicerouter/testing';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { createLogger, randomIdGenerator } from '@servicerouter/common';
-import { loadPlatformConfig, type JsonObject, type PlatformConfig } from '@servicerouter/core';
+import { facilitatorFee, loadPlatformConfig, type JsonObject, type PlatformConfig } from '@servicerouter/core';
 import { createAccountRepository, createLedger, createPaymentRepository, createServiceRepository } from '@servicerouter/db';
 import {
   createAssetLookup, createFacilitatorLookup, createFacilitators, toMppSettlementRequest, type MppSettlementCheck, type MppSettlementStatus,
@@ -75,6 +75,7 @@ const followUp = (
   facilitatorFor,
   assetName: createAssetLookup(config),
   feeBps: config.feeBps,
+  feePerPayment: network => facilitatorFee(config, network),
   logger,
 })();
 
@@ -189,6 +190,7 @@ describe('settlement follow-up for MPP (WK-6, PR-9)', () => {
     assetName: createAssetLookup(config),
     ...(mppCheck ? { mppCheck } : {}),
     feeBps: config.feeBps,
+    feePerPayment: network => facilitatorFee(config, network),
     logger: createLogger({ level: 'silent' }),
   })();
 
@@ -262,5 +264,38 @@ describe('the follow-up\'s lines (L-8)', () => {
     });
     facilitator.reset();
     await followUp();
+  });
+});
+
+describe('the flat fee on a settlement the follow-up finishes (P-2, WK-6)', () => {
+  it('books the settling facilitator\'s flat fee with feeBps\'s share, as the proxy does: $0.0005 of a $0.001 payment', async () => {
+    const flat = await loadPlatformConfig({
+      env: {
+        CONFIG_PATH: 'config/example.yaml',
+        CONFIG: Buffer.from(JSON.stringify({
+          feeBps: 0,
+          facilitators: [
+            { name: 'cdp', url: facilitator.url, networks: [base, solana], feePerPayment: '0.0005' },
+            { name: 'cardano', url: 'http://cardano-facilitator:4022', networks: ['cardano:preprod'], enabled: false },
+          ],
+        })).toString('base64'),
+      },
+    });
+    const answered = await settling({ receipt: 'eyJ9' });
+    const unanswered = await settling();
+
+    const result = await createSettlementFollowUp({
+      payments: payments(),
+      ledger: createLedger({ db: database.db, clock, ids: randomIdGenerator }),
+      facilitatorFor: createFacilitatorLookup(flat, createFacilitators({ config: flat, cdpApiKey: () => { throw new Error('none'); }, clock })),
+      assetName: createAssetLookup(flat),
+      feeBps: flat.feeBps,
+      feePerPayment: network => facilitatorFee(flat, network),
+      logger: createLogger({ level: 'silent' }),
+    })();
+
+    expect(result).toMatchObject({ settled: 2 });
+    expect(await payments().find(answered)).toMatchObject({ status: 'settled', amount: 1_000n, fee: 500n });
+    expect(await payments().find(unanswered)).toMatchObject({ status: 'settled', amount: 1_000n, fee: 500n, needsReview: true });
   });
 });

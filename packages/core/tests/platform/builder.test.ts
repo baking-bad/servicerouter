@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { ValidationError } from '@servicerouter/common';
 
 import {
-  assertValidPlatformConfigDocument, buildPlatformConfig, findAsset, findFacilitator, platformDefaults,
+  assertValidPlatformConfigDocument, buildPlatformConfig, facilitatorFee, findAsset, findFacilitator, platformDefaults,
   type PlatformConfigDocument,
 } from '../../src/index.js';
 import { loadExamplePlatformDocument, mainnetEnterpriseAddress, patch } from '../fixtures.js';
@@ -57,6 +57,28 @@ describe('buildPlatformConfig', () => {
     const notBoolean = loadExamplePlatformDocument() as { facilitators: Record<string, unknown>[] };
     notBoolean.facilitators[0]!['enabled'] = 'no';
     expect(issues(() => assertValidPlatformConfigDocument(notBoolean)).map(issue => issue.path)).toEqual(['/facilitators/0/enabled']);
+  });
+
+  it('takes a flat fee per payment on a facilitator, in micro-USD, with no fee by default (P-2, PC-2)', () => {
+    const value = loadExamplePlatformDocument() as { facilitators: Record<string, unknown>[] };
+    value.facilitators[0]!['feePerPayment'] = '0.0005';
+    delete value.facilitators[1]!['feePerPayment'];
+    assertValidPlatformConfigDocument(value);
+
+    const config = buildPlatformConfig(value as never);
+
+    expect(config.facilitators.map(facilitator => [facilitator.name, facilitator.feePerPayment])).toEqual([['cdp', 500n], ['cardano', 0n]]);
+    expect(platformDefaults.facilitatorFeePerPayment).toBe('0');
+    // The enabled facilitator that settles on each network: CDP's fee on Base and Solana, none on Cardano or Tempo (MPP)
+    expect(facilitatorFee(config, 'eip155:84532')).toBe(500n);
+    expect(facilitatorFee(config, 'solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1')).toBe(500n);
+    expect(facilitatorFee(config, 'cardano:preprod')).toBe(0n);
+    expect(facilitatorFee(config, 'eip155:42431')).toBe(0n);
+    // A disabled facilitator settles nothing, so it takes no fee
+    const disabled = loadExamplePlatformDocument() as { facilitators: Record<string, unknown>[] };
+    disabled.facilitators[0]!['feePerPayment'] = '0.0005';
+    disabled.facilitators[0]!['enabled'] = false;
+    expect(facilitatorFee(buildPlatformConfig(disabled as never), 'eip155:84532')).toBe(0n);
   });
 
   it('applies the documented defaults (PC-2, PC-6)', () => {
@@ -211,6 +233,21 @@ describe('assertValidPlatformConfigDocument', () => {
     const value = patch(loadExamplePlatformDocument(), changes);
 
     expect(issues(() => assertValidPlatformConfigDocument(value))).toContainEqual({ path, message });
+  });
+
+  it.each([
+    ['a number', 0.0005],
+    ['more than 6 decimal places', '0.0000005'],
+    ['a negative amount', '-0.0005'],
+    ['a currency sign', '$0.0005'],
+    ['an empty string', ''],
+  ])('rejects a flat fee per payment that is %s (P-2, PC-2)', (_name, feePerPayment) => {
+    const value = loadExamplePlatformDocument() as { facilitators: Record<string, unknown>[] };
+    value.facilitators[0]!['feePerPayment'] = feePerPayment;
+
+    expect(issues(() => assertValidPlatformConfigDocument(value))).toContainEqual({
+      path: '/facilitators/0/feePerPayment', message: 'must be a USD amount as a string with at most 6 decimal places, such as "0.001"',
+    });
   });
 
   it('rejects unsafe objects before the schema runs (PC-1)', () => {

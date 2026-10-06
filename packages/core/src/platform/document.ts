@@ -41,6 +41,9 @@ export interface FacilitatorDocument {
   readonly auth?: CdpAuthDocument;
   // Default: true. A disabled facilitator isn't checked, and its networks aren't offered.
   readonly enabled?: boolean;
+  // The platform's flat fee on each payment this facilitator settles for a registered service, in USD,
+  // such as "0.0005", taken from the seller's earnings on top of feeBps's share (P-2). Default: "0".
+  readonly feePerPayment?: string;
 }
 
 export interface MppDocument {

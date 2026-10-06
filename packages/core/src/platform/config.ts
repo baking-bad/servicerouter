@@ -31,6 +31,8 @@ export interface Facilitator {
   readonly auth: CdpAuth | undefined;
   // A disabled facilitator isn't checked at startup or for readiness, and its networks aren't offered
   readonly enabled: boolean;
+  // The platform's flat fee on each registered service's payment it settles, on top of feeBps's share (P-2)
+  readonly feePerPayment: MicroUsd;
 }
 
 export interface Category {

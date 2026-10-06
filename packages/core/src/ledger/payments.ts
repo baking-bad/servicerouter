@@ -107,16 +107,21 @@ export class PaymentFinalizedError extends ServiceRouterError {
 }
 
 /**
- * LG-4: the platform's fee, `amount × feeBps / 10000` rounded down to the micro-USD (AR6). The seller
- * gets the rest, so the two always add up to the amount.
+ * LG-4: the platform's fee, `amount × feeBps / 10000` rounded down to the micro-USD (AR6), plus the
+ * flat fee of the facilitator that settled the payment, if any (P-2). The fee never passes the
+ * amount, so the seller's share is never negative. The seller gets the rest, so the two always add
+ * up to the amount.
  */
-export const splitFee = (amount: MicroUsd, feeBps: number): { readonly fee: MicroUsd; readonly sellerAmount: MicroUsd } => {
+export const splitFee = (amount: MicroUsd, feeBps: number, feePerPayment: MicroUsd = 0n): { readonly fee: MicroUsd; readonly sellerAmount: MicroUsd } => {
   if (!Number.isInteger(feeBps) || feeBps < 0 || feeBps > 10_000)
     throw new RangeError('feeBps must be an integer from 0 to 10000');
   if (amount < 0n)
     throw new RangeError('The amount must not be negative');
+  if (feePerPayment < 0n)
+    throw new RangeError('The fee per payment must not be negative');
 
-  const fee = amount * BigInt(feeBps) / 10_000n;
+  const share = amount * BigInt(feeBps) / 10_000n + feePerPayment;
+  const fee = share < amount ? share : amount;
 
   return { fee, sellerAmount: amount - fee };
 };

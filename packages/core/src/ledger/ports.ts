@@ -22,6 +22,9 @@ export type HoldResult =
 export interface SettleInput {
   readonly paymentId: string;
   readonly feeBps: number;
+  // The flat fee of the facilitator that settled it (P-2), added to feeBps's share and capped at the
+  // amount. x402 only. A routed payment ignores it: its fee is in its quote (RT-5). Default: 0.
+  readonly feePerPayment?: MicroUsd;
   // The asset the payment settled in, by its registry name, such as base-usdc: its treasury pays out
   readonly asset: string;
   readonly transactionHash: string | undefined;

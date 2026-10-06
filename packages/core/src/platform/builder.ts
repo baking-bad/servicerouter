@@ -95,6 +95,8 @@ export const checkPlatformConfig = (document: PlatformConfigDocument): readonly 
       add([...path, 'name'], `duplicate facilitator name ${JSON.stringify(facilitator.name)}`);
     facilitatorNames.add(facilitator.name);
 
+    checkAmount([...path, 'feePerPayment'], facilitator.feePerPayment);
+
     for (const [networkIndex, networkId] of facilitator.networks.entries()) {
       checkNetwork([...path, 'networks', networkIndex], networkId);
       const owner = facilitatorByNetwork.get(networkId);
@@ -205,6 +207,7 @@ export const buildPlatformConfig = (document: PlatformConfigDocument, locator?: 
       networks: facilitator.networks.map(id => network(id).id),
       auth: facilitator.auth ? { ...facilitator.auth } : undefined,
       enabled: facilitator.enabled ?? true,
+      feePerPayment: usd(facilitator.feePerPayment, platformDefaults.facilitatorFeePerPayment),
     })),
     mpp: {
       network: network(document.mpp.network),
@@ -250,3 +253,11 @@ export const findAsset = (config: PlatformConfig, name: string): Asset | undefin
 
 export const findFacilitator = (config: PlatformConfig, networkId: NetworkId) =>
   config.facilitators.find(facilitator => facilitator.networks.includes(networkId));
+
+/**
+ * The flat fee of the enabled facilitator that settles payments on a network (P-2), or 0 when none
+ * serves it, such as MPP's Tempo network. The proxy and the settlement follow-up both read it here,
+ * so a payment books the same fee whichever finishes its settlement.
+ */
+export const facilitatorFee = (config: PlatformConfig, networkId: string): MicroUsd =>
+  config.facilitators.find(facilitator => facilitator.enabled && facilitator.networks.some(id => id === networkId))?.feePerPayment ?? 0n;

@@ -11,7 +11,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { createApp as createApi, type ApiServer } from '@servicerouter/api';
 import { createAddressPolicy, createLogger, OutboundHttp, randomIdGenerator, Secret, type Server } from '@servicerouter/common';
-import { assumeHostsVerified, findAsset, loadPlatformConfig, type PlatformConfig } from '@servicerouter/core';
+import { assumeHostsVerified, facilitatorFee, findAsset, loadPlatformConfig, type PlatformConfig } from '@servicerouter/core';
 import { createLedger, createRoutingRepository, ledgerAccountIds, payments, routedEndpoints, signatures, targetPayments } from '@servicerouter/db';
 import { createFacilitators, initializeX402 } from '@servicerouter/payments';
 import { createApp as createSigner } from '@servicerouter/signer';
@@ -83,7 +83,8 @@ beforeAll(async () => {
         routingFeeBps: 1000,
         rateLimits: { signup: generous, paymentKey: generous, service: generous, unpaidIp: generous },
         facilitators: [
-          { name: 'cdp', url: facilitator.url, networks: [base, solana] },
+          // P-2: CDP's flat fee on a registered service's x402 payment, which routed calls never pay
+          { name: 'cdp', url: facilitator.url, networks: [base, solana], feePerPayment: '0.0005' },
           { name: 'cardano', url: 'http://cardano-facilitator:4022', networks: ['cardano:preprod'], enabled: false },
         ],
         mpp: { enabled: false },
@@ -360,6 +361,26 @@ describe('payment routing (RT-1 to RT-12, SG-2, SG-3, SG-7, step 12)', () => {
     finally {
       await switchedOff.close();
     }
+  });
+
+  it('books a routed x402 payment settled through CDP with the routing fee in its quote only, never CDP\'s flat fee (P-2, RT-5)', async () => {
+    const link = `${proxyUrl}/${at('api.target.dev')}/v1/pools`;
+    const required = decodePaymentRequiredHeader((await fetch(link)).headers.get('payment-required')!);
+    const client = new x402Client().register(base, new ExactEvmScheme(privateKeyToAccount(generatePrivateKey())));
+    const signature = encodePaymentSignatureHeader(await client.createPaymentPayload({ ...required, accepts: required.accepts.filter(option => option.network === base) }));
+    const fees = async () => (await createLedger({ db: database.db, clock: { now: () => new Date() }, ids: randomIdGenerator }).balancesOf([ledgerAccountIds.fees])).get(ledgerAccountIds.fees) ?? 0n;
+    const [before, feesBefore] = [await platformBalances(), await fees()];
+    const requestId = 'routed-x402-flat-fee';
+
+    const paid = await fetch(link, { headers: { 'payment-signature': signature, 'x-request-id': requestId } });
+
+    expect(facilitatorFee(config, base)).toBe(500n);
+    expect(paid.status).toBe(200);
+    const [row] = await database.db.select().from(payments).where(eq(payments.requestId, requestId));
+    expect(row).toMatchObject({ kind: 'routed', rail: 'x402', status: 'settled', amount: 1_100n, fee: 100n });
+    const after = await platformBalances();
+    expect(after[ledgerAccountIds.routingFees]! - (before[ledgerAccountIds.routingFees] ?? 0n)).toBe(100n);
+    expect(await fees() - feesBefore).toBe(0n);
   });
 });
 

@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { loadPlatformConfig } from '../../src/index.js';
+import { facilitatorFee, loadPlatformConfig } from '../../src/index.js';
 
 // config/production.yaml (PC-1, PC-5): mainnets only, with three addresses the owner fills in
 const productionConfigPath = fileURLToPath(new URL('../../../../config/production.yaml', import.meta.url));
@@ -58,5 +58,14 @@ describe('config/production.yaml (PC-1, PC-5, P-1 to P-9)', () => {
     expect(config.rateLimits.topup).toEqual({ requests: 300, windowSeconds: 60 });
     expect({ feeBps: config.feeBps, routingFeeBps: config.routingFeeBps }).toEqual({ feeBps: 0, routingFeeBps: 0 });
     expect(config.deposits?.asset.name ?? config.deposits?.asset).toBe('cardano-usdm');
+  });
+
+  it('takes $0.0005 on each x402 payment CDP settles, and no flat fee on Cardano or MPP (P-2)', async () => {
+    const config = await loadText(filled(text));
+
+    expect(config.facilitators.map(facilitator => [facilitator.name, facilitator.feePerPayment])).toEqual([['cdp', 500n], ['cardano', 0n]]);
+    expect(facilitatorFee(config, 'eip155:8453')).toBe(500n);
+    expect(facilitatorFee(config, 'cardano:mainnet')).toBe(0n);
+    expect(facilitatorFee(config, config.mpp.network.id)).toBe(0n);
   });
 });

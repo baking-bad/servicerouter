@@ -1,5 +1,5 @@
 import { withTimeout, type Clock, type MicroUsd, type NetworkId } from '@servicerouter/common';
-import type { CdpAuth, PlatformConfig } from '@servicerouter/core';
+import { facilitatorFee, type CdpAuth, type PlatformConfig } from '@servicerouter/core';
 import { x402ResourceServer } from '@x402/core/server';
 import type { Network, SchemeNetworkServer } from '@x402/core/types';
 import { ExactCardanoScheme } from '@x402/cardano/exact/server';
@@ -35,6 +35,8 @@ export interface X402Setup {
   facilitatorFor(network: string): Facilitator | undefined;
   /** The registry name of an asset on a network, such as `base-usdc`, from every asset in platform config. */
   assetName(network: string, address: string): string | undefined;
+  /** The flat fee of the facilitator that settles on a network (P-2), taken from the seller's earnings. 0 for none. */
+  feePerPayment(network: string): MicroUsd;
 }
 
 export interface FacilitatorsOptions {
@@ -172,5 +174,6 @@ export const initializeX402 = async ({ config, facilitators, timeoutMs }: X402Se
     assets,
     facilitatorFor,
     assetName: createAssetLookup(config),
+    feePerPayment: network => facilitatorFee(config, network),
   };
 };
