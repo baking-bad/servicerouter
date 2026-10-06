@@ -20,6 +20,7 @@
     "start": "node dist/main.js"
   },
   "dependencies": {
+    "@prometheus-io/client": "^0.16.1",
     "@servicerouter/common": "0.1.0",
     "@servicerouter/core": "0.1.0",
     "@servicerouter/db": "0.1.0",
