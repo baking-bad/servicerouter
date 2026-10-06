@@ -102,13 +102,13 @@ servicerouter:
   version: "1"
 
 service:
-  id: my-weather             # [a-z0-9-], unique, in the URL forever
-  title: My Weather
-  summary: Current weather for any city
+  id: my-prices              # [a-z0-9-], unique, in the URL forever
+  title: My Prices
+  summary: Live token prices by symbol
   description: |
-    Current conditions for any city, with temperature and wind.
-  category: weather          # One of the catalog's categories
-  tags: [forecast, geo]
+    The latest price, 24-hour change, and volume for any token symbol.
+  category: crypto/prices    # One ID of the catalog's categories: \`GET ${apiUrl}/v1/catalog\` lists them
+  tags: [prices, tokens]
   discoverable: true         # Listed in the x402 Bazaar. false keeps it out
 
 payouts:
@@ -142,7 +142,7 @@ credentials:
 MASTER_KEY=$(jq -r .masterKey servicerouter-account.json)
 jq -n --rawfile config service.yaml --arg key "$UPSTREAM_KEY" \\
   '{config: $config, secrets: {"upstream-key": $key}}' |
-curl -s -X PUT ${apiUrl}/v1/services/my-weather \\
+curl -s -X PUT ${apiUrl}/v1/services/my-prices \\
   -H "Authorization: Bearer $MASTER_KEY" \\
   -H "Content-Type: application/json" \\
   --data-binary @-
@@ -154,11 +154,11 @@ curl -s -X PUT ${apiUrl}/v1/services/my-weather \\
 
 ## 4. Check and manage it
 
-- \`GET ${apiUrl}/v1/services\`: your services. \`GET ${apiUrl}/v1/services/my-weather\`: one service.
+- \`GET ${apiUrl}/v1/services\`: your services. \`GET ${apiUrl}/v1/services/my-prices\`: one service.
 - \`GET …/revisions\` lists revisions. \`POST …/rollback\` with \`{"revision": 3}\` makes an older one active.
 - \`PUT …/secrets/<name>\` with \`{"value": "…"}\` rotates one secret.
 - \`GET …/earnings\`: calls, earnings by payment method, the fee, pending payout, and the next payout date.
-- Its public page: \`${siteUrl}/discover/my-weather\`.
+- Its public page: \`${siteUrl}/discover/my-prices\`.
 
 ## 5. Prove you own the upstream
 

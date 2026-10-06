@@ -73,35 +73,75 @@ payouts:
   assets: [cardano-usdm]
   minimum: "10"
 
-categories:
-  - id: ai
-    title: AI
-  - id: ai/image-generation
-    title: Image generation
-  - id: ai/speech
-    title: Speech
-  - id: ai/translation
-    title: Translation
+categories:                     # CI-3. Shaped by what agents buy over x402 today: crypto data, DeFi, chain reads, AI, and search
+  # Crypto market data: the second-largest cluster of x402 calls
+  - id: crypto
+    title: Crypto
+  - id: crypto/prices
+    title: Prices and market data
+  - id: crypto/token-analytics
+    title: Token analytics and smart money
+  - id: crypto/derivatives
+    title: Derivatives, funding, and liquidations
+  - id: crypto/trading-signals
+    title: Trading signals
+  - id: crypto/security
+    title: Token safety and risk
+  - id: crypto/news
+    title: News and sentiment
+  # DeFi: actions and positions, not only prices
+  - id: defi
+    title: DeFi
+  - id: defi/swaps
+    title: Swap quotes and routing
+  - id: defi/yields
+    title: Yields and lending rates
+  - id: defi/protocols
+    title: Protocols, pools, and TVL
+  - id: defi/portfolio
+    title: Wallets and portfolios
+  # Chain reads: the widest adoption among x402 payers
   - id: blockchain
     title: Blockchain
   - id: blockchain/rpc
     title: Node RPC
+  - id: blockchain/indexed-data
+    title: Indexed data and queries
+  - id: blockchain/explorers
+    title: Transactions, balances, and explorers
+  - id: blockchain/nft
+    title: NFTs
+  - id: blockchain/names
+    title: Names and identity
+  - id: ai
+    title: AI
+  - id: ai/llm
+    title: Language models
+  - id: ai/image-generation
+    title: Image generation
+  - id: ai/speech
+    title: Speech and audio
+  - id: ai/embeddings
+    title: Embeddings
+  - id: ai/translation
+    title: Translation
+  # Search and web data: the largest x402 category by calls
+  - id: search
+    title: Search and web data
+  - id: search/web
+    title: Web search
+  - id: search/scraping
+    title: Crawling and scraping
+  - id: search/social
+    title: Social media
   - id: data
     title: Data
-  - id: data/companies
-    title: Company data
+  - id: data/people-companies
+    title: People and companies
+  - id: data/markets
+    title: Stocks and FX
   - id: data/geo
-    title: Geocoding
-  - id: finance
-    title: Finance
-  - id: finance/fx
-    title: Currency exchange
-  - id: finance/market-data
-    title: Market data
-  - id: search
-    title: Search
-  - id: weather
-    title: Weather
+    title: Maps and geocoding
 
 rateLimits:
   paymentKey: { requests: 600, windowSeconds: 60 }

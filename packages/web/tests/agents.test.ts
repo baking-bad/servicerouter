@@ -73,7 +73,7 @@ describe('the platform Agent Skills (AD-5, AD-7, WB-11)', () => {
 
     expect(seller).toContain('curl -s -X POST https://api.test/v1/accounts');
     expect(seller).toContain('servicerouter:\n  version: "1"');
-    expect(seller).toContain('curl -s -X PUT https://api.test/v1/services/my-weather');
+    expect(seller).toContain('curl -s -X PUT https://api.test/v1/services/my-prices');
     expect(seller).toContain('{config: $config, secrets: {"upstream-key": $key}}');
     expect(seller).toContain('/.well-known/servicerouter.json');
     expect(seller).toContain('earnings');
