@@ -4,7 +4,7 @@ import {
 } from '@servicerouter/common';
 import type { PlatformConfig } from '@servicerouter/core';
 import { createLedger, createPaymentRepository, type Postgres } from '@servicerouter/db';
-import { createAssetLookup, createFacilitatorLookup, type Facilitator } from '@servicerouter/payments';
+import { createAssetLookup, createFacilitatorLookup, type Facilitator, type MppSettlementCheck } from '@servicerouter/payments';
 
 import { createHoldExpiry, holdExpiryIntervalMs, holdExpiryLockId, holdTtlMs } from './holdExpiry.js';
 import { createScheduler, type Scheduler } from './scheduler.js';
@@ -22,6 +22,8 @@ export interface WorkersDependencies {
   readonly ids?: IdGenerator;
   // The enabled facilitators, for the settlement follow-up (WK-6). Default: none.
   readonly facilitators?: readonly Facilitator[];
+  // Reads MPP transactions' receipts on the Tempo RPC, for the settlement follow-up (WK-6). Default: none.
+  readonly mppCheck?: MppSettlementCheck;
 }
 
 export interface WorkersServer extends MetricsServer {
@@ -41,6 +43,7 @@ export const createApp = ({
   timers = systemTimers,
   ids = randomIdGenerator,
   facilitators = [],
+  mppCheck,
 }: WorkersDependencies): WorkersServer => {
   const server = createMetricsServer({
     logger,
@@ -55,6 +58,7 @@ export const createApp = ({
     ledger,
     facilitatorFor: facilitators.length > 0 ? createFacilitatorLookup(config, facilitators) : () => undefined,
     assetName: createAssetLookup(config),
+    ...(mppCheck ? { mppCheck } : {}),
     feeBps: config.feeBps,
     logger,
   });

@@ -3,12 +3,13 @@ import {
 } from '@servicerouter/common';
 import { loadPlatformConfig } from '@servicerouter/core';
 import { createPostgres } from '@servicerouter/db';
-import { checkFacilitators, createFacilitators } from '@servicerouter/payments';
+import { checkFacilitators, createFacilitators, createMppSettlementCheck, createTempoRpc, type MppSettlementCheck } from '@servicerouter/payments';
 
 import { createApp } from './app.js';
 
 export const defaultMetricsPort = 9082;
-// How long the facilitators get to answer /supported at startup, as for the proxy (PR-6)
+// How long the facilitators get to answer /supported at startup, as for the proxy (PR-6), and the Tempo
+// RPC its chain ID (PR-9)
 export const facilitatorStartupTimeoutMs = 10_000;
 
 /** Wires the production dependencies from platform config and the environment, then listens. */
@@ -28,9 +29,17 @@ export const startWorkers = async ({ env, logger }: AppContext): Promise<Running
   });
   // Every enabled facilitator answers /supported, or the workers don't start (PR-6)
   await checkFacilitators({ config, facilitators, timeoutMs: facilitatorStartupTimeoutMs });
+  // While MPP is on, the follow-up reads receipts on the Tempo RPC, which must answer with mpp.network's
+  // chain ID (PR-9, WK-6)
+  let mppCheck: MppSettlementCheck | undefined;
+  if (config.mpp.enabled) {
+    const rpc = createTempoRpc({ network: config.mpp.network, url: config.mpp.rpcUrl });
+    await rpc.check(facilitatorStartupTimeoutMs);
+    mppCheck = createMppSettlementCheck({ rpc, timeoutMs: config.timeouts.connectMs, clock: systemClock });
+  }
 
   const postgres = createPostgres({ url: databaseUrl, logger });
-  const server = createApp({ config, logger, postgres, facilitators });
+  const server = createApp({ config, logger, postgres, facilitators, ...(mppCheck ? { mppCheck } : {}) });
   try {
     await server.listen(listen);
   }
