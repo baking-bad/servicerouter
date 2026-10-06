@@ -82,10 +82,11 @@ categories:                     # CI-3
   - id: ai/image-generation
     title: Image generation
 
-rateLimits:                     # PX-13. Illustrations
+rateLimits:                     # PX-13, PA-5. Illustrations
   paymentKey: { requests: 600, windowSeconds: 60 }
   service: { requests: 6000, windowSeconds: 60 }
   unpaidIp: { requests: 60, windowSeconds: 60 }
+  signup: { requests: 10, windowSeconds: 3600 }   # POST /v1/accounts per client IP
 
 timeouts:                       # Optional. Defaults: OH-4, PR-12
   connectMs: 5000
