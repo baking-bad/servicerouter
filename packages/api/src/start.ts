@@ -5,6 +5,7 @@ import { loadPlatformConfig } from '@servicerouter/core';
 import { createPostgres, createRedis } from '@servicerouter/db';
 
 import { createApp } from './app.js';
+import { readDepositAddresses } from './deposits/key.js';
 import { readInternalSecret } from './internal/secret.js';
 import { readSecretsSealer } from './services/keys.js';
 
@@ -30,13 +31,15 @@ export const startApi = async ({ env, logger }: AppContext): Promise<RunningApp>
   // Missing or unusable, the app stops here with the reason (S2-D4)
   const sealer = readSecretsSealer(env);
   const internalSecret = readInternalSecret(env);
+  // DP-1: required while deposits are on
+  const depositAddresses = config.deposits ? readDepositAddresses(env, config.deposits) : undefined;
 
   const postgres = createPostgres({ url: databaseUrl, logger });
   const redis = createRedis({ url: redisUrl, logger });
   const closeConnections = async () => {
     await Promise.all([postgres.close(), redis.close()]);
   };
-  const server = createApp({ config, logger, postgres, redis, trustProxy, sealer, internalSecret });
+  const server = createApp({ config, logger, postgres, redis, trustProxy, sealer, internalSecret, ...(depositAddresses ? { depositAddresses } : {}) });
   try {
     await server.listen(listen);
   }

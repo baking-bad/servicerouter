@@ -8,7 +8,7 @@ import {
 } from '@servicerouter/common';
 import {
   createOwnershipFileFetcher, createOwnershipVerifier, cryptoRandomSource, openApiFetchLimits, ownershipFileLimits, type ApiKeyRepository,
-  type InvalidationBus, type OwnershipStatus, type PlatformConfig, type RandomSource, type SecretSealer,
+  type DepositAddressDeriver, type InvalidationBus, type OwnershipStatus, type PlatformConfig, type RandomSource, type SecretSealer,
 } from '@servicerouter/core';
 import {
   createApiKeyRepository, createOwnershipStatus, createOwnershipStore, createRedisInvalidationBus, createRedisRateLimiter, type Postgres,
@@ -18,7 +18,9 @@ import {
 import { createMasterKeyAuth, decorateAccount } from './accounts/auth.js';
 import { registerAccountRoutes } from './accounts/routes.js';
 import { createAccountService } from './accounts/service.js';
-import { createSignupLimit } from './accounts/signupLimit.js';
+import { createIpLimit, createSignupLimit } from './accounts/signupLimit.js';
+import { registerDepositRoutes } from './deposits/routes.js';
+import { createDepositService } from './deposits/service.js';
 import { errorStatuses } from './errors.js';
 import { registerInternalRoutes } from './internal/routes.js';
 import { registerKeyRoutes } from './keys/routes.js';
@@ -62,6 +64,8 @@ export interface ApiDependencies {
   readonly invalidation?: Pick<InvalidationBus, 'publish'>;
   // INTERNAL_API_SECRET, the shared secret of the internal API (PA-4). Without it, every internal call is refused.
   readonly internalSecret?: Secret;
+  // Derives deposit addresses from DEPOSIT_ACCOUNT_PUBLIC_KEY (DP-1). Without it, signup creates no deposit address.
+  readonly depositAddresses?: DepositAddressDeriver;
 }
 
 export interface ApiListenOptions extends ListenOptions {
@@ -111,6 +115,7 @@ export const createApp = ({
   ownershipFileUrl,
   invalidation = createRedisInvalidationBus({ redis, logger }),
   internalSecret,
+  depositAddresses,
 }: ApiDependencies): ApiServer => {
   const server = createServer({
     logger,
@@ -127,11 +132,15 @@ export const createApp = ({
   acceptEmptyJson(app);
 
   const authenticate = createMasterKeyAuth({ keyPrefixes: config.keyPrefixes, apiKeys });
+  const limiter = createRedisRateLimiter({ redis });
+  const deposits = createDepositService({ db: postgres.db, config, clock, ids, logger, deriver: depositAddresses, random });
   registerAccountRoutes(app, {
     accounts: createAccountService({ db: postgres.db, clock, ids, random, keyPrefixes: config.keyPrefixes }),
     authenticate,
-    signupLimit: createSignupLimit({ limiter: createRedisRateLimiter({ redis }), limit: config.rateLimits.signup }),
+    signupLimit: createSignupLimit({ limiter, limit: config.rateLimits.signup }),
+    deposits,
   });
+  registerDepositRoutes(app, { deposits, topupLimit: createIpLimit({ limiter, limit: config.rateLimits.topup, name: 'topup' }) });
 
   let http = openApiHttp;
   if (!http) {

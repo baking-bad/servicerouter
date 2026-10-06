@@ -27,15 +27,18 @@ export const clientOf = (ip: string): string => {
 };
 
 /**
- * The `onRequest` hook for `POST /v1/accounts`: a fixed window per client IP, under
- * `rl:api:signup:<ip>` (PA-5). Over the limit: `429 rate_limited` with `Retry-After`.
+ * An `onRequest` hook for an endpoint that needs no key: a fixed window per client IP, under
+ * `rl:api:<name>:<ip>` (PA-5). Over the limit: `429 rate_limited` with `Retry-After`.
  */
-export const createSignupLimit = ({ limiter, limit }: SignupLimitOptions) =>
+export const createIpLimit = ({ limiter, limit, name }: SignupLimitOptions & { readonly name: string }) =>
   async (request: FastifyRequest, reply: FastifyReply): Promise<void> => {
-    const { allowed, retryAfterSeconds } = await limiter.hit(`api:signup:${clientOf(request.ip)}`, limit);
+    const { allowed, retryAfterSeconds } = await limiter.hit(`api:${name}:${clientOf(request.ip)}`, limit);
     if (allowed)
       return;
 
     reply.header('retry-after', String(retryAfterSeconds));
     throw new RateLimitedError(retryAfterSeconds);
   };
+
+/** The `onRequest` hook for `POST /v1/accounts`, under `rl:api:signup:<ip>` (PA-5). */
+export const createSignupLimit = (options: SignupLimitOptions) => createIpLimit({ ...options, name: 'signup' });
