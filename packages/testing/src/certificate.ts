@@ -1,5 +1,7 @@
 import { generateKeyPairSync, randomBytes, sign } from 'node:crypto';
 
+import { Agent, getGlobalDispatcher, setGlobalDispatcher } from 'undici';
+
 import { parseIpAddress } from '@servicerouter/common';
 
 // Just enough DER to build a self-signed X.509 v3 certificate, so tests generate their TLS keys in the
@@ -82,5 +84,20 @@ export const createTestCertificate = ({ hosts }: TestCertificateOptions): TestCe
   return {
     cert: `-----BEGIN CERTIFICATE-----\n${base64}\n-----END CERTIFICATE-----\n`,
     key: privateKey.export({ type: 'pkcs8', format: 'pem' }).toString(),
+  };
+};
+
+/**
+ * Makes Node's `fetch` trust only this certificate, for code that fetches without a way to pass a CA,
+ * such as viem's HTTP transport. Returns the function that puts the previous dispatcher back.
+ */
+export const trustTestCertificate = (certificate: TestCertificate): (() => Promise<void>) => {
+  const previous = getGlobalDispatcher();
+  const agent = new Agent({ connect: { ca: certificate.cert } });
+  setGlobalDispatcher(agent);
+
+  return async () => {
+    setGlobalDispatcher(previous);
+    await agent.close();
   };
 };

@@ -1,4 +1,4 @@
-export { createTestCertificate } from './certificate.js';
+export { createTestCertificate, trustTestCertificate } from './certificate.js';
 export type { TestCertificate, TestCertificateOptions } from './certificate.js';
 export { createFakeClock } from './clock.js';
 export type { FakeClock } from './clock.js';
@@ -23,4 +23,8 @@ export { encodeBase58, startFakeSolanaRpc, tokenProgramAddress } from './solanaR
 export type { FakeSolanaRpc } from './solanaRpc.js';
 export { createTestCardanoWallet, startFakeBlockfrost } from './blockfrost.js';
 export type { BlockfrostRequest, FakeBlockfrost, FundedValue, TestCardanoWallet, TestCardanoWalletOptions } from './blockfrost.js';
+export {
+  createTestTempoPayer, moderatoChainId, pathUsdAddress, pushMppCredential, startFakeTempoRpc, tamperMppSignature,
+} from './tempoRpc.js';
+export type { FakeTempoRpc, FakeTempoRpcOptions, TempoBroadcast, TempoRpcCall, TempoSimulation, TestTempoPayer, TestTempoPayerOptions } from './tempoRpc.js';
 export { fixtureInstant, fixtureTime, fixtureDay, fixtureRun } from './dateFixtures.js';
