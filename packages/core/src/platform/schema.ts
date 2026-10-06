@@ -65,7 +65,10 @@ export const platformConfigSchema: SchemaObject = {
     mpp: object({ network: networkId, recipient: addressText }, ['network', 'recipient']),
     payouts: object({ assets: array(assetName, { minItems: 1, uniqueItems: true }), minimum: usdAmount }, ['assets']),
     categories: array(object({ id: categoryId, title: text(60) }, ['id', 'title']), { minItems: 1 }),
-    rateLimits: object({ paymentKey: rateLimit, service: rateLimit, unpaidIp: rateLimit }, ['paymentKey', 'service', 'unpaidIp']),
+    rateLimits: object(
+      { paymentKey: rateLimit, service: rateLimit, unpaidIp: rateLimit, signup: rateLimit },
+      ['paymentKey', 'service', 'unpaidIp', 'signup'],
+    ),
     timeouts: object({ connectMs: positive, requestMs: positive, settleMs: positive }),
     sizeLimits: object({ requestBodyBytes: positive, bufferedResponseBytes: positive }),
     signer: object({ maxPerCall: usdAmount, maxPerNetworkPerHour: usdAmount, maxPerNetworkPerDay: usdAmount }),

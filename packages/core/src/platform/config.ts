@@ -82,6 +82,8 @@ export interface PlatformConfig {
     readonly paymentKey: RateLimit;
     readonly service: RateLimit;
     readonly unpaidIp: RateLimit;
+    // POST /v1/accounts per client IP (PA-5)
+    readonly signup: RateLimit;
   };
   readonly timeouts: {
     readonly connectMs: number;

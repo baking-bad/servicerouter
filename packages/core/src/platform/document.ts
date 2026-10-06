@@ -65,6 +65,7 @@ export interface RateLimitsDocument {
   readonly paymentKey: RateLimitDocument;
   readonly service: RateLimitDocument;
   readonly unpaidIp: RateLimitDocument;
+  readonly signup: RateLimitDocument;
 }
 
 export interface TimeoutsDocument {

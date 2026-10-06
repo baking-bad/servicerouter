@@ -192,6 +192,7 @@ export const buildPlatformConfig = (document: PlatformConfigDocument, locator?: 
       paymentKey: { ...document.rateLimits.paymentKey },
       service: { ...document.rateLimits.service },
       unpaidIp: { ...document.rateLimits.unpaidIp },
+      signup: { ...document.rateLimits.signup },
     },
     timeouts: { ...timeouts, ...document.timeouts },
     sizeLimits: { ...sizeLimits, ...document.sizeLimits },
