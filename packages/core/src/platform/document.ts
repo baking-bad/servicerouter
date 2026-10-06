@@ -106,6 +106,8 @@ export interface SignerLimitsDocument {
   readonly maxPerCall?: string;
   readonly maxPerNetworkPerHour?: string;
   readonly maxPerNetworkPerDay?: string;
+  // The hot wallets' public addresses, for the balance monitor (TR-1, TR-3). Never their keys.
+  readonly wallets?: { readonly base?: string; readonly tempo?: string };
 }
 
 export interface SmtpDocument {

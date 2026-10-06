@@ -51,6 +51,17 @@ describe('the treasury (TR-1, TR-5)', () => {
       ['deposits', ['cardano-usdm']],
     ]));
     expect(wallets.find(wallet => wallet.role === 'deposits')?.addresses).toEqual(['addr_test1a', 'addr_test1b']);
+    expect(wallets.some(wallet => wallet.role === 'signer')).toBe(false);
+  });
+
+  it('lists the Signer\'s hot wallets from signer.wallets, each with its chain\'s assets: Base\'s, and mpp.network\'s for Tempo (TR-1, T27)', () => {
+    const address = '0x3333333333333333333333333333333333333333';
+    const config = { ...examplePlatform, signer: { ...examplePlatform.signer, wallets: { base: address, tempo: address } } };
+
+    expect(treasuryWallets(config).filter(wallet => wallet.role === 'signer').map(wallet => [wallet.name, wallet.addresses, wallet.assets.map(asset => asset.name)])).toEqual([
+      ['signer:base', [address], ['base-usdc']],
+      ['signer:tempo', [address], ['tempo-pathusd']],
+    ]);
   });
 
   it('compares the ledger\'s holdings with the chain\'s per asset, deposits included, and alerts above $1 of drift', () => {

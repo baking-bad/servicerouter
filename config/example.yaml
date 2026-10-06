@@ -118,6 +118,9 @@ sizeLimits:                     # Optional. Defaults: PX-8, AR3
 signer:                         # Optional. AR8
   maxPerCall: "1"
   maxPerNetworkPerDay: "100"
+  # wallets:                    # Optional. TR-3: the hot wallets' public addresses, for the balance monitor. Never their keys
+  #   base: "0x…"               # SIGNER_BASE_KEY's address
+  #   tempo: "0x…"              # SIGNER_TEMPO_KEY's address: the same as Base's when one key serves both
 
 smtp:                           # Optional until email ships (AR19)
   host: smtp.example.com

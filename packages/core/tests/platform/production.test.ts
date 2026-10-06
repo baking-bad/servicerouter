@@ -92,6 +92,12 @@ describe('config/production.yaml (PC-1, PC-5, P-1 to P-9)', () => {
     expect(config.deposits?.asset.name ?? config.deposits?.asset).toBe('cardano-usdm');
   });
 
+  it('offers USDM on Cardano from $0.001, lowered for the hackathon, so routed $0.001 calls take it (PR-3)', async () => {
+    const config = await loadText(filled(text));
+
+    expect(config.assets.map(asset => [asset.name, asset.minPrice])).toEqual([['base-usdc', 0n], ['cardano-usdm', 1_000n], ['tempo-usdce', 0n]]);
+  });
+
   it('reaches the Cardano facilitator by a host without an underscore, since its Tomcat answers 400 to one (PR-6)', async () => {
     const config = await loadText(filled(text));
     const cardano = config.facilitators.find(facilitator => facilitator.name === 'cardano');

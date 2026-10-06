@@ -119,6 +119,8 @@ export interface PlatformConfig {
     readonly maxPerCall: MicroUsd;
     readonly maxPerNetworkPerHour: MicroUsd | undefined;
     readonly maxPerNetworkPerDay: MicroUsd;
+    // The hot wallets' public addresses, by chain, for the balance monitor (TR-1, TR-3). Undefined: not watched.
+    readonly wallets: { readonly base: string | undefined; readonly tempo: string | undefined };
   };
   readonly smtp: SmtpRelay | undefined;
 }

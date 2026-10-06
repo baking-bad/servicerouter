@@ -4,9 +4,10 @@ import type { Asset, PlatformConfig } from '../platform/config.js';
 
 /** A platform wallet and the assets it holds (TR-1). */
 export interface TreasuryWallet {
-  // Such as `payTo:base-usdc`, `payout`, or `deposits`
+  // Such as `payTo:base-usdc`, `payout`, `deposits`, or `signer:tempo`
   readonly name: string;
-  readonly role: 'pay_to' | 'payout' | 'deposits';
+  // `signer`: a hot wallet that pays routed targets (SG-1). The balance monitor watches it; reconciliation doesn't count it.
+  readonly role: 'pay_to' | 'payout' | 'deposits' | 'signer';
   readonly addresses: readonly string[];
   readonly assets: readonly Asset[];
 }
@@ -18,8 +19,9 @@ export interface BalanceReader {
 
 /**
  * Every platform wallet (TR-1), from platform config: each asset's `payTo` (which is the MPP
- * recipient for Tempo assets), the payout wallet, and the deposit addresses. The Signer's hot wallets
- * join in step 12. Keys stay offline for receiving addresses (TR-2).
+ * recipient for Tempo assets), the payout wallet, the deposit addresses, and the Signer's hot wallets
+ * from `signer.wallets`, each with the registry's assets on its chain: Base's, and `mpp.network`'s for
+ * Tempo. Keys stay offline for receiving addresses (TR-2).
  */
 export const treasuryWallets = (config: PlatformConfig, extra: {
   readonly payoutAddress?: string;
@@ -33,6 +35,11 @@ export const treasuryWallets = (config: PlatformConfig, extra: {
     payTo.set(key, wallet);
   }
   const payoutAssets = config.assets.filter(asset => config.payouts.assets.includes(asset.name));
+  const { base, tempo } = config.signer.wallets;
+  const signerWallets = [
+    { chain: 'base', address: base, assets: config.assets.filter(asset => asset.network.chain === 'base') },
+    { chain: 'tempo', address: tempo, assets: config.assets.filter(asset => asset.network.id === config.mpp.network.id) },
+  ].filter(wallet => wallet.address !== undefined && wallet.assets.length > 0);
 
   return [
     ...[...payTo.values()].map(wallet => ({ name: `payTo:${wallet.assets.map(asset => asset.name).join('+')}`, role: 'pay_to' as const, ...wallet })),
@@ -40,6 +47,7 @@ export const treasuryWallets = (config: PlatformConfig, extra: {
     ...config.deposits && extra.depositAddresses && extra.depositAddresses.length > 0
       ? [{ name: 'deposits', role: 'deposits' as const, addresses: [...extra.depositAddresses], assets: [config.deposits.asset] }]
       : [],
+    ...signerWallets.map(wallet => ({ name: `signer:${wallet.chain}`, role: 'signer' as const, addresses: [wallet.address!], assets: wallet.assets })),
   ];
 };
 

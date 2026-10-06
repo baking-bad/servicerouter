@@ -37,7 +37,7 @@ assets:                         # PC-6. Addresses and decimals from the SDKs: @x
     address: c48cbb3d5e57ed56e276bc45f99ab39abe94e6cd7ac39fb402da47ad.0014df105553444d
     decimals: 6
     peg: usd
-    minPrice: "0.05"            # PR-3: Cardano's network fee makes smaller calls uneconomic
+    minPrice: "0.001"           # PR-3: offer USDM from $0.001; the buyer also pays the Cardano transaction fee
     payTo: "addr1q97yhwkk46wcdz24za643jeme4n9gu7m6v74vkqacy66v3cee07nknkut5k5xw4w7t5aj78a26aw0xw2cn2jcmj9mcxsugtysy"       # Our Cardano address that receives USDM
   - name: tempo-usdce           # P-3: USDC.e only. MPP only (PR-9)
     network: eip155:4217        # Tempo
@@ -155,7 +155,10 @@ timeouts:
   requestMs: 30000
   settleMs: 30000
 
-signer:                         # Payment routing's hot wallet (P-9). These cap a routing loss (RT-9)
+signer:                         # Payment routing's hot wallets (P-9). These cap a routing loss (RT-9)
   maxPerCall: "0.1"
   maxPerNetworkPerHour: "5"
   maxPerNetworkPerDay: "20"
+  # wallets:                    # Optional. TR-3: the hot wallets' public addresses, in quotes, for the balance monitor. Never their keys
+  #   base: "0x…"               # SIGNER_BASE_KEY's address
+  #   tempo: "0x…"              # SIGNER_TEMPO_KEY's address: the same as Base's when one key serves both
