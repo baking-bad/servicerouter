@@ -65,6 +65,8 @@ export interface StoredSecret extends StoredSecretInfo {
  */
 export interface ServingService {
   readonly serviceId: ServiceId;
+  // The seller: who earns from its paid calls (LG-7)
+  readonly ownerAccountId: string;
   readonly state: ServiceState;
   readonly revision: number;
   readonly config: ServiceConfigDocument;

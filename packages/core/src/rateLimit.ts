@@ -1,4 +1,4 @@
-import { ServiceRouterError } from '@servicerouter/common';
+import { parseIpAddress, ServiceRouterError, unmapIpv4 } from '@servicerouter/common';
 
 import type { RateLimit } from './platform/config.js';
 
@@ -23,3 +23,21 @@ export class RateLimitedError extends ServiceRouterError {
     this.retryAfterSeconds = retryAfterSeconds;
   }
 }
+
+/**
+ * The client a per-IP limit counts: an IPv4 address, or the /64 of an IPv6 address, since one
+ * subscriber usually holds a whole /64 (PA-5, PX-13).
+ */
+export const rateLimitClient = (ip: string): string => {
+  const parsed = parseIpAddress(ip);
+  if (!parsed)
+    return ip;
+
+  const address = unmapIpv4(parsed);
+  if (address.version === 4)
+    return address.bytes.join('.');
+
+  const words = Array.from({ length: 4 }, (_, index) => ((address.bytes[index * 2]! << 8) | address.bytes[index * 2 + 1]!).toString(16));
+
+  return `${words.join(':')}::/64`;
+};
