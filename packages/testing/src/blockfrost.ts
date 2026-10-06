@@ -38,11 +38,17 @@ export interface FakeBlockfrost {
   dropTransaction(txHash: string): void;
   /** Every transaction submitted to `/tx/submit`, by hash, with its CBOR in hex. */
   readonly submitted: ReadonlyMap<string, string>;
+  /** Each accepted submission's hash, in order, repeats included. */
+  readonly submissions: readonly string[];
   /**
    * What `/tx/submit` does next: `include` (the default) puts the transaction in the block at the tip,
-   * `hold` accepts it but never includes it, and `reject` answers 400, as for spent inputs.
+   * `hold` accepts it but never includes it, `reject` answers 400, as for spent inputs, `lose` answers
+   * 503 without taking it, and `include_then_fail` takes and includes it but answers 503, as when the
+   * answer times out after the node accepted it.
    */
-  onSubmit(mode: 'include' | 'hold' | 'reject'): void;
+  onSubmit(mode: SubmitMode): void;
+  /** Puts a held transaction in the block at the tip, as when it leaves the mempool. */
+  include(txHash: string): void;
   readonly tipHeight: number;
   close(): Promise<void>;
 }
@@ -80,6 +86,8 @@ interface Utxo {
   readonly reference_script_hash: null;
 }
 
+export type SubmitMode = 'include' | 'hold' | 'reject' | 'lose' | 'include_then_fail';
+
 interface ChainTransaction {
   readonly hash: string;
   readonly blockHeight: number;
@@ -107,7 +115,8 @@ export const startFakeBlockfrost = async (): Promise<FakeBlockfrost> => {
   const transactions = new Map<string, ChainTransaction>();
   let tipHeight = 1_000;
   const submitted = new Map<string, string>();
-  let submitMode: 'include' | 'hold' | 'reject' = 'include';
+  const submissions: string[] = [];
+  let submitMode: SubmitMode = 'include';
   const notFound = (response: ServerResponse) => send(response, 404, { status_code: 404, error: 'Not Found', message: 'The requested component has not been found.' });
 
   const server = createServer((request: IncomingMessage, response: ServerResponse) => {
@@ -124,12 +133,20 @@ export const startFakeBlockfrost = async (): Promise<FakeBlockfrost> => {
       request.on('end', () => {
         if (submitMode === 'reject')
           return send(response, 400, { status_code: 400, error: 'Bad Request', message: 'The transaction is invalid' });
+        if (submitMode === 'lose')
+          return send(response, 503, { status_code: 503, error: 'Service Unavailable', message: 'Try again' });
 
         const cbor = Buffer.concat(chunks).toString('hex');
         const hash = TransactionHash.toHex(TransactionBody.toHash(Transaction.fromCBORHex(cbor).body));
+        // On chain already: its inputs are spent, so the node refuses it again, as a real node does
+        if (transactions.has(hash))
+          return send(response, 400, { status_code: 400, error: 'Bad Request', message: 'BadInputsUTxO' });
         submitted.set(hash, cbor);
-        if (submitMode === 'include')
+        submissions.push(hash);
+        if (submitMode !== 'hold' && !transactions.has(hash))
           transactions.set(hash, { hash, blockHeight: tipHeight, outputs: [] });
+        if (submitMode === 'include_then_fail')
+          return send(response, 503, { status_code: 503, error: 'Service Unavailable', message: 'Try again' });
         send(response, 200, hash);
       });
       return;
@@ -237,8 +254,13 @@ export const startFakeBlockfrost = async (): Promise<FakeBlockfrost> => {
       transactions.delete(txHash);
     },
     submitted,
+    submissions,
     onSubmit: mode => {
       submitMode = mode;
+    },
+    include: txHash => {
+      if (!transactions.has(txHash))
+        transactions.set(txHash, { hash: txHash, blockHeight: tipHeight, outputs: [] });
     },
     get tipHeight() {
       return tipHeight;

@@ -22,7 +22,7 @@ export type { FacilitatorAnswer, FacilitatorPath, FacilitatorRequest, Facilitato
 export { encodeBase58, startFakeSolanaRpc, tokenProgramAddress } from './solanaRpc.js';
 export type { FakeSolanaRpc } from './solanaRpc.js';
 export { createTestCardanoWallet, startFakeBlockfrost } from './blockfrost.js';
-export type { BlockfrostRequest, FakeBlockfrost, FundedValue, TestCardanoWallet, TestCardanoWalletOptions } from './blockfrost.js';
+export type { BlockfrostRequest, FakeBlockfrost, FundedValue, SubmitMode, TestCardanoWallet, TestCardanoWalletOptions } from './blockfrost.js';
 export {
   createTestTempoPayer, moderatoChainId, pathUsdAddress, pushMppCredential, startFakeTempoRpc, tamperMppSignature,
 } from './tempoRpc.js';
