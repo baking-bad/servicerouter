@@ -16,6 +16,8 @@ export const services = pgTable('services', {
   state: text('state').$type<ServiceState>().notNull(),
   // Set in the transaction that creates the service, after its first revision
   activeRevision: integer('active_revision'),
+  // The active revision's upstream hosts, so Ownership verification finds the services using a host (OV-5)
+  hosts: text('hosts').array().notNull().default(sql`'{}'`),
   createdAt: timestamp('created_at', { withTimezone: true, precision: 3 }).notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true, precision: 3 }).notNull(),
 }, table => [

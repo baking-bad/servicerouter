@@ -27,3 +27,5 @@ export { createKeyStore, createPaymentKeyRepository } from './paymentKeyReposito
 export type { PaymentKeyRepositoryOptions } from './paymentKeyRepository.js';
 export { createLedger, ledgerAccountIds } from './ledgerRepository.js';
 export type { CreditResult, Ledger, LedgerOptions } from './ledgerRepository.js';
+export { createOwnershipStatus, createOwnershipStore, createPayoutConfirmationRepository } from './ownershipRepository.js';
+export type { OwnershipRepositoryOptions, OwnershipStoreOptions, PayoutConfirmationRepository } from './ownershipRepository.js';

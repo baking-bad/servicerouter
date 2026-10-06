@@ -1,4 +1,4 @@
-import { and, desc, eq, max } from 'drizzle-orm';
+import { and, arrayContains, asc, desc, eq, max } from 'drizzle-orm';
 
 import type { ServiceId } from '@servicerouter/common';
 import type { ServiceRecord, ServiceRepository, ServiceRevision } from '@servicerouter/core';
@@ -17,6 +17,7 @@ const toRecord = (row: typeof services.$inferSelect): ServiceRecord => ({
   ownerAccountId: row.ownerAccountId,
   state: row.state,
   activeRevision: row.activeRevision ?? undefined,
+  hosts: row.hosts,
   createdAt: row.createdAt,
   updatedAt: row.updatedAt,
 });
@@ -63,9 +64,17 @@ export const createServiceRepository = ({ db }: ServiceRepositoryOptions): Servi
 
       return created.length > 0;
     },
-    activate: async ({ id, revision, state, updatedAt }) => {
-      await db.update(services).set({ activeRevision: revision, state, updatedAt }).where(eq(services.id, id));
+    activate: async ({ id, revision, hosts, state, updatedAt }) => {
+      await db.update(services).set({ activeRevision: revision, hosts: [...hosts], state, updatedAt }).where(eq(services.id, id));
     },
+    setState: async ({ id, state, updatedAt }) => {
+      await db.update(services).set({ state, updatedAt }).where(eq(services.id, id));
+    },
+    // In ID order, so two checks lock the same services in the same order
+    lockUsingHost: async (accountId, host) => (await db.select().from(services)
+      .where(and(eq(services.ownerAccountId, accountId), arrayContains(services.hosts, [host])))
+      .orderBy(asc(services.id))
+      .for('update')).map(toRecord),
     insertRevision: async revision => {
       await db.insert(serviceRevisions).values({
         serviceId: revision.serviceId,

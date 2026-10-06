@@ -4,3 +4,4 @@ export * from './accounts.js';
 export * from './services.js';
 export * from './secrets.js';
 export * from './ledger.js';
+export * from './ownership.js';
