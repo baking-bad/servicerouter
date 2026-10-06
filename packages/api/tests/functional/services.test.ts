@@ -11,21 +11,17 @@ import {
   auditLog, createRedisInvalidationBus, createServiceRepository, serviceRevisions, services, serviceSecrets, type RedisInvalidationBus,
 } from '@servicerouter/db';
 import {
-  createFakeResolver, createTestDatabase, createTestRedis, createTestSecretKeys, nownodesCategory, nownodesHosts, nownodesSecretNames,
+  createFakeResolver, createTestDatabase, createTestRedis, createTestSecretKeys, nownodesHosts, nownodesSecretNames,
   nownodesServiceConfig, startFakeUpstream, type FakeUpstream, type TestDatabase, type TestRedis, type TestSecretKeys,
 } from '@servicerouter/testing';
 
 import { createApp } from '../../src/app.js';
 
-// The example platform config, plus the NOWNodes fixture's category, and room for every signup here
-const categories = [
-  { id: 'weather', title: 'Weather' }, { id: 'finance', title: 'Finance' }, { id: 'finance/market-data', title: 'Market data' },
-  { id: 'ai/image-generation', title: 'Image generation' }, nownodesCategory,
-];
+// The example platform config, which lists the NOWNodes fixture's category, with room for every signup here
 const loadConfig = () => loadPlatformConfig({
   env: {
     CONFIG_PATH: 'config/example.yaml',
-    CONFIG: Buffer.from(JSON.stringify({ categories, rateLimits: { signup: { requests: 1000, windowSeconds: 60 } } })).toString('base64'),
+    CONFIG: Buffer.from(JSON.stringify({ rateLimits: { signup: { requests: 1000, windowSeconds: 60 } } })).toString('base64'),
   },
 });
 
@@ -969,4 +965,6 @@ describe('the multi-chain service fixture', () => {
       'ethRpc', 'baseRpc', 'solRpc', 'btcAddress', 'btcTx', 'btcBlock', 'btcUtxo', 'btcEstimateFee',
     ]);
   });
+
+
 });

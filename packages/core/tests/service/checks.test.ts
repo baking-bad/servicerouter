@@ -29,7 +29,7 @@ describe('checkServiceConfig (SR-2, pass 2)', () => {
       ok: false,
       errors: [{
         path: '/service/category',
-        message: 'is not a platform category. Categories: "weather", "finance", "finance/market-data", "ai/image-generation"',
+        message: 'is not a platform category. Categories: "weather", "finance", "finance/market-data", "ai/image-generation", "blockchain"',
         line: 10,
         column: 13,
       }],
