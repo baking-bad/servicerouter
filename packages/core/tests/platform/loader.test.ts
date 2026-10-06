@@ -36,11 +36,48 @@ const rejection = async (promise: Promise<unknown>): Promise<unknown> => {
 };
 
 describe('loadPlatformConfig', () => {
-  it('loads the example config from CONFIG_PATH', async () => {
+  it('loads the example config from CONFIG_PATH (PC-1)', async () => {
     const config = await loadPlatformConfig({ env: { CONFIG_PATH: examplePlatformConfigPath.pathname } });
 
     expect(config.environment).toBe('staging');
     expect(config.keyPrefixes).toEqual({ master: 'srm_test_', payment: 'sr_test_' });
+  });
+
+  it('loads every field group PC-2 lists from the example config (PC-2)', async () => {
+    const document = await loadPlatformConfigDocument({ env: { CONFIG_PATH: examplePlatformConfigPath.pathname } });
+    const config = await loadPlatformConfig({ env: { CONFIG_PATH: examplePlatformConfigPath.pathname } });
+
+    // Set in the file, not filled in from defaults
+    expect(Object.keys(document)).toEqual(expect.arrayContaining([
+      'urls', 'ownHosts', 'assets', 'facilitators', 'mpp', 'feeBps', 'routingFeeBps', 'payouts', 'categories',
+      'rateLimits', 'timeouts', 'signer', 'keyPrefixes', 'paymentKeyDefaults', 'smtp',
+    ]));
+    expect(document.payouts.minimum).toBeDefined();
+    // Canonical public URLs and the hosts we own
+    expect(config.urls).toEqual({ website: expect.any(String), api: expect.any(String), pay: expect.any(String) });
+    expect(config.ownHosts).toEqual(expect.arrayContaining(Object.values(config.urls).map(url => new URL(url).hostname)));
+    // The asset registry, with payTo per network
+    expect(config.assets.length).toBeGreaterThan(0);
+    expect(config.assets.every(asset => asset.payTo.length > 0)).toBe(true);
+    // The facilitator registry: name, URL, networks, auth reference
+    expect(config.facilitators.length).toBeGreaterThan(0);
+    expect(config.facilitators.every(facilitator => facilitator.name && facilitator.url && facilitator.networks.length > 0)).toBe(true);
+    expect(config.facilitators.some(facilitator => facilitator.auth !== undefined)).toBe(true);
+    // The MPP recipient on Tempo
+    expect(config.mpp.network.chain).toBe('tempo');
+    expect(config.mpp.recipient).toMatch(/^0x[0-9a-fA-F]{40}$/);
+    expect(config.feeBps).toEqual(expect.any(Number));
+    expect(config.routingFeeBps).toEqual(expect.any(Number));
+    expect(config.payouts.minimum).toBe(10_000_000n);
+    expect(config.categories.length).toBeGreaterThan(0);
+    expect(Object.keys(config.rateLimits)).toEqual(['paymentKey', 'service', 'unpaidIp']);
+    expect(Object.keys(config.timeouts)).toEqual(['connectMs', 'requestMs', 'settleMs']);
+    expect(config.signer.maxPerCall).toBe(1_000_000n);
+    // Key prefixes and the default limits for new payment keys
+    expect(config.keyPrefixes).toEqual({ master: 'srm_test_', payment: 'sr_test_' });
+    expect(config.paymentKeyDefaults.dailyBudget).toBe(5_000_000n);
+    // The SMTP relay, with credentials by name
+    expect(config.smtp).toEqual({ host: 'smtp.example.com', port: 587, from: expect.any(String), username: 'SMTP_USERNAME', password: 'SMTP_PASSWORD' });
   });
 
   it('merges files left to right, then CONFIG; lists replace and objects merge', async () => {
@@ -81,11 +118,11 @@ describe('loadPlatformConfig', () => {
     ['base64 with whitespace', { CONFIG: 'e30=\n' }],
     ['a missing file', { CONFIG_PATH: 'missing.yaml' }],
     ['a directory', { CONFIG_PATH: '.' }],
-  ])('rejects %s', async (_name, env) => {
+  ])('rejects %s, so the app doesn\'t start (PC-1)', async (_name, env) => {
     expect(await rejection(load(env))).toBeInstanceOf(ConfigLoadError);
   });
 
-  it('rejects oversized files before reading them', async () => {
+  it('rejects oversized files before reading them (PC-1)', async () => {
     await writeFile(path.join(directory, 'large.yaml'), 'x'.repeat(1024 * 1024 + 1));
     const error = await rejection(load({ CONFIG_PATH: 'large.yaml' }));
 
@@ -93,7 +130,7 @@ describe('loadPlatformConfig', () => {
     expect((error as ConfigLoadError).cause).toMatchObject({ message: 'the file exceeds the 1048576-byte size limit' });
   });
 
-  it('reports syntax errors with the file, line, and column', async () => {
+  it('reports syntax errors with the file, line, and column (PC-1)', async () => {
     await writeFile(path.join(directory, 'broken.yaml'), 'feeBps: 1\nfeeBps: 2\n');
     const error = await rejection(load({ CONFIG_PATH: 'base.yaml,broken.yaml' }));
 
@@ -101,14 +138,14 @@ describe('loadPlatformConfig', () => {
     expect(error).toMatchObject({ source: 'broken.yaml', line: 2, column: 1, reason: 'duplicate key' });
   });
 
-  it('rejects invalid UTF-8 and invalid inline YAML', async () => {
+  it('rejects invalid UTF-8 and invalid inline YAML (PC-1)', async () => {
     await writeFile(path.join(directory, 'binary.yaml'), Buffer.from([0xff, 0xfe]));
 
     expect(await rejection(load({ CONFIG_PATH: 'binary.yaml' }))).toMatchObject({ reason: 'it is not valid UTF-8' });
     expect(await rejection(load({ CONFIG: base64([1, 2]) }))).toMatchObject({ source: 'CONFIG', reason: 'the root must be a mapping' });
   });
 
-  it('attributes schema errors to the file that set the value', async () => {
+  it('attributes schema errors to the file that set the value (PC-1)', async () => {
     await writeFile(path.join(directory, 'bad-fee.yaml'), '# Overrides\nfeeBps: lots\n');
     const error = await rejection(load({ CONFIG_PATH: 'base.yaml,bad-fee.yaml' }));
 
@@ -118,7 +155,7 @@ describe('loadPlatformConfig', () => {
     ]);
   });
 
-  it('reports every cross-field problem at once, with positions', async () => {
+  it('reports every cross-field problem at once, with positions (PC-1, PC-5, PC-7)', async () => {
     const broken = example
       .replace('master: srm_test_', 'master: sr_test_')
       .replace('network: eip155:42431', 'network: eip155:4217');
