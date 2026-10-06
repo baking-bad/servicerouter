@@ -26,8 +26,11 @@ Runs every background job.
 ## Requirements
 
 - **WK-1** One runner per job across replicas, through a Postgres advisory lock per job.
+  - A session lock on a connection of its own (`Postgres.tryAdvisoryLock`). A run that finds it taken skips. A crashed holder's session ends, and the lock with it.
 - **WK-2** Every job is idempotent and safe to rerun after a crash.
 - **WK-3** Jobs read time from the `Clock` port. Tests drive them with a fake clock.
 - **WK-4** Each job exports its last success time and duration. An alert fires when a job is stale.
+  - `workers_job_last_success_timestamp_seconds{job}`, `workers_job_duration_seconds{job}`, and `workers_job_runs_total{job,result}` (`success`, `failure`, `skipped`). A failed run leaves the last success where it was.
+  - A job runs one interval after the app starts, then one interval after each run ends, so its runs never overlap.
 - **WK-5** Only the jobs that sign transactions load signing keys.
 - **WK-6** Settlement follow-up: for each `settling` payment, repeat the identical `settle` call ([PR-12](payment-rails.md)). Settled → book the earnings, and flag the payment for review if the buyer got no response. Definitively failed or expired → mark it `failed`. Nothing is booked.

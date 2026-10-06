@@ -91,7 +91,7 @@ credentials:                            # How the platform authenticates to upst
     secret: files-app-id
 ```
 
-**Price merge order:** `payments.default`, then the route's `payment` (named or inline). Each layer overrides only the fields it sets. Objects merge by key. Values and lists replace.
+**Price merge order:** `payments.default`, then the route's `payment` (named or inline). Each layer overrides only the fields it sets. Objects merge by key. Values and lists replace. An amount of `"0"` makes the route free: the proxy forwards it without a payment.
 
 **Path templates:** a path segment holds at most one `{parameter}`, alone or with literal text around it, such as `/files/{id}.json` or `/jobs/{job}:cancel`. Two parameters in one segment, or a parameter name used twice, fail at compile (SR-2, pass 3).
 

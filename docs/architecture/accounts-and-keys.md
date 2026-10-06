@@ -56,9 +56,11 @@ The person keeps the master key. Each agent that spends gets only a payment key 
   - The limits are columns on `api_keys`: `allowance`, `daily_budget`, `max_price` in micro-USD, and `expires_at`. A `CHECK` gives every payment key a daily budget and keeps master keys without limits.
 - **AK-7** An allowance is a cap, not money moved to the key. The credits stay in the account balance. A call goes through only when the balance covers it and every limit of the key allows it. The Ledger checks both in one hold ([LG-6](ledger.md)). Revoking a key leaves nothing to return.
 - **AK-8** `GET pay.servicerouter.ai/_/key` with a payment key returns the key's limits and what's left: of the allowance, of today's budget, and of the balance. An agent can check before it calls.
+  - The body is `GET /v1/keys`'s fields without `revokedAt`: `{ id, label, allowance, dailyBudget, maxPrice, expiresAt, createdAt, spent: { today, total }, remaining: { allowance, dailyBudget, balance } }`, with `Cache-Control: no-store`. It counts against the key's rate limit.
 - **AK-9** The proxy and the Platform API cache key lookups briefly. Creating, revoking, or changing a key, and rotating the master key, publish an invalidation event. The change applies at once, not at the end of the cache TTL.
   - The Platform API doesn't cache master keys: every request looks up the hash, so a rotation applies at once without an event. The proxy's payment-key cache (step 4) needs the event.
   - Creating, changing, or revoking a payment key publishes `{ kind: 'key', id }` after the commit. Publishing is best effort, with a 2 s timeout: a failure is logged, and the cache TTL still applies.
+  - The proxy caches payment keys by hash for 60 s, and unknown hashes for 10 s. A key event drops the key, and a lookup running at that moment isn't kept. A reconnect of the subscription drops every key.
 - **AK-10** Email is optional. An email at signup, or `PUT /v1/account/email`, sends a confirmation link. The email serves recovery and notices only once it's confirmed. A change sends a notice to the old confirmed address.
 - **AK-11** Recovery: `POST /v1/account/recover` with `{ "email": "…" }` sends a recovery link to a confirmed email.
   - The response is the same whether or not the email belongs to an account.

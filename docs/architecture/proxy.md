@@ -51,16 +51,26 @@ Serves `pay.servicerouter.ai`: registered services, routed calls, and platform p
 - **PX-9** Add `Content-Security-Policy: sandbox` and `X-Content-Type-Options: nosniff` to every proxied response. Seller and target responses share the `pay.servicerouter.ai` origin with the link checker. A seller's HTML must not run as that origin.
 - **PX-10** Build the x402 `resource` and every self-link from the canonical URL in platform config. Never from the request's `Host` header.
 - **PX-11** Billable means `2xx`, until the config adds `chargeOn`. Record the decision on the payment row before finalizing ([rule 5](README.md#2-architecture-rules)).
+  - An operation priced at `"0"` is free: no payment step, and any credential on it is dropped (PX-5).
+  - A failed decision write is logged, and finalizing goes on. Without a recorded decision, the hold expiry worker releases, so a buyer is never charged by mistake. The opaque `503` records `not_billable` and releases before answering.
 - **PX-12** Credits and MPP responses stream. x402 responses are buffered until the settlement is confirmed or broadcast ([PR-12](payment-rails.md)), so no upstream bytes reach an unpaid client. Above the buffer limit ([AR3](README.md#8-open-questions)), cancel and return `502 response_too_large`. The buyer isn't charged.
 - **PX-13** Rate limits in Redis: per payment key, per service, and per IP for unpaid requests that only get a `402`. Over a limit → `429` with `Retry-After`. Limits are keyed by service ID, not by hostname.
+  - Fixed windows under `rl:proxy:paymentKey:<key hash>`, `rl:proxy:service:<id>`, and `rl:proxy:unpaidIp:<client>`, from `rateLimits` in platform config. The key limit counts before any lookup. The service limit counts paid attempts only, so unpaid floods can't use it up. An IPv6 client counts by its /64.
+  - While Redis fails, a limit lets the request through, logged and counted. The Ledger still guards the money.
+  - Behind Traefik, `TRUST_PROXY` must name it, or every client counts as Traefik's address.
 - **PX-14** While a buyer waits, the proxy calls only Postgres, Redis, facilitators, the Signer, and upstreams or targets ([rule 1](README.md#2-architecture-rules)).
 - **PX-15** The buyer header, `Servicerouter-Buyer`, tells the upstream which buyer is calling without exposing who it is. Its value is an HMAC-SHA256, under a platform key, of the buyer and the service ID, in base64url. The buyer is the credits account, or the payer address for x402 and MPP. The value is stable per buyer and service, and differs across services.
+  - The input is `<buyer>\n<service ID>`, with the buyer as `account:<id>` for credits. The key is `BUYER_HEADER_KEY`, at least 32 characters, the same on every replica. Rotating it gives every buyer a new value.
 - **PX-16** CORS: expose `PAYMENT-REQUIRED`, `PAYMENT-RESPONSE`, `WWW-Authenticate`, `Payment-Receipt`, the credits receipt header, and `x-request-id`. Allow the `Authorization`, `PAYMENT-SIGNATURE`, `X-PAYMENT`, and `Content-Type` request headers.
 - **PX-17** `/_/health` for liveness. `/_/ready` checks Postgres, Redis, and every facilitator's `/supported`. Metrics on an internal port.
-- **PX-18** Shutdown: stop accepting, drain in-flight requests, finish or release their holds, close pools.
+- **PX-18** Shutdown: stop accepting, drain in-flight requests, finish or release their holds, close pools. A credits payment is finished when its response closes, and shutdown waits for every finish in flight.
 - **PX-19** Credits overhead stays under 50 ms p95.
+  - Checked by `npm run loadtest` at 300 paid requests per second per replica ([AR20](README.md#8-open-questions)), sent at a fixed rate, against the free path at the same rate. It also reports each path's capacity, without a pass or fail: past it, latency is queueing.
+  - Step 4 measured 4.5 to 27 ms. One replica handled about 700 paid calls per second on a laptop, bound by its own CPU, mostly building SQL. Hand-written SQL for the hot statements, or LG-11, would raise it.
 
 ## Error codes
+
+Every `401` carries `WWW-Authenticate: Bearer`, and every `402` carries `Cache-Control: no-store`.
 
 | Status | Code | When |
 |---|---|---|
@@ -69,6 +79,7 @@ Serves `pay.servicerouter.ai`: registered services, routed calls, and platform p
 | `400` | `multiple_payment_methods` | Two or more payment credentials. |
 | `400` | `not_payable` | Routing: the target didn't answer `402`. |
 | `400` | `host_not_allowed` | Routing: our host, a blocklisted host, or an opted-out host. |
+| `401` | `unauthorized` | `GET /_/key` without a payment key. |
 | `401` | `invalid_key` | Unknown, revoked, or expired payment key. |
 | `401` | `wrong_key_type` | A master key. Paid calls take a payment key ([AK-4](accounts-and-keys.md)). |
 | `402` | none | No credential. The combined challenge. |

@@ -38,7 +38,7 @@ Ledger account IDs are readable: `<account ID>:available`, `<account ID>:held`, 
 - **LG-1** Amounts are integer micro-USD as `bigint` ([CK-4](common-kit.md)).
 - **LG-2** Double-entry: every movement is one ledger transaction whose entries sum to zero, written in one database transaction. A balances table is updated in the same transaction, with `CHECK` constraints so balances never go negative.
   - The one exception is deposits clearing: money enters through it, so its balance is minus everything deposited (`balances.may_go_negative`).
-  - Balances are updated in ledger account ID order, then the key's daily spend, then its total spend, so concurrent operations lock rows in one order.
+  - One lock order everywhere, so concurrent operations never deadlock: the members' balances by ledger account ID, then the entries, then the platform's balances, then the key's daily spend, then its total spend. The payment row is written and its status changed before the balances. The platform's fee row, which every capture shares, is held only until the commit.
 - **LG-3** Idempotency: each operation is keyed by its payment or job ID, with a unique constraint. A retry never moves money twice.
   - The key is `(operation, reference)` on `ledger_transactions`. Hold, capture, and release use the payment ID. A repeated hold returns the first one, and a repeated capture or release moves nothing.
   - An admin credit uses the operator's `reference`. The same reference, account, and amount again moves nothing and answers with the first credit. The same reference with another account or amount is `409 idempotency_conflict`.
@@ -51,6 +51,8 @@ Ledger account IDs are readable: `<account ID>:available`, `<account ID>:held`, 
 - **LG-7** A `payments` row has: request ID, kind (`service` or `routed`), buyer if known, service and route or target host and path, rail, network, asset, USD and atomic amounts, fee, billing decision, status, external references (transaction hash, receipt), upstream latency, a review flag, and timestamps.
 - **LG-8** Statuses: `held`, `verified`, `captured`, `settling`, `settled`, `released`, `cancelled`, `failed`. The repository allows only valid changes. The `payments` table is the source of truth for seller earnings on every rail.
 - **LG-9** Hold expiry: a worker finishes holds older than a TTL, which is longer than the proxy's total timeout. It follows the recorded decision: capture if billable, release otherwise or when there is no decision.
+  - The TTL is the larger of 5 minutes and twice the proxy's total timeout. Its capture takes `feeBps` from platform config at that moment.
+  - It pages oldest first. A run that couldn't finish a hold fails after trying all of them, so the job goes stale and its alert fires.
 - **LG-10** Earnings view, per service and per seller: calls, USD earned by rail, fee, paid out, pending, and the next payout date. Served at `GET /v1/services/{id}/earnings`.
   - Built so far: the per-service view, for the service's owner. Earnings count captured and settled payments. Pending is earned minus paid out, and the next payout date is the 1st of next month, UTC. The per-seller view isn't served yet.
 - **LG-11** Holds and captures go to Postgres: two writes per call. Move holds to Redis, with an asynchronous ledger, only if the step 4 load test misses 50 ms p95.

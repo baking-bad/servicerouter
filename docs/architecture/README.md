@@ -385,7 +385,7 @@ The implementing agent uses these defaults until the product owner answers. Keep
 | # | Question | Default |
 |---|---|---|
 | AR1 | Where are generated agent docs served? | `api.servicerouter.ai/v1/services/{id}/openapi.json`, `…/llms.txt`, `…/skill.md`. The service page links to them. |
-| AR2 | Which header carries the credits receipt? | `Servicerouter-Receipt`, with the payment ID and the USD amount. |
+| AR2 | Which header carries the credits receipt? | `Servicerouter-Receipt`, with the payment ID and the USD amount, as a structured-field dictionary: `id="pay_…", amount="0.001", currency="USD"`. |
 | AR3 | What is the x402 response buffer limit? | 10 MiB. Above it, `502 response_too_large`, uncharged. |
 | AR4 | What daily budget does a new payment key get? | $5 a day. No allowance, maximum price, or expiry unless the owner sets them. |
 | AR5 | When does a daily budget reset? | Midnight UTC. |
@@ -403,3 +403,4 @@ The implementing agent uses these defaults until the product owner answers. Keep
 | AR17 | A path with an ID, such as `/v1/tx/<hash>`, registers a new endpoint per ID. Do we cap them? | Up to 1,000 routed endpoints per host. Beyond that, log and don't register. |
 | AR18 | When is Cardano enabled on mainnet? | After the readiness checks in [CF-8](cardano-facilitator.md) pass, with the product owner's approval. |
 | AR19 | How do we send email? | skip it |
+| AR20 | At what load is PX-19's 50 ms checked? | **Answered (product owner, MVP):** 300 paid requests per second per proxy replica, sent at a fixed rate. One replica handled about 700 paid calls per second on a laptop in step 4. Past a replica's capacity, add replicas. |

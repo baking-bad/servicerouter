@@ -19,7 +19,7 @@ Credits, x402, and MPP behind one interface. Used for registered services and fo
 interface PaymentRail {
   readonly name: RailName;
   detect(headers: RequestHeaders): Credential | undefined;
-  challenge(quote: Quote): ChallengePart | undefined;
+  challenge(quote: Quote): ChallengePart | undefined;   // Headers and JSON body fields for the 402
   authorize(credential: Credential, quote: Quote): Promise<Authorization>;
   finalize(authorization: Authorization): Promise<Receipt>;
   abort(authorization: Authorization): Promise<void>;
@@ -27,12 +27,26 @@ interface PaymentRail {
 
 interface Quote {
   readonly paymentId: string;
+  readonly requestId: string | undefined;
   readonly resource: string;           // Canonical pay URL (PX-10)
   readonly priceMicroUsd: bigint;
   readonly description: string;
+  readonly subject: PaymentSubject;    // A service with its seller and route, or a routed target (LG-7)
+  readonly feeBps: number;             // Taken at capture or settlement (LG-4)
   readonly discovery?: BazaarMetadata; // Registered services only (AD-3)
 }
+
+interface Authorization {
+  readonly rail: RailName;
+  readonly paymentId: string;
+  readonly amount: bigint;
+  readonly feeBps: number;
+  readonly buyer: string;              // For the buyer header (PX-15): `account:<id>`, or the payer
+  readonly receipt: Receipt | undefined; // Known before finalizing: credits, whose responses stream
+}
 ```
+
+Detection runs a detector for every kind of credential, served or not, so two of any kind get `400`. A credits credential carries only the key's hash. A rail that isn't served yet gets the combined `402`.
 
 ## Requirements
 
@@ -45,10 +59,13 @@ interface Quote {
 | `PAYMENT-SIGNATURE` (x402 v2), and `X-PAYMENT` (v1) if the SDK accepts it | x402 |
 
   None → the combined `402`. Two or more → `400 multiple_payment_methods`. A master key → `401 wrong_key_type` ([AK-4](accounts-and-keys.md)).
+  - Any `Authorization: Bearer` counts as a credits credential. One that isn't a well-formed payment key gets `401 invalid_key`.
+  - `PAYMENT-SIGNATURE` and `X-PAYMENT` together are one x402 credential.
 - **PR-2** The combined `402` is one response, assembled from each rail's `challenge()`:
   - `PAYMENT-REQUIRED` (x402): one `accepts` entry per enabled asset. At launch: USDC on Base, USDC on Solana, USDM on Cardano, all scheme `exact`. Amounts are converted from USD with the asset registry ([PC-6](platform-config.md)).
   - `WWW-Authenticate: Payment` (MPP): the Tempo charge.
   - A JSON body: the x402 body, plus a `credits` object with the USD price, the signup endpoint (`POST https://api.servicerouter.ai/v1/accounts`), and the onboarding guide (`https://servicerouter.ai/llms.txt`).
+    - `credits` is `{ price, currency: "USD", authorization: "Bearer <payment key>", signup: { method, url }, guide }`, with the URLs from platform config.
   - `Cache-Control: no-store`.
 
   The agent retries with exactly one of them.
