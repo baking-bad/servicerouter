@@ -70,12 +70,12 @@ export const createPayoutsJob = ({ repository, wallet, blockfrost, clock, ids, l
     const validUntil = new Date(clock.now().getTime() + payoutValidityMs);
     const withIds = planned.map((payout, index) => ({ ...payout, id: `po_${ids.next()}`, quantity: quantities[index]! }));
     const batches = batchPayouts(withIds);
-    const transactions = [];
+    let transactions: { index: number; txHash: string; cbor: string; validUntil: Date }[];
     try {
-      for (const [index, batch] of batches.entries()) {
-        const built = await wallet.build({ outputs: batch.map(payout => ({ address: payout.address, quantity: payout.quantity })), validUntil });
-        transactions.push({ index, txHash: built.txHash, cbor: built.cbor, validUntil });
-      }
+      const built = await wallet.buildRun({
+        batches: batches.map(batch => batch.map(payout => ({ address: payout.address, quantity: payout.quantity }))), validUntil,
+      });
+      transactions = built.map((transaction, index) => ({ index, txHash: transaction.txHash, cbor: transaction.cbor, validUntil }));
     }
     catch (error) {
       if (!(error instanceof PayoutBuildError))
@@ -101,34 +101,44 @@ export const createPayoutsJob = ({ repository, wallet, blockfrost, clock, ids, l
     return id;
   };
 
+  /**
+   * Sends a signed transaction. Whatever the answer, the transaction may be on its way: a timeout can
+   * follow an accepted submission, and a refusal can mean an earlier copy already went through. So no
+   * answer fails it here. `follow` decides from the chain alone (PO-7).
+   */
+  const send = async (runId: string, transaction: { readonly txHash: string; readonly cbor: string }): Promise<void> => {
+    try {
+      await blockfrost.submitTransaction(transaction.cbor);
+    }
+    catch (error) {
+      if (error instanceof TransactionRejectedError)
+        logger.warn({ runId, txHash: transaction.txHash }, 'The chain refused a payout transaction: it is followed until its window ends');
+      else
+        logger.warn({ runId, txHash: transaction.txHash, error }, 'A payout transaction\'s submission failed: it is sent again');
+    }
+  };
+
   const submit = async (runId: string): Promise<{ submitted: number; failed: number }> => {
     let submitted = 0;
-    let failed = 0;
     const now = clock.now();
+    // In order: a later transaction of the run spends what an earlier one left (PO-3)
     for (const transaction of (await repository.transactions(runId)).filter(item => item.status === 'built')) {
       // Past its window, the chain would refuse it: the run is built again and approved again
       if (now >= transaction.validUntil) {
         await repository.setRunStatus(runId, 'stopped', 'The approved transactions expired before they were submitted');
         logger.error({ runId, alert: true }, 'An approved payout run expired before it was submitted: it is built again for a new approval');
 
-        return { submitted, failed };
+        return { submitted, failed: 0 };
       }
-      try {
-        await blockfrost.submitTransaction(transaction.cbor);
-        await repository.markSubmitted(runId, transaction.index);
-        submitted += 1;
-      }
-      catch (error) {
-        if (!(error instanceof TransactionRejectedError))
-          throw error;
-        await repository.failTransaction(runId, transaction.index);
-        logger.error({ runId, txHash: transaction.txHash, alert: true }, 'The chain refused a payout transaction: its payouts wait for the next run');
-        failed += 1;
-      }
+      // Rule 5: recorded as sent before it is sent, so a crash or a timeout can never lead to a new
+      // transaction for the same payouts. The follow-up sends the same one again.
+      await repository.markSubmitted(runId, transaction.index);
+      await send(runId, transaction);
+      submitted += 1;
     }
     await repository.setRunStatus(runId, 'submitted');
 
-    return { submitted, failed };
+    return { submitted, failed: 0 };
   };
 
   const follow = async (runId: string, assetName: string): Promise<{ confirmed: number; failed: number }> => {
@@ -151,6 +161,9 @@ export const createPayoutsJob = ({ repository, wallet, blockfrost, clock, ids, l
           logger.error({ runId, txHash: transaction.txHash, alert: true }, 'A payout transaction never landed: its payouts wait for the next run');
           failed += 1;
         }
+        // Not on chain yet, still valid: send the same signed transaction again. It can only land once.
+        else if (height === undefined)
+          await send(runId, transaction);
       }
     }
 

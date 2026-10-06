@@ -4,6 +4,7 @@ import { mainnet, preprod } from '@evolution-sdk/evolution/sdk/client/Chain';
 import * as Client from '@evolution-sdk/evolution/sdk/client/Client';
 import { addressFromSeed } from '@evolution-sdk/evolution/sdk/wallet/Derivation';
 import * as Transaction from '@evolution-sdk/evolution/Transaction';
+import type * as UTxO from '@evolution-sdk/evolution/UTxO';
 
 import { ServiceRouterError, type Secret } from '@servicerouter/common';
 import type { Asset } from '@servicerouter/core';
@@ -28,8 +29,12 @@ export interface BuiltPayoutTransaction {
 /** Port: the payout wallet (PO-2, PO-3, PO-8). Holds the payout key, in the workers only. */
 export interface PayoutWallet {
   readonly address: string;
-  /** Builds and signs one transaction paying every output, valid until `validUntil`. Never submits it. */
-  build(input: { readonly outputs: readonly PayoutOutput[]; readonly validUntil: Date }): Promise<BuiltPayoutTransaction>;
+  /**
+   * Builds and signs a run's transactions, one per batch of outputs, valid until `validUntil`. Never
+   * submits them. They form a chain: each spends the coins the ones before it left, never the same
+   * coins, so they must be submitted in order.
+   */
+  buildRun(input: { readonly batches: readonly (readonly PayoutOutput[])[]; readonly validUntil: Date }): Promise<readonly BuiltPayoutTransaction[]>;
 }
 
 export interface CardanoPayoutWalletOptions {
@@ -63,26 +68,36 @@ export const createCardanoPayoutWallet = ({ mnemonic, asset, blockfrost }: Carda
 
   return {
     address,
-    build: async ({ outputs, validUntil }) => {
-      if (outputs.length === 0)
-        throw new PayoutBuildError('A payout transaction needs at least one output');
+    buildRun: async ({ batches, validUntil }) => {
+      const built: BuiltPayoutTransaction[] = [];
+      // The first transaction picks from the wallet's coins on chain; each later one from what the one
+      // before it left, its change included, so no two spend the same coin (PO-3)
+      let available: readonly UTxO.UTxO[] | undefined;
+      for (const outputs of batches) {
+        if (outputs.length === 0)
+          throw new PayoutBuildError('A payout transaction needs at least one output');
 
-      let builder = client.newTx();
-      for (const output of outputs)
-        builder = builder.payToAddress({ address: Address.fromBech32(output.address), assets: Assets.addByHex(Assets.zero, policyId, assetName, output.quantity) });
-      let signBuilder;
-      try {
-        signBuilder = await builder.setValidity({ to: BigInt(validUntil.getTime()) }).build({ changeAddress: Address.fromBech32(address), autoMinUtxo: true });
+        let builder = client.newTx();
+        for (const output of outputs)
+          builder = builder.payToAddress({ address: Address.fromBech32(output.address), assets: Assets.addByHex(Assets.zero, policyId, assetName, output.quantity) });
+        let signBuilder;
+        try {
+          signBuilder = await builder.setValidity({ to: BigInt(validUntil.getTime()) }).build({
+            changeAddress: Address.fromBech32(address), autoMinUtxo: true, ...available ? { availableUtxos: available } : {},
+          });
+        }
+        catch (error) {
+          throw new PayoutBuildError('The payout wallet couldn\'t build the transaction: it may not hold enough USDM or ADA', { cause: error });
+        }
+        const chained = signBuilder.chainResult();
+        available = chained.available;
+        const submitBuilder = await signBuilder.sign();
+        const unsigned = await signBuilder.toTransaction();
+        const signed = new Transaction.Transaction({ body: unsigned.body, witnessSet: submitBuilder.witnessSet, isValid: true, auxiliaryData: null });
+        built.push({ txHash: chained.txHash, cbor: Transaction.toCBORHex(signed) });
       }
-      catch (error) {
-        throw new PayoutBuildError('The payout wallet couldn\'t build the transaction: it may not hold enough USDM or ADA', { cause: error });
-      }
-      const { txHash } = signBuilder.chainResult();
-      const submitBuilder = await signBuilder.sign();
-      const unsigned = await signBuilder.toTransaction();
-      const signed = new Transaction.Transaction({ body: unsigned.body, witnessSet: submitBuilder.witnessSet, isValid: true, auxiliaryData: null });
 
-      return { txHash, cbor: Transaction.toCBORHex(signed) };
+      return built;
     },
   };
 };
