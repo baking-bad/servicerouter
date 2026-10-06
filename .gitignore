@@ -1,0 +1,20 @@
+node_modules/
+dist/
+.tmp/
+
+*.env*
+!.env.example
+
+config.local.yaml
+config.local.yml
+config.local.json
+
+*.session
+*.log
+.DS_Store
+
+CLAUDE.local.md
+.claude/*.local.json
+
+# TypeScript project-reference metadata is generated alongside package output.
+*.tsbuildinfo
