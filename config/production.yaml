@@ -32,7 +32,7 @@ assets:                         # PC-6. Addresses and decimals from the SDKs: @x
     address: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
     decimals: 6
     peg: usd
-    payTo: 0x5d0b54076191062bea66176c6a0c94ab3aeafb26          # Our Base address that receives USDC
+    payTo: "0x5d0b54076191062bea66176c6a0c94ab3aeafb26"          # Our Base address that receives USDC
   - name: cardano-usdm
     network: cardano:mainnet
     address: c48cbb3d5e57ed56e276bc45f99ab39abe94e6cd7ac39fb402da47ad.0014df105553444d
@@ -45,7 +45,7 @@ assets:                         # PC-6. Addresses and decimals from the SDKs: @x
     address: "0x20C000000000000000000000b9537d11c60E8b50"
     decimals: 6
     peg: usd
-    payTo: 0x5d0b54076191062bea66176c6a0c94ab3aeafb26        # The same address as mpp.recipient
+    payTo: "0x5d0b54076191062bea66176c6a0c94ab3aeafb26"        # The same address as mpp.recipient
 
 facilitators:
   - name: cdp
@@ -62,7 +62,7 @@ facilitators:
 
 mpp:
   network: eip155:4217          # Tempo
-  recipient: 0x5d0b54076191062bea66176c6a0c94ab3aeafb26      # Our Tempo address that receives USDC.e
+  recipient: "0x5d0b54076191062bea66176c6a0c94ab3aeafb26"      # Our Tempo address that receives USDC.e
 
 deposits:                       # Buyers top up credits with USDM on Cardano
   asset: cardano-usdm
