@@ -41,3 +41,48 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+
+  # x402 on Cardano (CF-1): the Cardano Foundation's facilitator and its own Postgres 17. Only with the
+  # profile: docker compose --profile cardano up -d. It needs BLOCKFROST_PROJECT_ID for preprod.
+  cardano-facilitator-db:
+    image: postgres:17-alpine
+    profiles: [ cardano ]
+    environment:
+      POSTGRES_USER: facilitator
+      POSTGRES_PASSWORD: ${CARDANO_FACILITATOR_DB__PASSWORD:-change-me}
+      POSTGRES_DB: facilitator
+    volumes:
+      - ./.tmp/cardano_facilitator_db:/var/lib/postgresql/data
+    restart: always
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U facilitator -d facilitator" ]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  cardano-facilitator:
+    image: cardanofoundation/cardano-x402-facilitator:1.0.0-pre1   # Pinned (CF-1, CF-7): targets @x402/cardano 2.26.0, which 2.28.0 matches
+    platform: linux/amd64       # The image ships for amd64 only
+    profiles: [ cardano ]
+    depends_on:
+      cardano-facilitator-db:
+        condition: service_healthy
+    environment:
+      DB_URL: jdbc:postgresql://cardano-facilitator-db:5432/facilitator
+      DB_USER: facilitator
+      DB_PASSWORD: ${CARDANO_FACILITATOR_DB__PASSWORD:-change-me}
+      BLOCKFROST_BASE_URL: https://cardano-preprod.blockfrost.io/api/v0
+      BLOCKFROST_PROJECT_ID: ${BLOCKFROST_PROJECT_ID:-}
+      X402_NETWORK_ID: cardano:preprod
+      X402_SETTLE_ACCEPTMEMPOOL: "false"          # CF-4: mempool presence is not payment
+      X402_SETTLE_CONFIRMATIONTIMEOUT: 10s        # Under the proxy's settle timeout (cardano-facilitator.md)
+    ports:
+      - 127.0.0.1:${CARDANO_FACILITATOR__PORT:-4022}:4022   # For apps run on the host. Stacks publish nothing (CF-2)
+    restart: always
+    healthcheck:
+      test: [ "CMD-SHELL", "curl -fsS http://127.0.0.1:4022/actuator/health > /dev/null" ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 60s
+
