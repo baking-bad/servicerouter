@@ -23,7 +23,7 @@ Everything about a deployment that isn't a seller config or a secret.
   - `feeBps` (registered services) and `routingFeeBps` (payment routing);
   - the minimum payout;
   - the category list;
-  - rate limits, including the signup limit per client IP (`rateLimits.signup`, [PA-5](platform-api.md)) and the top-up data's (`rateLimits.topup`, default 60 a minute), and timeouts;
+  - rate limits, including the signup limit per client IP (`rateLimits.signup`, [PA-5](platform-api.md)) the top-up data's (`rateLimits.topup`, default 60 a minute), and the agent documents' (`rateLimits.documents`, default 120 a minute), and timeouts;
   - Signer limits;
   - key prefixes (PC-7) and the default limits for new payment keys ([AR4](README.md#8-open-questions));
   - the SMTP relay: host, port, sender address, and credentials by name, after the MVP ([AR19](README.md#8-open-questions)).
