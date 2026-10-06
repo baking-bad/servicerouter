@@ -27,12 +27,18 @@ describe('credential detection (PR-1)', () => {
   });
 
   it.each([
-    ['PAYMENT-SIGNATURE (x402 v2)', { 'payment-signature': 'eyJ4NDAyVmVyc2lvbiI6Mn0' }, 'x402'],
-    ['X-PAYMENT (x402 v1)', { 'x-payment': 'eyJ4NDAyVmVyc2lvbiI6MX0' }, 'x402'],
-    ['both x402 headers, one payment', { 'payment-signature': 'v2', 'x-payment': 'v1' }, 'x402'],
-    ['Authorization: Payment (MPP)', { authorization: 'Payment id="abc", method="tempo"' }, 'mpp'],
-  ])('finds %s', (_case, headers, rail) => {
-    expect(detectCredential(detectors, headers)).toEqual({ rail });
+    ['PAYMENT-SIGNATURE (x402 v2)', { 'payment-signature': 'eyJ4NDAyVmVyc2lvbiI6Mn0' }, { rail: 'x402', version: 2, value: 'eyJ4NDAyVmVyc2lvbiI6Mn0' }],
+    ['X-PAYMENT (x402 v1)', { 'x-payment': 'eyJ4NDAyVmVyc2lvbiI6MX0' }, { rail: 'x402', version: 1, value: 'eyJ4NDAyVmVyc2lvbiI6MX0' }],
+    ['both x402 headers, one payment, v2 first', { 'payment-signature': 'v2', 'x-payment': 'v1' }, { rail: 'x402', version: 2, value: 'v2' }],
+  ])('finds %s, keeping the header in a Secret', (_case, headers, expected) => {
+    const credential = detectCredential(detectors, headers);
+
+    expect(credential?.rail === 'x402' && { rail: credential.rail, version: credential.version, value: credential.header.expose() }).toEqual(expected);
+    expect(JSON.stringify(credential)).not.toContain(expected.value);
+  });
+
+  it('finds Authorization: Payment (MPP)', () => {
+    expect(detectCredential(detectors, { authorization: 'Payment id="abc", method="tempo"' })).toEqual({ rail: 'mpp' });
   });
 
   it.each([

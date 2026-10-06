@@ -1,3 +1,4 @@
+import { generateKeyPairSync } from 'node:crypto';
 import { createServer as createNetServer, type AddressInfo, type Socket } from 'node:net';
 
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
@@ -6,13 +7,21 @@ import { createLogger, runApp, Secret, type Logger, type Server } from '@service
 import { loadPlatformConfig, type PlatformConfig } from '@servicerouter/core';
 import { createPostgres, createRedis, type Postgres, type Redis } from '@servicerouter/db';
 import {
-  createTestDatabase, createTestRedis, createTestSecretKeys, type TestDatabase, type TestRedis, type TestSecretKeys,
+  createTestDatabase, createTestRedis, createTestSecretKeys, facilitatorAnswers, startFakeFacilitator, type TestDatabase, type TestRedis,
+  type TestSecretKeys,
 } from '@servicerouter/testing';
 
 import { createApp } from '../../src/app.js';
 import { startProxy } from '../../src/start.js';
 
 const exampleConfig = { CONFIG_PATH: 'config/example.yaml' };
+const configOf = (overrides: Record<string, unknown>) => Buffer.from(JSON.stringify(overrides)).toString('base64');
+const facilitatorsAt = (url: string, enabled: boolean) => [
+  { name: 'cdp', url, networks: ['eip155:84532', 'solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1'], enabled, auth: { type: 'cdp', apiKeyId: 'CDP_API_KEY_ID', apiKeySecret: 'CDP_API_KEY_SECRET' } },
+  { name: 'cardano', url: 'http://cardano-facilitator:4022', networks: ['cardano:preprod'], enabled: false },
+];
+// Facilitators off, so startup needs no CDP key. x402 at startup has its own tests (PR-6).
+const withoutFacilitators = { ...exampleConfig, CONFIG: configOf({ facilitators: facilitatorsAt('https://api.cdp.coinbase.com/platform/v2/x402', false) }) };
 const silentLogger = createLogger({ level: 'silent' });
 const buyerHeaderKey = 'buyer-header-key-0123456789abcdef-xyz';
 
@@ -284,7 +293,7 @@ describe('the secrets private keys (SC-4, S2-D4)', () => {
   const hint = 'Generate a pair with node scripts/secrets-keygen.mjs';
 
   it('starts with the PEM keys on one line, each newline written as \\n', async () => {
-    const app = await startProxy({ env: { ...exampleConfig, ...connections(), ...listen, SECRETS_PRIVATE_KEYS: oneLine(keys.privateKey) }, logger: silentLogger });
+    const app = await startProxy({ env: { ...withoutFacilitators, ...connections(), ...listen, SECRETS_PRIVATE_KEYS: oneLine(keys.privateKey) }, logger: silentLogger });
 
     await app.close();
   });
@@ -309,7 +318,7 @@ describe('the secrets private keys (SC-4, S2-D4)', () => {
 describe('the buyer header key (PX-15)', () => {
   const oneLine = (pem: string) => pem.trim().replaceAll('\n', '\\n');
   const env = () => ({
-    ...exampleConfig,
+    ...withoutFacilitators,
     DATABASE_URL: database.url.expose(),
     REDIS_URL: redis.url.expose(),
     SECRETS_PRIVATE_KEYS: oneLine(keys.privateKey),
@@ -337,5 +346,68 @@ describe('the buyer header key (PX-15)', () => {
     expect(lines.find(line => line['msg'] === 'Failed to start')).toMatchObject({ error: { message } });
     if (value)
       expect(JSON.stringify(lines)).not.toContain(value);
+  });
+});
+
+describe('the facilitators at startup (PR-6, PX-17)', () => {
+  const cdpKey = () => {
+    const { privateKey, publicKey } = generateKeyPairSync('ed25519');
+
+    return Buffer.concat([
+      Buffer.from(privateKey.export({ format: 'jwk' }).d!, 'base64url'),
+      Buffer.from(publicKey.export({ format: 'jwk' }).x!, 'base64url'),
+    ]).toString('base64');
+  };
+  const env = (url: string) => ({
+    CONFIG_PATH: 'config/example.yaml',
+    CONFIG: configOf({ facilitators: facilitatorsAt(url, true) }),
+    DATABASE_URL: database.url.expose(),
+    REDIS_URL: redis.url.expose(),
+    SECRETS_PRIVATE_KEYS: keys.privateKey.trim().replaceAll('\n', '\\n'),
+    BUYER_HEADER_KEY: buyerHeaderKey,
+    CDP_API_KEY_ID: 'organizations/test/apiKeys/startup',
+    CDP_API_KEY_SECRET: cdpKey(),
+    HOST: '127.0.0.1',
+    PORT: '0',
+    METRICS_PORT: '0',
+  });
+
+  it('starts once every enabled facilitator answers /supported, signing it with the CDP key', async () => {
+    const facilitator = await startFakeFacilitator({ networks: ['eip155:84532', 'solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1'], feePayer: '11111111111111111111111111111112' });
+    try {
+      const app = await startProxy({ env: env(facilitator.url), logger: silentLogger });
+      await app.close();
+
+      expect(facilitator.requests.some(request => request.path === '/supported' && String(request.headers.authorization).startsWith('Bearer '))).toBe(true);
+    }
+    finally {
+      await facilitator.close();
+    }
+  });
+
+  it('exits with 1 and names the facilitator when its /supported fails', async () => {
+    const facilitator = await startFakeFacilitator({ networks: ['eip155:84532'] });
+    facilitator.handle('/supported', facilitatorAnswers.unavailable);
+    const { logger, lines } = captureLogs();
+    const exit = vi.fn();
+    try {
+      await runApp({ name: 'proxy', start: startProxy, logger, exit, env: env(facilitator.url) });
+
+      expect(exit).toHaveBeenCalledWith(1);
+      expect(lines.find(line => line['msg'] === 'Failed to start')).toMatchObject({ error: { message: 'The cdp facilitator\'s /supported failed: The cdp facilitator is unavailable: /supported answered 503' } });
+    }
+    finally {
+      await facilitator.close();
+    }
+  });
+
+  it('exits with 1 when a facilitator needs a CDP key that isn\'t set', async () => {
+    const { logger, lines } = captureLogs();
+    const exit = vi.fn();
+
+    await runApp({ name: 'proxy', start: startProxy, logger, exit, env: { ...env('https://facilitator.invalid'), CDP_API_KEY_SECRET: undefined } });
+
+    expect(exit).toHaveBeenCalledWith(1);
+    expect(lines.find(line => line['msg'] === 'Failed to start')).toMatchObject({ error: { message: 'Secret CDP_API_KEY_SECRET is not set' } });
   });
 });

@@ -558,3 +558,82 @@ describe('expired holds (LG-9)', () => {
     expect([...first, ...second].every(item => item.status === 'held' && item.createdAt < createdBefore)).toBe(true);
   });
 });
+
+describe('settled on-chain payments (LG-4, LG-8, PR-12, step 5)', () => {
+  const verifiedX402 = async (amount = usd('0.01')) => {
+    const seller = await newAccount();
+    const serviceId = await newService(seller);
+    counter += 1;
+    const payments = createPaymentRepository({ db: database.db, clock });
+    const payment = await payments.create({
+      id: `pay_onchain_${counter}`, requestId: `req-onchain-${counter}`, kind: 'service', rail: 'x402', buyerAccountId: undefined, keyId: undefined,
+      sellerAccountId: seller, serviceId, routeKey: 'getWeather', targetHost: undefined, targetPath: undefined,
+      network: 'eip155:84532', asset: '0x036CbD53842c5426634e7929541eC2318f3dCF7e', atomicAmount: 10_000n, amount, status: 'verified',
+    });
+
+    return { payments, payment, seller };
+  };
+  const balanceOf = async (ledgerAccountId: string) =>
+    (await database.db.select().from(balances).where(sql`${balances.ledgerAccountId} = ${ledgerAccountId}`))[0]?.balance;
+
+  it('books the asset\'s treasury into the seller\'s earnings and the fee, once, with the hash', async () => {
+    const { payment, seller } = await verifiedX402();
+    const treasuryBefore = await balanceOf(ledgerAccountIds.treasury('base-usdc')) ?? 0n;
+    const input = { paymentId: payment.id, feeBps: 250, asset: 'base-usdc', transactionHash: '0xabc', receipt: 'eyJzdWNjZXNzIjp0cnVlfQ', needsReview: false };
+
+    const first = await ledger.settle(input);
+    const again = await ledger.settle(input);
+
+    expect(first).toMatchObject({ fee: 250n, sellerAmount: 9_750n, payment: { status: 'settled', transactionHash: '0xabc', receipt: input.receipt, needsReview: false, fee: 250n } });
+    expect(again).toEqual(first);
+    expect(await balanceOf(ledgerAccountIds.earned(seller))).toBe(9_750n);
+    expect(await balanceOf(ledgerAccountIds.treasury('base-usdc'))).toBe(treasuryBefore - usd('0.01'));
+    expect(await unbalancedTransactions()).toEqual([]);
+    expect(await negativeBalances()).toEqual([]);
+  });
+
+  it('settles a payment that was settling, clears its settle request, and flags it for review when asked', async () => {
+    const { payments, payment } = await verifiedX402();
+    await payments.changeStatus({ paymentId: payment.id, to: 'settling', settlementRequest: { paymentPayload: { x402Version: 2 } } });
+
+    const settled = await ledger.settle({ paymentId: payment.id, feeBps: 0, asset: 'base-usdc', transactionHash: '0xdef', receipt: undefined, needsReview: true });
+
+    expect(settled.payment).toMatchObject({ status: 'settled', needsReview: true, transactionHash: '0xdef' });
+    expect((await payments.listSettling({ limit: 100 })).map(item => item.payment.id)).not.toContain(payment.id);
+    const { rows } = await database.db.execute<{ request: unknown }>(sql`select settlement_request as request from payments where id = ${payment.id}`);
+    expect(rows[0]?.request).toBeNull();
+  });
+
+  it('refuses a credits payment, and one that was cancelled (LG-8)', async () => {
+    const buyer = await newBuyer('1');
+    const seller = await newAccount();
+    const held = await hold(buyer, 1_000n, {}, { sellerAccountId: seller, serviceId: await newService(seller) });
+    const { payments, payment } = await verifiedX402();
+    await payments.changeStatus({ paymentId: payment.id, to: 'cancelled' });
+
+    await expect(ledger.settle({ paymentId: held.ok ? held.payment.id : '', feeBps: 0, asset: 'base-usdc', transactionHash: undefined, receipt: undefined, needsReview: false }))
+      .rejects.toBeInstanceOf(InvalidPaymentStatusChangeError);
+    await expect(ledger.settle({ paymentId: payment.id, feeBps: 0, asset: 'base-usdc', transactionHash: undefined, receipt: undefined, needsReview: false }))
+      .rejects.toBeInstanceOf(InvalidPaymentStatusChangeError);
+  });
+
+  it('lists settling payments oldest first, with the settle request to repeat (WK-6)', async () => {
+    const { payments } = await verifiedX402();
+    const settling: string[] = [];
+    for (let index = 0; index < 3; index++) {
+      clock.advance(1_000);
+      const { payment } = await verifiedX402();
+      await payments.changeStatus({ paymentId: payment.id, to: 'settling', transactionHash: index === 0 ? '0x1' : undefined, settlementRequest: { index } });
+      settling.push(payment.id);
+    }
+
+    const first = await payments.listSettling({ limit: 2 });
+    const rest = await payments.listSettling({ limit: 10, after: first.at(-1)!.payment });
+    const mine = [...first, ...rest].filter(item => settling.includes(item.payment.id));
+
+    expect(mine.map(item => item.payment.id)).toEqual(settling);
+    expect(mine.map(item => item.settlementRequest)).toEqual([{ index: 0 }, { index: 1 }, { index: 2 }]);
+    expect(mine[0]?.payment.transactionHash).toBe('0x1');
+    clock.set(fixtureTime(0, 5, 12, 0, 0, 0));
+  });
+});

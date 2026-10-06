@@ -145,10 +145,10 @@ describe('the credits rail (PR-4)', () => {
     expect(receipt).toEqual(authorization.receipt);
   });
 
-  it('puts the price, the signup endpoint, and the guide in its part of the 402 (PR-2)', () => {
+  it('puts the price, the signup endpoint, and the guide in its part of the 402 (PR-2)', async () => {
     const { rail } = setup();
 
-    expect(buildPaymentRequired([rail], quote)).toEqual({
+    expect(await buildPaymentRequired([rail], quote)).toEqual({
       status: 402,
       headers: { 'cache-control': 'no-store' },
       body: {
