@@ -1,0 +1,108 @@
+# Platform config example (docs/architecture/platform-config.md). Staging-shaped: testnets only.
+#
+# Used for local development and tests. Every address below is a placeholder, and the fee and
+# rate-limit values are illustrations, not decisions. Real deployments get their own file, such as
+# config/staging.yaml, with the treasury addresses and values the product owner sets.
+#
+# Load it with CONFIG_PATH=config/example.yaml. Several comma-separated files merge left to right,
+# and CONFIG (base64 YAML or JSON) is merged last. Secrets appear by name only: a field such as
+# `apiKeySecret: CDP_API_KEY_SECRET` names the environment variable that holds the value.
+
+version: 1
+environment: staging            # staging: testnets only. production: mainnets only.
+
+logger:
+  level: info                   # Optional. Default: info
+
+urls:                           # Canonical public origins (PX-10)
+  website: https://staging.servicerouter.ai
+  api: https://api.staging.servicerouter.ai
+  pay: https://pay.staging.servicerouter.ai
+
+ownHosts: []                    # Optional. Extra hosts and IPs we own. The hosts of `urls` are always included
+
+keyPrefixes:                    # PC-7. Must differ, and neither may start with the other
+  master: srm_test_
+  payment: sr_test_
+
+paymentKeyDefaults:             # Optional. AR4
+  dailyBudget: "5"
+
+feeBps: 0                       # Placeholder. The product owner sets fees
+routingFeeBps: 0                # Placeholder
+
+assets:                         # PC-6. Decimals from the x402 SDKs' defaults
+  - name: base-usdc
+    network: eip155:84532       # Base Sepolia
+    address: "0x036CbD53842c5426634e7929541eC2318f3dCF7e"
+    decimals: 6
+    peg: usd
+    payTo: "0x1111111111111111111111111111111111111111"            # Placeholder
+  - name: solana-usdc
+    network: solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1             # Solana Devnet
+    address: "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU"
+    decimals: 6
+    peg: usd
+    payTo: "11111111111111111111111111111111"                      # Placeholder. Quote addresses: YAML reads digits as numbers
+  - name: cardano-usdm
+    network: cardano:preprod
+    address: e675b46e4d2242c991a8932a99db3044e80515ae14b4c4ccf6b3f4c9.0014df10745553444d
+    decimals: 6
+    peg: usd
+    minPrice: "0.05"            # Optional. Default: "0". Cardano network fees make tiny payments uneconomic
+    payTo: addr_test1vqg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zygxrcya6  # Placeholder
+
+facilitators:                   # PR-6. One facilitator per network
+  - name: cdp
+    url: https://api.cdp.coinbase.com/platform/v2/x402
+    networks: [eip155:84532, solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1]
+    auth:
+      type: cdp
+      apiKeyId: CDP_API_KEY_ID          # Environment variable names
+      apiKeySecret: CDP_API_KEY_SECRET
+  - name: cardano
+    url: http://cardano-facilitator:4022  # Internal network only (CF-2)
+    networks: [cardano:preprod]
+
+mpp:                            # PR-9. Tempo charge recipient
+  network: eip155:42431         # Tempo Moderato
+  recipient: "0x2222222222222222222222222222222222222222"          # Placeholder
+
+payouts:
+  assets: [cardano-usdm]        # PO-2: USDM on Cardano only in v1
+  minimum: "10"                 # Optional. B6
+
+categories:                     # CI-3
+  - id: weather
+    title: Weather
+  - id: finance
+    title: Finance
+  - id: finance/market-data
+    title: Market data
+  - id: ai/image-generation
+    title: Image generation
+
+rateLimits:                     # PX-13. Illustrations
+  paymentKey: { requests: 600, windowSeconds: 60 }
+  service: { requests: 6000, windowSeconds: 60 }
+  unpaidIp: { requests: 60, windowSeconds: 60 }
+
+timeouts:                       # Optional. Defaults: OH-4, PR-12
+  connectMs: 5000
+  requestMs: 30000
+  settleMs: 30000
+
+sizeLimits:                     # Optional. Defaults: PX-8, AR3
+  requestBodyBytes: 1048576
+  bufferedResponseBytes: 10485760
+
+signer:                         # Optional. AR8
+  maxPerCall: "1"
+  maxPerNetworkPerDay: "100"
+
+smtp:                           # Optional until email ships (AR19)
+  host: smtp.example.com
+  port: 587
+  from: noreply@staging.servicerouter.ai
+  username: SMTP_USERNAME
+  password: SMTP_PASSWORD

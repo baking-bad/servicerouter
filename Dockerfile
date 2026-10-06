@@ -14,5 +14,7 @@ ENV NODE_ENV=production
 COPY package.json package-lock.json ./
 COPY --from=build /app/packages ./packages
 RUN --mount=type=cache,target=/root/.npm npm ci --omit=dev
+# Platform configs, one per deployment (PC-1). The stack picks one with CONFIG_PATH.
+COPY config ./config
 USER node
 CMD ["node", "packages/proxy/dist/main.js"]
