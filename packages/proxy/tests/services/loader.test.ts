@@ -53,6 +53,7 @@ const sealedFor = (sealOrigin: string, value = 'sk-live-1'): StoredSecret => ({
 
 const serving = (changes: Partial<ServingService> = {}): ServingService => ({
   serviceId: 'my-app' as ServiceId,
+  ownerAccountId: 'acc_owner',
   state: 'live',
   revision: 3,
   config,

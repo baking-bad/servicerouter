@@ -124,7 +124,9 @@ beforeAll(async () => {
   });
 
   api = createApi({ config, logger, postgres: database.postgres, redis, sealer: keys.sealer, openApiHttp: apiHttp });
-  proxy = createApp({ config, logger, postgres: database.postgres, redis, opener: keys.opener, http: proxyHttp });
+  proxy = createApp({
+    config, logger, postgres: database.postgres, redis, opener: keys.opener, http: proxyHttp, buyerHeaderKey: Secret.from('buyer-header-key-for-the-services-tests'),
+  });
   const [apiPorts, proxyPorts] = await Promise.all([
     api.listen({ host: '127.0.0.1', port: 0, metricsPort: 0 }),
     proxy.listen({ host: '127.0.0.1', port: 0, metricsPort: 0 }),
@@ -174,9 +176,10 @@ payouts:
     asset: cardano-usdm
     address: addr_test1vq3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zygswahgq5
 
+# Free: these tests cover forwarding. Paid calls are in payments.test.ts.
 payments:
   default:
-    amount: "0.001"
+    amount: "0"
 
 upstreams:
   - baseUrl: ${upstream.url(mainHost, '/v2')}

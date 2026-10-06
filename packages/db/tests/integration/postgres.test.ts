@@ -76,3 +76,51 @@ describe('withTransaction', () => {
     expect(ids).not.toContain('inner');
   });
 });
+
+describe('tryAdvisoryLock (WK-1)', () => {
+  it('gives the lock to one session at a time, and to the next once it is unlocked', async () => {
+    const [first, second] = [createPostgres({ url: database.url, logger }), createPostgres({ url: database.url, logger })];
+    try {
+      const unlock = await first.tryAdvisoryLock(41);
+
+      expect(unlock).toBeTypeOf('function');
+      expect(await second.tryAdvisoryLock(41)).toBeUndefined();
+      // Another lock ID is free
+      const other = await second.tryAdvisoryLock(42);
+      expect(other).toBeTypeOf('function');
+
+      await Promise.all([unlock!(), unlock!()]);
+      const next = await second.tryAdvisoryLock(41);
+      expect(next).toBeTypeOf('function');
+      await Promise.all([next!(), other!()]);
+    }
+    finally {
+      await Promise.all([first.close(), second.close()]);
+    }
+  });
+
+  it('frees the lock when its holder\'s session ends, as after a crash, and logs the lost connection', async () => {
+    const lines: Record<string, unknown>[] = [];
+    const watched = createLogger({}, { write: (line: string) => lines.push(JSON.parse(line) as Record<string, unknown>) });
+    const [holder, waiting] = [createPostgres({ url: database.url, logger: watched }), createPostgres({ url: database.url, logger })];
+    try {
+      const unlock = await holder.tryAdvisoryLock(43);
+      expect(unlock).toBeTypeOf('function');
+      // End the holder's session from the server, as a crash or a network failure would
+      await database.db.execute(sql`select pg_terminate_backend(pid) from pg_locks where locktype = 'advisory' and objid = 43`);
+
+      await expect.poll(async () => {
+        const next = await waiting.tryAdvisoryLock(43);
+        await next?.();
+
+        return next !== undefined;
+      }).toBe(true);
+      await expect.poll(() => lines.some(line => line['msg'] === 'An advisory lock\'s connection failed, so the lock is gone' && line['lockId'] === 43)).toBe(true);
+      // Unlocking a lost lock gives the dead connection back without throwing
+      await expect(unlock!()).resolves.toBeUndefined();
+    }
+    finally {
+      await Promise.all([holder.close(), waiting.close()]);
+    }
+  });
+});

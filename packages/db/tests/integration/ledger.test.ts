@@ -511,3 +511,50 @@ describe('payments rows (LG-7, LG-5)', () => {
     });
   });
 });
+
+describe('a hold just before midnight UTC (LG-6, AR5, T08 fix)', () => {
+  it('counts the spend on the day of the payment\'s createdAt, so a release after midnight gives it back cleanly', async () => {
+    const buyer = await newBuyer('10', { dailyBudget: '1' });
+    // Every read moves the clock by 1 ms: a hold that read it twice would straddle midnight
+    let now = new Date(fixtureTime(0, 5, 23, 59, 59, 999)).getTime();
+    const ticking = createLedger({ db: database.db, clock: { now: () => new Date(now++) }, ids: randomIdGenerator });
+    const late = await ticking.hold({ payment: payment(buyer, usd('0.5')), dailyBudget: usd('1'), allowance: undefined });
+    // The next day's spend is smaller than the late hold
+    clock.set(fixtureTime(0, 6, 0, 0, 1, 0));
+    await hold(buyer, usd('0.1'), { dailyBudget: '1' });
+
+    const released = await ledger.release({ paymentId: late.ok ? late.payment.id : '' });
+
+    expect(late.ok && late.payment.createdAt).toEqual(new Date(fixtureTime(0, 5, 23, 59, 59, 999)));
+    expect(released.payment.status).toBe('released');
+    expect(await ledger.keySpend([buyer.keyId], fixtureDay(0, 5))).toEqual(new Map([[buyer.keyId, { today: 0n, total: usd('0.1') }]]));
+    expect(await ledger.keySpend([buyer.keyId], fixtureDay(0, 6))).toEqual(new Map([[buyer.keyId, { today: usd('0.1'), total: usd('0.1') }]]));
+    clock.set(fixtureTime(0, 5, 12, 0, 0, 0));
+  });
+});
+
+describe('expired holds (LG-9)', () => {
+  it('lists payments still held from before a time, oldest first, a page at a time', async () => {
+    const buyer = await newBuyer('1');
+    const payments = createPaymentRepository({ db: database.db, clock });
+    const held: string[] = [];
+    clock.set(fixtureTime(0, 4, 10, 0, 0, 0));
+    for (let index = 0; index < 3; index++) {
+      const result = await hold(buyer, 1n);
+      held.push(result.ok ? result.payment.id : '');
+    }
+    const captured = await hold(buyer, 1n);
+    clock.set(fixtureTime(0, 4, 10, 10, 0, 0));
+    const recent = await hold(buyer, 1n);
+    await ledger.release({ paymentId: captured.ok ? captured.payment.id : '' });
+    clock.set(fixtureTime(0, 5, 12, 0, 0, 0));
+    const createdBefore = new Date(fixtureTime(0, 4, 10, 5, 0, 0));
+
+    const first = await payments.listExpiredHolds({ createdBefore, limit: 2 });
+    const second = await payments.listExpiredHolds({ createdBefore, limit: 2, after: first.at(-1)! });
+    const mine = (list: readonly { id: string }[]) => list.map(item => item.id).filter(id => held.includes(id) || id === (recent.ok ? recent.payment.id : ''));
+
+    expect([...mine(first), ...mine(second)]).toEqual([...held].sort((left, right) => left < right ? -1 : 1));
+    expect([...first, ...second].every(item => item.status === 'held' && item.createdAt < createdBefore)).toBe(true);
+  });
+});

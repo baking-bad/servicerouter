@@ -1,16 +1,16 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
-import { createLogger, runApp, type MetricsServer } from '@servicerouter/common';
+import { createLogger, runApp } from '@servicerouter/common';
 import { loadPlatformConfig } from '@servicerouter/core';
 import { createTestDatabase, type TestDatabase } from '@servicerouter/testing';
 
-import { createApp } from '../../src/app.js';
+import { createApp, type WorkersServer } from '../../src/app.js';
 import { startWorkers } from '../../src/start.js';
 
 const exampleConfig = { CONFIG_PATH: 'config/example.yaml' };
 
 let database: TestDatabase;
-let server: MetricsServer;
+let server: WorkersServer;
 let url: string;
 
 beforeAll(async () => {
@@ -39,6 +39,18 @@ describe('workers on the metrics port (XC-2, XC-3)', () => {
     expect(await ready.json()).toEqual({ status: 'ready', checks: { postgres: 'ok' } });
     expect(metrics.status).toBe(200);
     expect(await metrics.text()).toContain('process_cpu_user_seconds_total');
+  });
+});
+
+describe('the hold expiry job (LG-9, WK-1, WK-4)', () => {
+  it('runs under its advisory lock, and exports its last success time and duration on the metrics port', async () => {
+    const result = await server.scheduler.runNow('hold_expiry');
+
+    const text = await (await fetch(`${url}/metrics`)).text();
+    expect(result).toBe('success');
+    expect(text).toMatch(/^workers_job_last_success_timestamp_seconds\{job="hold_expiry"\} \d+/m);
+    expect(text).toMatch(/^workers_job_duration_seconds\{job="hold_expiry"\} [\d.e-]+$/m);
+    expect(text).toContain('workers_job_runs_total{job="hold_expiry",result="success"} 1');
   });
 });
 

@@ -14,6 +14,7 @@ import { startProxy } from '../../src/start.js';
 
 const exampleConfig = { CONFIG_PATH: 'config/example.yaml' };
 const silentLogger = createLogger({ level: 'silent' });
+const buyerHeaderKey = 'buyer-header-key-0123456789abcdef-xyz';
 
 interface RunningServer {
   readonly server: Server;
@@ -34,6 +35,7 @@ const start = async (dependencies: { postgres?: Postgres; redis?: Redis; logger?
     postgres: dependencies.postgres ?? database.postgres,
     redis: dependencies.redis ?? redis,
     opener: keys.opener,
+    buyerHeaderKey: Secret.from(buyerHeaderKey),
   });
   server.app.get('/test/boom', async () => {
     throw new Error('upstream 10.0.0.5 said: secret detail');
@@ -277,7 +279,7 @@ describe('startup (PC-1)', () => {
 
 describe('the secrets private keys (SC-4, S2-D4)', () => {
   const connections = () => ({ DATABASE_URL: database.url.expose(), REDIS_URL: redis.url.expose() });
-  const listen = { HOST: '127.0.0.1', PORT: '0', METRICS_PORT: '0' };
+  const listen = { HOST: '127.0.0.1', PORT: '0', METRICS_PORT: '0', BUYER_HEADER_KEY: buyerHeaderKey };
   const oneLine = (pem: string) => pem.trim().replaceAll('\n', '\\n');
   const hint = 'Generate a pair with node scripts/secrets-keygen.mjs';
 
@@ -301,5 +303,39 @@ describe('the secrets private keys (SC-4, S2-D4)', () => {
     expect(exit).toHaveBeenCalledWith(1);
     expect(lines.find(line => line['msg'] === 'Failed to start')).toMatchObject({ error: { message } });
     expect(JSON.stringify(lines)).not.toContain(keys.publicKey.split('\n')[1]);
+  });
+});
+
+describe('the buyer header key (PX-15)', () => {
+  const oneLine = (pem: string) => pem.trim().replaceAll('\n', '\\n');
+  const env = () => ({
+    ...exampleConfig,
+    DATABASE_URL: database.url.expose(),
+    REDIS_URL: redis.url.expose(),
+    SECRETS_PRIVATE_KEYS: oneLine(keys.privateKey),
+    HOST: '127.0.0.1',
+    PORT: '0',
+    METRICS_PORT: '0',
+  });
+
+  it('starts with BUYER_HEADER_KEY set', async () => {
+    const app = await startProxy({ env: { ...env(), BUYER_HEADER_KEY: buyerHeaderKey }, logger: silentLogger });
+
+    await app.close();
+  });
+
+  it.each([
+    ['unset', undefined, 'Secret BUYER_HEADER_KEY is not set'],
+    ['shorter than 32 characters', 'too-short', 'BUYER_HEADER_KEY must be at least 32 characters'],
+  ])('exits with 1 when it is %s, without logging it', async (_case, value, message) => {
+    const { logger, lines } = captureLogs();
+    const exit = vi.fn();
+
+    await runApp({ name: 'proxy', start: startProxy, logger, exit, env: { ...env(), BUYER_HEADER_KEY: value } });
+
+    expect(exit).toHaveBeenCalledWith(1);
+    expect(lines.find(line => line['msg'] === 'Failed to start')).toMatchObject({ error: { message } });
+    if (value)
+      expect(JSON.stringify(lines)).not.toContain(value);
   });
 });

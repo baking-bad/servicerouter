@@ -213,7 +213,7 @@ describe('service secrets (SC-1, SC-2, SC-10)', () => {
 });
 
 describe('loadForServing (SR-5, SC-5, SC-10)', () => {
-  it('loads the state, the active revision, its OpenAPI snapshots, and the sealed secrets with their stored origins', async () => {
+  it('loads the owner, the state, the active revision, its OpenAPI snapshots, and the sealed secrets with their stored origins', async () => {
     const { id, owner } = await newService();
     const services = createServiceRepository({ db: database.db });
     const secret = sealed();
@@ -223,6 +223,7 @@ describe('loadForServing (SR-5, SC-5, SC-10)', () => {
 
     expect(await services.loadForServing(id)).toEqual({
       serviceId: id,
+      ownerAccountId: owner,
       state: 'live',
       revision: 2,
       config: config('0.002'),
