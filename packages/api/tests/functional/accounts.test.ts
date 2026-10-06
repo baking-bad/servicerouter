@@ -90,6 +90,7 @@ describe('POST /v1/accounts (AK-1, AK-3, PA-1)', () => {
       email: null,
       emailConfirmed: false,
       topupUrl: null,
+      depositAddress: null,
       createdAt: expect.any(String),
       masterKey: expect.stringMatching(/^srm_test_[0-9A-Za-z]{43}$/),
       notice: lostKeyNotice,
@@ -148,6 +149,7 @@ describe('GET /v1/account (AK-2, PA-2)', () => {
       email: 'reader@example.com',
       emailConfirmed: false,
       topupUrl: null,
+      depositAddress: null,
       createdAt: created['createdAt'],
     });
   });

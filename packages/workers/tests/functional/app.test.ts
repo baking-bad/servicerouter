@@ -1,10 +1,10 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
-import { createLogger, runApp } from '@servicerouter/common';
-import { loadPlatformConfig } from '@servicerouter/core';
+import { createLogger, runApp, Secret } from '@servicerouter/common';
+import { createBlockfrostClient, loadPlatformConfig } from '@servicerouter/core';
 import {
-  cardanoAnswers, createTestCertificate, createTestDatabase, startFakeFacilitator, startFakeTempoRpc, trustTestCertificate, type FakeTempoRpc,
-  type TestDatabase,
+  cardanoAnswers, createTestCertificate, createTestDatabase, startFakeBlockfrost, startFakeFacilitator, startFakeTempoRpc, trustTestCertificate,
+  type FakeTempoRpc, type TestDatabase,
 } from '@servicerouter/testing';
 
 import { createApp, type WorkersServer } from '../../src/app.js';
@@ -68,6 +68,46 @@ describe('the ownership re-check job (OV-6, WK-1, WK-4)', () => {
   });
 });
 
+describe('the deposit watcher job (DP-2, WK-1, WK-4)', () => {
+  it('runs under its advisory lock while deposits are on and Blockfrost is wired', async () => {
+    const config = await loadPlatformConfig({ env: exampleConfig });
+    const blockfrost = await startFakeBlockfrost();
+    const app = createApp({
+      config, logger: createLogger({ level: 'silent' }), postgres: database.postgres,
+      blockfrost: createBlockfrostClient({ url: blockfrost.url, projectId: Secret.from('preprodTestProjectId'), timeoutMs: 2_000 }),
+    });
+    try {
+      expect(await app.scheduler.runNow('deposit_watcher')).toBe('success');
+      expect(() => server.scheduler.runNow('deposit_watcher')).toThrow('No job named deposit_watcher');
+    }
+    finally {
+      await app.close();
+      await blockfrost.close();
+    }
+  });
+
+  it('exits with 1 when BLOCKFROST_PROJECT_ID is missing while deposits are on', async () => {
+    const lines: Record<string, unknown>[] = [];
+    const logger = createLogger({}, { write: (line: string) => lines.push(JSON.parse(line) as Record<string, unknown>) });
+    const exit = vi.fn();
+    const config = Buffer.from(JSON.stringify({
+      facilitators: [
+        { name: 'cdp', url: 'https://api.cdp.coinbase.com/platform/v2/x402', networks: ['eip155:84532', 'solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1'], enabled: false },
+        { name: 'cardano', url: 'http://cardano-facilitator:4022', networks: ['cardano:preprod'], enabled: false },
+      ],
+      mpp: { enabled: false },
+    })).toString('base64');
+
+    await runApp({
+      name: 'workers', start: startWorkers, logger, exit,
+      env: { ...exampleConfig, CONFIG: config, DATABASE_URL: database.url.expose(), REDIS_URL: process.env['TEST_REDIS_URL']!, HOST: '127.0.0.1', METRICS_PORT: '0' },
+    });
+
+    expect(exit).toHaveBeenCalledWith(1);
+    expect(lines.find(line => line['msg'] === 'Failed to start')).toMatchObject({ error: { message: 'Secret BLOCKFROST_PROJECT_ID is not set' } });
+  });
+});
+
 describe('startup (PC-1)', () => {
   it('exits with 1 and logs the reason when the platform config is invalid', async () => {
     const lines: Record<string, unknown>[] = [];
@@ -98,6 +138,7 @@ describe('the facilitators at startup (PR-6, step 6)', () => {
     })).toString('base64'),
     DATABASE_URL: database.url.expose(),
     REDIS_URL: process.env['TEST_REDIS_URL']!,
+    BLOCKFROST_PROJECT_ID: 'preprodTestProjectId',
     HOST: '127.0.0.1',
     METRICS_PORT: '0',
   });
@@ -151,6 +192,7 @@ describe('the Tempo RPC at startup (PR-9, WK-6)', () => {
     })).toString('base64'),
     DATABASE_URL: database.url.expose(),
     REDIS_URL: process.env['TEST_REDIS_URL']!,
+    BLOCKFROST_PROJECT_ID: 'preprodTestProjectId',
     HOST: '127.0.0.1',
     METRICS_PORT: '0',
   });

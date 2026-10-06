@@ -6,7 +6,7 @@ import { createLogger, runApp, Secret, type Logger, type Server } from '@service
 import { loadPlatformConfig, type PlatformConfig } from '@servicerouter/core';
 import { createPostgres, createRedis, type Postgres, type Redis } from '@servicerouter/db';
 import {
-  createTestDatabase, createTestRedis, createTestSecretKeys, type TestDatabase, type TestRedis, type TestSecretKeys,
+  createTestDatabase, createTestDepositWallet, createTestRedis, createTestSecretKeys, type TestDatabase, type TestRedis, type TestSecretKeys,
 } from '@servicerouter/testing';
 
 import { createApp } from '../../src/app.js';
@@ -252,7 +252,10 @@ describe('startup (PC-1)', () => {
 
 describe('the secrets public key (S2-D4, SC-2)', () => {
   const connections = () => ({ DATABASE_URL: database.url.expose(), REDIS_URL: redis.url.expose() });
-  const listen = { HOST: '127.0.0.1', PORT: '0', METRICS_PORT: '0', INTERNAL_PORT: '0', INTERNAL_API_SECRET: 'internal-secret-0123456789abcdef-xyz' };
+  const listen = {
+    HOST: '127.0.0.1', PORT: '0', METRICS_PORT: '0', INTERNAL_PORT: '0', INTERNAL_API_SECRET: 'internal-secret-0123456789abcdef-xyz',
+    DEPOSIT_ACCOUNT_PUBLIC_KEY: createTestDepositWallet().accountPublicKey,
+  };
   const oneLine = (pem: string) => pem.trim().replaceAll('\n', '\\n');
 
   it('starts with the PEM key on one line, each newline written as \\n', async () => {
@@ -296,6 +299,7 @@ describe('the internal API secret (PA-4)', () => {
     DATABASE_URL: database.url.expose(),
     REDIS_URL: redis.url.expose(),
     SECRETS_PUBLIC_KEY: keys.publicKey,
+    DEPOSIT_ACCOUNT_PUBLIC_KEY: createTestDepositWallet().accountPublicKey,
     HOST: '127.0.0.1',
     PORT: '0',
     METRICS_PORT: '0',
@@ -315,5 +319,39 @@ describe('the internal API secret (PA-4)', () => {
     expect(lines.find(line => line['msg'] === 'Failed to start')).toMatchObject({ error: { message } });
     if (value)
       expect(JSON.stringify(lines)).not.toContain(value);
+  });
+});
+
+describe('the deposit account public key (DP-1)', () => {
+  const env = () => ({
+    ...exampleConfig,
+    DATABASE_URL: database.url.expose(),
+    REDIS_URL: redis.url.expose(),
+    SECRETS_PUBLIC_KEY: keys.publicKey,
+    INTERNAL_API_SECRET: 'internal-secret-0123456789abcdef-xyz',
+    HOST: '127.0.0.1',
+    PORT: '0',
+    METRICS_PORT: '0',
+    INTERNAL_PORT: '0',
+  });
+
+  it.each([
+    ['unset', undefined, 'DEPOSIT_ACCOUNT_PUBLIC_KEY is required while deposits are on (deposits in platform config)'],
+    ['not 128 hex characters', 'acct_xvk1notakey', 'DEPOSIT_ACCOUNT_PUBLIC_KEY: The deposit account public key must be 128 hex characters: the key, then the chain code'],
+  ])('exits with 1 when it is %s while deposits are on', async (_case, value, message) => {
+    const { logger, lines } = captureLogs();
+    const exit = vi.fn();
+
+    await runApp({ name: 'api', start: startApi, logger, exit, env: { ...env(), DEPOSIT_ACCOUNT_PUBLIC_KEY: value } });
+
+    expect(exit).toHaveBeenCalledWith(1);
+    expect(lines.find(line => line['msg'] === 'Failed to start')).toMatchObject({ error: { message } });
+  });
+
+  it('starts without it while deposits are off', async () => {
+    const off = Buffer.from(JSON.stringify({ deposits: { asset: 'cardano-usdm', enabled: false } })).toString('base64');
+    const app = await startApi({ env: { ...env(), CONFIG: off }, logger: silentLogger });
+
+    await app.close();
   });
 });

@@ -70,7 +70,11 @@ describe('loadPlatformConfig', () => {
     expect(config.routingFeeBps).toEqual(expect.any(Number));
     expect(config.payouts.minimum).toBe(10_000_000n);
     expect(config.categories.length).toBeGreaterThan(0);
-    expect(Object.keys(config.rateLimits)).toEqual(['paymentKey', 'service', 'unpaidIp', 'signup']);
+    expect(Object.keys(config.rateLimits)).toEqual(['paymentKey', 'service', 'unpaidIp', 'signup', 'topup']);
+    // Deposits (DP-1 to DP-4): a Cardano asset, its confirmations, and Blockfrost's URL for its network
+    expect(config.deposits).toMatchObject({
+      asset: { name: 'cardano-usdm' }, network: { id: 'cardano:preprod' }, confirmations: 15, blockfrostUrl: 'https://cardano-preprod.blockfrost.io/api/v0',
+    });
     expect(Object.keys(config.timeouts)).toEqual(['connectMs', 'requestMs', 'settleMs']);
     expect(config.signer.maxPerCall).toBe(1_000_000n);
     // Key prefixes and the default limits for new payment keys
@@ -169,5 +173,22 @@ describe('loadPlatformConfig', () => {
       ['/mpp/network', 'CONFIG'],
     ]);
     expect((error as ValidationError).issues.every(issue => issue.line !== undefined)).toBe(true);
+  });
+});
+
+describe('the deposits section (DP-1, DP-4, PC-2)', () => {
+  const withDeposits = (deposits: unknown) => loadPlatformConfig({
+    env: { CONFIG_PATH: examplePlatformConfigPath.pathname, CONFIG: Buffer.from(JSON.stringify({ deposits })).toString('base64') },
+  });
+
+  it('refuses an asset outside the registry, or one that isn\'t on Cardano', async () => {
+    await expect(withDeposits({ asset: 'no-such-asset' })).rejects.toThrow('Invalid platform config');
+    await expect(withDeposits({ asset: 'base-usdc' })).rejects.toMatchObject({ issues: [expect.objectContaining({ message: 'must be a Cardano asset: deposit addresses are on Cardano' })] });
+  });
+
+  it('turns deposits off with enabled: false, and keeps a custom Blockfrost URL', async () => {
+    expect((await withDeposits({ asset: 'cardano-usdm', enabled: false })).deposits).toBeUndefined();
+    expect((await withDeposits({ asset: 'cardano-usdm', blockfrostUrl: 'https://blockfrost.example.com/api/v0/' })).deposits?.blockfrostUrl)
+      .toBe('https://blockfrost.example.com/api/v0');
   });
 });
