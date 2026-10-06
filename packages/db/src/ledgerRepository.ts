@@ -10,6 +10,7 @@ import {
 import { createPaymentRepository } from './paymentRepository.js';
 import { withTransaction, type DatabaseExecutor, type DatabaseTransaction } from './postgres.js';
 import { balances, keyDailySpend, keyTotalSpend, ledgerAccounts, ledgerEntries, ledgerTransactions } from './schema/ledger.js';
+import { targetPayments } from './schema/routing.js';
 
 /** The ledger accounts' IDs (LG-1): an account's own, and the platform's. */
 export const ledgerAccountIds = {
@@ -22,6 +23,9 @@ export const ledgerAccountIds = {
   treasury: (asset: string) => `platform:treasury:${asset}`,
   // What rebalancing cost: the USD lost between two assets (TR-4, TR-6)
   conversion: 'platform:conversion',
+  // The fee on routed calls (RT-5), and what targets kept while buyers weren't charged (RT-9)
+  routingFees: 'platform:routing_fees',
+  routingLosses: 'platform:routing_losses',
 } as const;
 
 export interface LedgerOptions {
@@ -70,6 +74,11 @@ export interface Ledger {
     readonly to: { readonly asset: string; readonly amount: MicroUsd };
     readonly requestId?: string;
   }): Promise<CreditResult>;
+  /**
+   * A target kept the platform's payment, but the buyer wasn't charged (RT-9): routing losses → the
+   * target asset's treasury, once per payment.
+   */
+  routingLoss(input: { readonly paymentId: string }): Promise<CreditResult>;
   /** Ledger accounts' balances by ID. An account never used is absent. */
   balancesOf(ledgerAccountIds: readonly string[]): Promise<ReadonlyMap<string, bigint>>;
   /** Each key's spend: on the given UTC day, and in total. Keys without spend aren't in the map. */
@@ -99,6 +108,20 @@ class HoldRefused extends Error {
 const accountsOf = (accountId: string, ...types: readonly ('available' | 'held' | 'earned')[]): LedgerAccount[] =>
   types.map(type => ({ id: ledgerAccountIds[type](accountId), accountId, type, mayGoNegative: false }));
 const platformFees: LedgerAccount = { id: ledgerAccountIds.fees, accountId: undefined, type: 'fees', mayGoNegative: false };
+const routingFees: LedgerAccount = { id: ledgerAccountIds.routingFees, accountId: undefined, type: 'routing_fees', mayGoNegative: false };
+// An expense: its balance is minus what targets kept
+const routingLosses: LedgerAccount = { id: ledgerAccountIds.routingLosses, accountId: undefined, type: 'routing_losses', mayGoNegative: true };
+// Money enters and leaves the chain through it, so its balance can go either way
+const treasuryOf = (asset: string): LedgerAccount => ({ id: ledgerAccountIds.treasury(asset), accountId: undefined, type: 'treasury', mayGoNegative: true });
+
+/** The target leg of a routed payment (RT-11): the platform must have paid the target before the buyer is charged. */
+const targetLeg = async (tx: DatabaseTransaction, paymentId: string, to: 'captured' | 'settled'): Promise<{ readonly asset: string; readonly amount: bigint }> => {
+  const [target] = await tx.select({ asset: targetPayments.asset, amount: targetPayments.amount }).from(targetPayments).where(eq(targetPayments.paymentId, paymentId));
+  if (!target)
+    throw new InvalidPaymentStatusChangeError(paymentId, undefined, to);
+
+  return target;
+};
 // Money enters through it, so its balance is minus everything deposited
 const depositsClearing: LedgerAccount = { id: ledgerAccountIds.depositsClearing, accountId: undefined, type: 'deposits_clearing', mayGoNegative: true };
 
@@ -289,10 +312,30 @@ export const createLedger = ({ db, clock, ids }: LedgerOptions): Ledger => {
           return { payment: current, fee: current.fee ?? 0n, sellerAmount: current.amount - (current.fee ?? 0n) };
 
         const payment = heldCredits(paymentId, current, 'captured');
+        const now = clock.now();
+        // A routed call: the quote goes to the treasury the target was paid from, and the rest is the routing fee (RT-5)
+        if (payment.kind === 'routed') {
+          const target = await targetLeg(tx, paymentId, 'captured');
+          const fee = payment.amount - target.amount;
+          created = [routingFees, treasuryOf(target.asset)].filter(account => !known?.has(account.id));
+          if (created.length > 0)
+            await ensureAccounts(tx, created, now);
+          const transactionId = await insertTransaction(tx, 'capture', paymentId, payment.requestId, now);
+          if (!transactionId)
+            throw new Error('A capture transaction exists for a payment still held');
+          const captured = await payments.changeStatus({ paymentId, to: 'captured', fee });
+          if (await post(tx, transactionId, [
+            { ledgerAccountId: ledgerAccountIds.held(payment.buyerAccountId), amount: -payment.amount },
+            { ledgerAccountId: ledgerAccountIds.treasury(target.asset), amount: target.amount },
+            { ledgerAccountId: routingFees.id, amount: fee },
+          ], now))
+            throw new Error('The held amount is missing from the buyer\'s held balance');
+
+          return { payment: captured, fee, sellerAmount: 0n };
+        }
         if (!payment.sellerAccountId)
           throw new InvalidPaymentStatusChangeError(paymentId, payment.status, 'captured');
 
-        const now = clock.now();
         const { fee, sellerAmount } = splitFee(payment.amount, feeBps);
         created = [...accountsOf(payment.sellerAccountId, 'earned'), platformFees].filter(account => !known?.has(account.id));
         if (created.length > 0)
@@ -326,10 +369,37 @@ export const createLedger = ({ db, clock, ids }: LedgerOptions): Ledger => {
         // A second settle moves nothing (LG-3)
         if (current?.status === 'settled')
           return { payment: current, fee: current.fee ?? 0n, sellerAmount: current.amount - (current.fee ?? 0n) };
-        if (!current || (current.status !== 'verified' && current.status !== 'settling') || current.rail === 'credits' || !current.sellerAccountId)
+        if (!current || (current.status !== 'verified' && current.status !== 'settling') || current.rail === 'credits')
           throw new InvalidPaymentStatusChangeError(paymentId, current?.status, 'settled');
 
         const now = clock.now();
+        // A routed call: the buyer's asset's treasury → the target asset's, and the routing fee (RT-5)
+        if (current.kind === 'routed') {
+          const target = await targetLeg(tx, paymentId, 'settled');
+          const fee = current.amount - target.amount;
+          const inflow = treasuryOf(asset);
+          created = [routingFees, inflow, treasuryOf(target.asset)].filter(account => !known?.has(account.id));
+          if (created.length > 0)
+            await ensureAccounts(tx, created, now);
+          const transactionId = await insertTransaction(tx, 'settle', paymentId, current.requestId, now);
+          if (!transactionId)
+            throw new Error('A settle transaction exists for a payment not settled');
+          const settled = await payments.changeStatus({
+            paymentId, to: 'settled', fee, needsReview, settlementRequest: null,
+            ...(transactionHash === undefined ? {} : { transactionHash }),
+            ...(receipt === undefined ? {} : { receipt }),
+          });
+          await post(tx, transactionId, [
+            { ledgerAccountId: inflow.id, amount: -current.amount },
+            { ledgerAccountId: ledgerAccountIds.treasury(target.asset), amount: target.amount },
+            { ledgerAccountId: routingFees.id, amount: fee },
+          ], now);
+
+          return { payment: settled, fee, sellerAmount: 0n };
+        }
+        if (!current.sellerAccountId)
+          throw new InvalidPaymentStatusChangeError(paymentId, current.status, 'settled');
+
         const { fee, sellerAmount } = splitFee(current.amount, feeBps);
         // Money arrives on chain, outside the ledger, so the treasury's balance is minus what it took in
         const treasury: LedgerAccount = { id: ledgerAccountIds.treasury(asset), accountId: undefined, type: 'treasury', mayGoNegative: true };
@@ -361,6 +431,28 @@ export const createLedger = ({ db, clock, ids }: LedgerOptions): Ledger => {
 
       return result;
     },
+
+    routingLoss: ({ paymentId }) => withTransaction(db, async tx => {
+      const now = clock.now();
+      const [target] = await tx.select().from(targetPayments).where(eq(targetPayments.paymentId, paymentId)).for('update');
+      if (!target)
+        throw new Error(`No target payment for ${paymentId}`);
+      await ensureAccounts(tx, [routingLosses, treasuryOf(target.asset)], now);
+      const transactionId = await insertTransaction(tx, 'routing_loss', paymentId, undefined, now);
+      if (!transactionId) {
+        const [existing] = await tx.select({ id: ledgerTransactions.id, createdAt: ledgerTransactions.createdAt }).from(ledgerTransactions)
+          .where(and(eq(ledgerTransactions.operation, 'routing_loss'), eq(ledgerTransactions.reference, paymentId)));
+
+        return { transactionId: existing!.id, createdAt: existing!.createdAt, replayed: true };
+      }
+      await post(tx, transactionId, [
+        { ledgerAccountId: routingLosses.id, amount: -target.amount },
+        { ledgerAccountId: ledgerAccountIds.treasury(target.asset), amount: target.amount },
+      ], now);
+      await tx.update(targetPayments).set({ lossBooked: true, updatedAt: now }).where(eq(targetPayments.paymentId, paymentId));
+
+      return { transactionId, createdAt: now, replayed: false };
+    }),
 
     payout: ({ payoutId, sellerAccountId, amount, asset }) => withTransaction(db, async tx => {
       if (amount <= 0n)

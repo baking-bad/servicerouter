@@ -39,3 +39,5 @@ export type {
 } from './payoutRepository.js';
 export { createTreasuryRepository } from './treasuryRepository.js';
 export type { TreasuryRepository, TreasuryTransferRecord } from './treasuryRepository.js';
+export { createRoutingRepository, maxRoutedEndpointsPerHost } from './routingRepository.js';
+export type { EndpointRegistration, NewSignature, NewTargetPayment, RoutingRepository, TargetPaymentRecord } from './routingRepository.js';
