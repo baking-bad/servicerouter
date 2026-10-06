@@ -18,6 +18,8 @@ export const startApi = async ({ env, logger }: AppContext): Promise<RunningApp>
     port: readPort(env, 'PORT', defaultPort),
     metricsPort: readPort(env, 'METRICS_PORT', defaultMetricsPort),
   };
+  // Traefik's addresses or CIDR ranges, comma-separated, so the signup limit sees the client IP (PA-5)
+  const trustProxy = env['TRUST_PROXY']?.trim() || undefined;
   const databaseUrl = readSecret('DATABASE_URL', env);
   const redisUrl = readSecret('REDIS_URL', env);
 
@@ -26,7 +28,7 @@ export const startApi = async ({ env, logger }: AppContext): Promise<RunningApp>
   const closeConnections = async () => {
     await Promise.all([postgres.close(), redis.close()]);
   };
-  const server = createApp({ config, logger, postgres, redis });
+  const server = createApp({ config, logger, postgres, redis, trustProxy });
   try {
     await server.listen(listen);
   }

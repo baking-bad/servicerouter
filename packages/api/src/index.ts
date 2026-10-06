@@ -2,3 +2,7 @@ export { createApp } from './app.js';
 export type { ApiDependencies } from './app.js';
 export { errorStatuses } from './errors.js';
 export { defaultMetricsPort, defaultPort, startApi } from './start.js';
+export { authenticatedAccount, createMasterKeyAuth } from './accounts/auth.js';
+export type { AuthenticatedAccount, MasterKeyAuthOptions } from './accounts/auth.js';
+export { createAccountService } from './accounts/service.js';
+export type { AccountService, AccountServiceOptions, CreatedAccount } from './accounts/service.js';
