@@ -18,9 +18,16 @@ export const errorStatuses = {
   forbidden: 403,
   not_found: 404,
   secret_origin_mismatch: 409,
+  // An operator's credit reference reused for another account or amount (LG-3, PA-4)
+  idempotency_conflict: 409,
 } as const satisfies ErrorStatusTable;
 
 /** A request the route can't take: the message says what's wrong, never quoting a value it carried. */
 export class InvalidRequestError extends ServiceRouterError {
   readonly code = 'invalid_request';
+}
+
+/** No such resource for the caller, such as another account's payment key. */
+export class NotFoundError extends ServiceRouterError {
+  readonly code = 'not_found';
 }

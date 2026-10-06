@@ -1,6 +1,5 @@
-import {
-  withTimeout, type Clock, type IdGenerator, type Logger, type OutboundHttp, type RequestId, type Secret, type ServiceId,
-  type ValidationIssue,
+import type {
+  Clock, IdGenerator, Logger, OutboundHttp, RequestId, Secret, ServiceId, ValidationIssue,
 } from '@servicerouter/common';
 import {
   changesPayouts, checkAndCompileParsedServiceConfig, fetchOpenApiDocuments, findMovedSecrets, getSecretOrigins, getSecretUses,
@@ -13,10 +12,8 @@ import {
   createAuditLogRepository, createServiceRepository, createServiceSecretRepository, withTransaction, type Database, type DatabaseTransaction,
 } from '@servicerouter/db';
 
+import { createPublisher } from '../invalidation.js';
 import type { SubmitBody } from './body.js';
-
-// How long a write waits to publish its invalidation event before it gives up and logs (SR-7)
-const publishTimeoutMs = 2_000;
 
 export interface ServiceRegistryOptions {
   readonly db: Database;
@@ -125,15 +122,9 @@ export const createServiceRegistry = ({
     details,
   });
 
-  // Best effort, like the bus itself: the change is committed, and caches still expire on their own (SR-7, SC-7)
-  const publish = async (serviceId: string): Promise<void> => {
-    try {
-      await withTimeout(() => invalidation.publish({ kind: 'service', id: serviceId }), { timeoutMs: publishTimeoutMs });
-    }
-    catch (error) {
-      logger.error({ error, serviceId }, 'Failed to publish the service invalidation');
-    }
-  };
+  // After the commit (SR-7, SC-7)
+  const publishEvent = createPublisher({ invalidation, logger });
+  const publish = (serviceId: string): Promise<void> => publishEvent({ kind: 'service', id: serviceId });
 
   // Pass 1, the service ID, unused secrets, then sealing (SC-9)
   const parseAndSeal = (serviceId: string, body: SubmitBody): { parsed: ParsedServiceConfig; sealed: readonly SealedForWrite[] } => {

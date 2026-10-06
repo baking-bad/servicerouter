@@ -1,7 +1,7 @@
 export { createApp } from './app.js';
-export type { ApiDependencies } from './app.js';
+export type { ApiAddresses, ApiDependencies, ApiListenOptions, ApiServer } from './app.js';
 export { errorStatuses } from './errors.js';
-export { defaultMetricsPort, defaultPort, startApi } from './start.js';
+export { defaultInternalPort, defaultMetricsPort, defaultPort, startApi } from './start.js';
 export { authenticatedAccount, createMasterKeyAuth } from './accounts/auth.js';
 export type { AuthenticatedAccount, MasterKeyAuthOptions } from './accounts/auth.js';
 export { createAccountService } from './accounts/service.js';
@@ -9,3 +9,7 @@ export type { AccountService, AccountServiceOptions, CreatedAccount } from './ac
 export { createServiceRegistry } from './services/service.js';
 export type { ServiceRegistry, ServiceRegistryOptions, SubmitResult } from './services/service.js';
 export { readSecretsSealer, secretsPublicKeyVariable } from './services/keys.js';
+export { createPaymentKeyService } from './keys/service.js';
+export type { PaymentKeyService, PaymentKeyServiceOptions, PaymentKeyView } from './keys/service.js';
+export { internalCallerHeader, internalSecretHeader } from './internal/routes.js';
+export { internalSecretVariable, readInternalSecret } from './internal/secret.js';

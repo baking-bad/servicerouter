@@ -1,7 +1,10 @@
+import type { AddressInfo } from 'node:net';
+
 import type { FastifyInstance } from 'fastify';
 
 import {
-  createServer, OutboundHttp, randomIdGenerator, systemClock, type Clock, type IdGenerator, type Logger, type Server,
+  createServer, OutboundHttp, randomIdGenerator, systemClock, type Clock, type IdGenerator, type ListenOptions, type Logger, type Secret,
+  type Server, type ServerAddresses,
 } from '@servicerouter/common';
 import {
   assumeHostsVerified, cryptoRandomSource, openApiFetchLimits, type ApiKeyRepository, type InvalidationBus, type OwnershipStatus,
@@ -16,6 +19,10 @@ import { registerAccountRoutes } from './accounts/routes.js';
 import { createAccountService } from './accounts/service.js';
 import { createSignupLimit } from './accounts/signupLimit.js';
 import { errorStatuses } from './errors.js';
+import { registerInternalRoutes } from './internal/routes.js';
+import { registerKeyRoutes } from './keys/routes.js';
+import { createPaymentKeyService } from './keys/service.js';
+import { registerLedgerRoutes } from './ledger/routes.js';
 import { registerServiceRoutes } from './services/routes.js';
 import { createServiceRegistry } from './services/service.js';
 
@@ -43,8 +50,25 @@ export interface ApiDependencies {
   readonly openApiHttp?: Pick<OutboundHttp, 'request'>;
   // Whether a service's hosts are verified (SR-8). Default: the step 2 adapter, every host verified (S2-D1).
   readonly ownership?: OwnershipStatus;
-  // Where activations and secret writes are announced (SR-7, SC-7). Default: the Redis channel.
+  // Where activations, secret writes, and key changes are announced (SR-7, SC-7, AK-9). Default: the Redis channel.
   readonly invalidation?: Pick<InvalidationBus, 'publish'>;
+  // INTERNAL_API_SECRET, the shared secret of the internal API (PA-4). Without it, every internal call is refused.
+  readonly internalSecret?: Secret;
+}
+
+export interface ApiListenOptions extends ListenOptions {
+  // The internal listener's port (PA-4). Without it, the internal API doesn't listen.
+  readonly internalPort?: number;
+}
+
+export interface ApiAddresses extends ServerAddresses {
+  readonly internalPort: number | undefined;
+}
+
+/** The public listener and the metrics listener, plus the internal listener, which Traefik never routes to (PA-4). */
+export interface ApiServer extends Server {
+  readonly internal: FastifyInstance;
+  listen(options: ApiListenOptions): Promise<ApiAddresses>;
 }
 
 // A POST with `Content-Type: application/json` and no body has no body, rather than invalid JSON
@@ -76,7 +100,8 @@ export const createApp = ({
   openApiHttp,
   ownership = assumeHostsVerified,
   invalidation = createRedisInvalidationBus({ redis, logger }),
-}: ApiDependencies): Server => {
+  internalSecret,
+}: ApiDependencies): ApiServer => {
   const server = createServer({
     logger,
     errorStatuses,
@@ -108,6 +133,47 @@ export const createApp = ({
     registry: createServiceRegistry({ db: postgres.db, platform: config, clock, ids, logger, sealer, http, ownership, invalidation }),
     authenticate,
   });
+  registerKeyRoutes(app, {
+    keys: createPaymentKeyService({
+      db: postgres.db,
+      clock,
+      ids,
+      random,
+      keyPrefixes: config.keyPrefixes,
+      defaultDailyBudget: config.paymentKeyDefaults.dailyBudget,
+      invalidation,
+      logger,
+    }),
+    authenticate,
+    clock,
+  });
+  registerLedgerRoutes(app, { db: postgres.db, clock, ids, authenticate });
 
-  return server;
+  // The internal API on a listener of its own, with the same request IDs, logs, and error envelope
+  const internal = createServer({ logger, errorStatuses, requestIds });
+  registerInternalRoutes(internal.app, { db: postgres.db, clock, ids, secret: internalSecret });
+
+  return {
+    ...server,
+    internal: internal.app,
+    listen: async options => {
+      const addresses = await server.listen(options);
+      if (options.internalPort === undefined)
+        return { ...addresses, internalPort: undefined };
+
+      try {
+        await internal.app.listen({ host: options.host, port: options.internalPort });
+      }
+      catch (error) {
+        await server.close();
+        throw error;
+      }
+
+      return { ...addresses, internalPort: (internal.app.server.address() as AddressInfo).port };
+    },
+    close: async () => {
+      await internal.app.close();
+      await server.close();
+    },
+  };
 };
