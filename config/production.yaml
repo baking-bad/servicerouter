@@ -11,8 +11,8 @@ logger:
 
 urls:                           # The temporary domain (P-7)
   website: https://servicerouter.agents.bakingbad.dev
-  api: https://api.servicerouter.agents.bakingbad.dev
-  pay: https://pay.servicerouter.agents.bakingbad.dev
+  api: https://api-servicerouter.agents.bakingbad.dev
+  pay: https://pay-servicerouter.agents.bakingbad.dev
 
 ownHosts: []
 
