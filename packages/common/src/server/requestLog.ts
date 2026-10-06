@@ -56,4 +56,16 @@ export class RequestLogController extends LogController {
   override writeHeadError(error: Error, request: FastifyRequest): void {
     request.log.warn({ error }, 'Failed to write the error response');
   }
+
+  override streamError(error: Error & { readonly code?: unknown }, request: FastifyRequest): void {
+    if (this.isLogDisabled(request))
+      return;
+
+    // A streamed body failed after the status went out, such as a proxied upstream breaking off. Fastify's
+    // own line would carry the whole reply; this one carries the error only.
+    if (error.code === 'ERR_STREAM_PREMATURE_CLOSE')
+      request.log.info('The response stream closed early');
+    else
+      request.log.warn({ error }, 'The response stream failed after its headers were sent');
+  }
 }
