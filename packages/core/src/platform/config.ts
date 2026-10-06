@@ -29,6 +29,8 @@ export interface Facilitator {
   readonly url: string;
   readonly networks: readonly NetworkId[];
   readonly auth: CdpAuth | undefined;
+  // A disabled facilitator isn't checked at startup or for readiness, and its networks aren't offered
+  readonly enabled: boolean;
 }
 
 export interface Category {

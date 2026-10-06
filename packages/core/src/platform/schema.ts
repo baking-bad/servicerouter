@@ -3,7 +3,7 @@ import type { SchemaObject } from 'ajv';
 import { assetNamePattern, networkIdPattern } from '@servicerouter/common';
 
 import {
-  array, constant, email, host, httpsOrigin, httpUrl, integer, object, oneOfValues, text, usdAmount,
+  array, boolean, constant, email, host, httpsOrigin, httpUrl, integer, object, oneOfValues, text, usdAmount,
 } from '../validation/schema.js';
 
 const name: SchemaObject = {
@@ -61,6 +61,7 @@ export const platformConfigSchema: SchemaObject = {
       url: httpUrl,
       networks: array(networkId, { minItems: 1, uniqueItems: true }),
       auth: object({ type: constant('cdp'), apiKeyId: secretName, apiKeySecret: secretName }, ['type', 'apiKeyId', 'apiKeySecret']),
+      enabled: boolean,
     }, ['name', 'url', 'networks']), { minItems: 1 }),
     mpp: object({ network: networkId, recipient: addressText }, ['network', 'recipient']),
     payouts: object({ assets: array(assetName, { minItems: 1, uniqueItems: true }), minimum: usdAmount }, ['assets']),

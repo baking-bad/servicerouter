@@ -181,6 +181,7 @@ export const buildPlatformConfig = (document: PlatformConfigDocument, locator?: 
       url: facilitator.url,
       networks: facilitator.networks.map(id => network(id).id),
       auth: facilitator.auth ? { ...facilitator.auth } : undefined,
+      enabled: facilitator.enabled ?? true,
     })),
     mpp: { network: network(document.mpp.network), recipient: document.mpp.recipient },
     payouts: {

@@ -39,6 +39,8 @@ export interface FacilitatorDocument {
   readonly url: string;
   readonly networks: readonly string[];
   readonly auth?: CdpAuthDocument;
+  // Default: true. A disabled facilitator isn't checked, and its networks aren't offered.
+  readonly enabled?: boolean;
 }
 
 export interface MppDocument {
