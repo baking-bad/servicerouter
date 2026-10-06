@@ -37,9 +37,17 @@ const firstAddress = AddressEras.toBech32(new EnterpriseAddress.EnterpriseAddres
   paymentCredential: KeyHash.fromVKey(VKey.fromBytes(Bip32PublicKey.publicKey(first))),
 }));
 
+const words = entropyToMnemonic(entropy, wordlist).split(' ');
+// Numbered, four to a line: a copied line can't run two words together unnoticed
+const numbered = Array.from({ length: words.length / 4 }, (_, row) =>
+  words.slice(row * 4, row * 4 + 4).map((word, column) => `${String(row * 4 + column + 1).padStart(2)}. ${word.padEnd(10)}`).join(' ').trimEnd());
+
 process.stdout.write([
-  '# Mnemonic: keep it offline. Whoever holds it spends every deposit',
-  entropyToMnemonic(entropy, wordlist),
+  `# Mnemonic, ${words.length} words: keep it offline. Whoever holds it spends every deposit`,
+  words.join(' '),
+  '',
+  '# The same words, numbered, to write down and check',
+  ...numbered,
   '',
   '# DEPOSIT_ACCOUNT_PUBLIC_KEY: for the Platform API. Public, but keep it with the stack\'s settings',
   Bip32PublicKey.toHex(accountPublicKey),
