@@ -20,11 +20,18 @@ export const errorStatuses = {
   secret_origin_mismatch: 409,
   // An operator's credit reference reused for another account or amount (LG-3, PA-4)
   idempotency_conflict: 409,
+  // A payout run that isn't waiting for approval (PO-6)
+  conflict: 409,
 } as const satisfies ErrorStatusTable;
 
 /** A request the route can't take: the message says what's wrong, never quoting a value it carried. */
 export class InvalidRequestError extends ServiceRouterError {
   readonly code = 'invalid_request';
+}
+
+/** The resource isn't in a state that allows the request, such as a payout run already approved. */
+export class ConflictError extends ServiceRouterError {
+  readonly code = 'conflict';
 }
 
 /** No such resource for the caller, such as another account's payment key. */

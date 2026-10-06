@@ -191,7 +191,9 @@ export const createApp = ({
 
   // The internal API on a listener of its own, with the same request IDs, logs, and error envelope
   const internal = createServer({ logger, errorStatuses, requestIds });
-  registerInternalRoutes(internal.app, { db: postgres.db, clock, ids, secret: internalSecret, verifier, environment: config.environment });
+  registerInternalRoutes(internal.app, {
+    db: postgres.db, clock, ids, secret: internalSecret, verifier, environment: config.environment, assetNames: new Set(config.assets.map(asset => asset.name)),
+  });
 
   return {
     ...server,
