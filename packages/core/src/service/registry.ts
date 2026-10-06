@@ -19,6 +19,11 @@ export interface ServiceRecord {
   readonly updatedAt: Date;
 }
 
+/** A service in its owner's list (WB-8): the record, and the active revision's title. */
+export interface OwnedService extends ServiceRecord {
+  readonly title: string | undefined;
+}
+
 /** The config as the seller sent it, for the seller to read back (SR-4). */
 export interface SubmittedConfig {
   // `application/yaml` or `application/json`
@@ -116,6 +121,8 @@ export interface ServiceRepository {
   listRevisions(id: string): Promise<readonly ServiceRevisionSummary[]>;
   /** The highest revision number, or 0. */
   latestRevisionNumber(id: string): Promise<number>;
+  /** An account's services, newest first, with their active revision's title (WB-8). */
+  listByOwner(ownerAccountId: string): Promise<readonly OwnedService[]>;
   /**
    * Loads the active revision and the sealed secrets in one consistent snapshot, for the proxy's cache
    * (T07). Undefined for an unknown service. See `ServingService`: open each secret with the origin of

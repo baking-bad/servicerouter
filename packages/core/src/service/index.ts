@@ -26,7 +26,7 @@ export { assumeHostsVerified, getUpstreamHosts, stateForActivation } from './own
 export type { OwnershipStatus, OwnershipStatusInput } from './ownership.js';
 export { canonicalJson, changesPayouts, isSameRevision } from './registry.js';
 export type {
-  NewService, NewServiceRevision, ServiceRecord, ServiceRepository, ServiceRevision, ServiceRevisionSummary, ServiceSecretRepository,
+  NewService, NewServiceRevision, OwnedService, ServiceRecord, ServiceRepository, ServiceRevision, ServiceRevisionSummary, ServiceSecretRepository,
   ServingService, StoredSecret, StoredSecretInfo, SubmittedConfig,
 } from './registry.js';
 export {
