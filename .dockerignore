@@ -1,0 +1,10 @@
+*
+!package.json
+!package-lock.json
+!tsconfig.json
+!tsconfig.base.json
+!packages/
+!packages/**
+packages/*/dist/
+packages/*/node_modules/
+**/.DS_Store
