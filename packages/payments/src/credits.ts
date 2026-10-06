@@ -68,8 +68,9 @@ export const createCreditsRail = ({ keys, ledger, clock, keyPrefixes, signupUrl,
 
   return {
     name: 'credits',
+    settlesBeforeResponse: false,
     detect: createCreditsDetector(keyPrefixes),
-    challenge: quote => ({
+    challenge: async quote => ({
       body: {
         credits: {
           price: formatUsd(quote.priceMicroUsd),

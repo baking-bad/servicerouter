@@ -18,9 +18,14 @@ export interface CreditsCredential {
   readonly key: CreditsKey;
 }
 
-/** `PAYMENT-SIGNATURE` (x402 v2) or `X-PAYMENT` (v1). The rail reads the payload when it lands (step 5). */
+/**
+ * `PAYMENT-SIGNATURE` (x402 v2) or `X-PAYMENT` (v1), as sent: base64 of the payment payload. It
+ * authorizes a transfer, so it stays in a Secret until the rail decodes it.
+ */
 export interface X402Credential {
   readonly rail: 'x402';
+  readonly version: 1 | 2;
+  readonly header: Secret;
 }
 
 /** `Authorization: Payment …`. The rail reads it when it lands (step 7). */
@@ -62,9 +67,15 @@ export const createCreditsDetector = (keyPrefixes: KeyPrefixes): CredentialDetec
   }
 };
 
-/** x402: `PAYMENT-SIGNATURE` or `X-PAYMENT`. Both at once are still one x402 payment. */
-export const detectX402: CredentialDetector = headers =>
-  present(headers['payment-signature']) || present(headers['x-payment']) ? { rail: 'x402' } : undefined;
+/** x402: `PAYMENT-SIGNATURE` (v2), else `X-PAYMENT` (v1). Both at once are still one x402 payment. */
+export const detectX402: CredentialDetector = headers => {
+  const v2 = single(headers['payment-signature']);
+  if (present(v2))
+    return { rail: 'x402', version: 2, header: Secret.from(v2!.trim()) };
+  const v1 = single(headers['x-payment']);
+
+  return present(v1) ? { rail: 'x402', version: 1, header: Secret.from(v1!.trim()) } : undefined;
+};
 
 /** MPP: `Authorization: Payment …`. */
 export const detectMpp: CredentialDetector = headers =>

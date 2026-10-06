@@ -64,10 +64,15 @@ export interface Authorization {
 /** A payment rail (PR-1 to PR-12). Credits from step 4, x402 from step 5, MPP from step 7. */
 export interface PaymentRail {
   readonly name: RailName;
+  /**
+   * Whether the money must move before any upstream byte reaches the buyer (PX-12): x402 settles,
+   * then sends the buffered response. Otherwise the response streams and `finalize` runs after it.
+   */
+  readonly settlesBeforeResponse: boolean;
   /** This rail's credential in the request, or undefined. */
   detect(headers: RequestHeaders): Credential | undefined;
   /** Its part of the combined `402`, or undefined when it can't take this quote. */
-  challenge(quote: Quote): ChallengePart | undefined;
+  challenge(quote: Quote): Promise<ChallengePart | undefined>;
   /** Checks the credential against the quote and reserves the money. Throws a coded error when refused. */
   authorize(credential: Credential, quote: Quote): Promise<Authorization>;
   /** Takes the money after a billable response. Running it twice moves money once. */

@@ -25,6 +25,23 @@ const refusalMessages: Readonly<Record<HoldRefusal, string>> = {
   key_allowance_exceeded: 'The payment key\'s allowance doesn\'t cover the price',
 };
 
+/** The x402 payment isn't one this call takes, or the facilitator rejected it (PR-5). Nothing moved. */
+export class PaymentInvalidError extends ServiceRouterError {
+  readonly code = 'payment_invalid';
+}
+
+/**
+ * The settlement failed, or its outcome is unknown, so the response isn't sent (PR-12). A failure
+ * charges nothing. An unknown outcome is repeated by a worker, which flags it for review if it settles.
+ */
+export class SettlementFailedError extends ServiceRouterError {
+  readonly code = 'settlement_failed';
+
+  constructor() {
+    super('The payment couldn\'t be settled, so the response wasn\'t sent. Retry the request.');
+  }
+}
+
 /** The Ledger refused the hold: the balance, the daily budget, or the allowance (LG-6, AK-7). */
 export class HoldRefusedError extends ServiceRouterError {
   readonly code: HoldRefusal;

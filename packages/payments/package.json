@@ -20,6 +20,13 @@
   },
   "dependencies": {
     "@servicerouter/common": "0.1.0",
-    "@servicerouter/core": "0.1.0"
+    "@servicerouter/core": "0.1.0",
+    "@x402/core": "2.28.0",
+    "@x402/evm": "2.28.0",
+    "@x402/svm": "2.28.0"
+  },
+  "devDependencies": {
+    "@servicerouter/testing": "0.1.0",
+    "viem": "2.57.3"
   }
 }

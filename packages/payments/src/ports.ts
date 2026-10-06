@@ -1,6 +1,7 @@
 import type { MicroUsd } from '@servicerouter/common';
 import type {
-  BillingDecision, CaptureResult, HoldInput, HoldResult, InitialPaymentStatus, NewPayment, Payment, PaymentKey, PaymentStatus,
+  BillingDecision, CaptureResult, HoldInput, HoldResult, InitialPaymentStatus, JsonObject, NewPayment, Payment, PaymentKey, PaymentStatus,
+  SettleInput,
 } from '@servicerouter/core';
 
 // The rails' ports (PR-11): what they need from the Ledger and from Accounts and keys. The adapters
@@ -45,8 +46,18 @@ export interface PaymentRecorder {
     readonly transactionHash?: string;
     readonly receipt?: string;
     readonly needsReview?: boolean;
+    // The settle request to repeat while `settling` (PR-12, WK-6). Null clears it.
+    readonly settlementRequest?: JsonObject | null;
   }): Promise<Payment>;
   find(paymentId: string): Promise<Payment | undefined>;
+}
+
+/**
+ * Port: books a settled on-chain payment (x402, MPP) with its change to `settled`, in one database
+ * transaction keyed by the payment ID (LG-3, LG-4, PR-10). A second settle moves nothing.
+ */
+export interface SettlementLedger {
+  settle(input: SettleInput): Promise<CaptureResult>;
 }
 
 /** Port: payment keys by hash, with their limits (PR-4). Revoked keys aren't found; expiry is the rail's check. */

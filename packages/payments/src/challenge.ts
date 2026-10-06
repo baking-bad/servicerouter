@@ -13,11 +13,10 @@ export interface PaymentRequired {
  * Assembles the combined `402` from each rail's `challenge()`, in rail order: their headers, and
  * their fields of one JSON body. Never cached (PR-2). The agent retries with exactly one of them.
  */
-export const buildPaymentRequired = (rails: readonly Pick<PaymentRail, 'challenge'>[], quote: Quote): PaymentRequired => {
+export const buildPaymentRequired = async (rails: readonly Pick<PaymentRail, 'challenge'>[], quote: Quote): Promise<PaymentRequired> => {
   const headers: Record<string, string> = {};
   const body: Record<string, unknown> = {};
-  for (const rail of rails) {
-    const part = rail.challenge(quote);
+  for (const part of await Promise.all(rails.map(rail => rail.challenge(quote)))) {
     Object.assign(headers, part?.headers);
     Object.assign(body, part?.body);
   }
