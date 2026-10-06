@@ -37,7 +37,7 @@ describe('buildPlatformConfig', () => {
     const config = buildPlatformConfig(document());
 
     expect(config.environment).toBe('staging');
-    expect(config.assets.map(asset => asset.name)).toEqual(['base-usdc', 'solana-usdc', 'cardano-usdm']);
+    expect(config.assets.map(asset => asset.name)).toEqual(['base-usdc', 'solana-usdc', 'cardano-usdm', 'tempo-pathusd']);
     expect(findAsset(config, 'cardano-usdm')).toMatchObject({ decimals: 6, minPrice: 50_000n, network: { id: 'cardano:preprod', testnet: true } });
     expect(findFacilitator(config, 'eip155:84532')?.auth).toEqual({ type: 'cdp', apiKeyId: 'CDP_API_KEY_ID', apiKeySecret: 'CDP_API_KEY_SECRET' });
     expect(findFacilitator(config, 'cardano:preprod')).toMatchObject({ name: 'cardano', auth: undefined });
@@ -132,8 +132,49 @@ describe('buildPlatformConfig', () => {
     expect(issues(() => buildPlatformConfig(value))).toEqual([
       { path: '/assets/0/address', message: 'is not a valid token address on Base Sepolia' },
       { path: '/assets/2/payTo', message: 'is not a valid address on Cardano Preprod' },
-      { path: '/assets/3/name', message: 'duplicate asset name "base-usdc"' },
-      { path: '/assets/3/address', message: 'another asset already uses this token on the same network' },
+      { path: '/assets/4/name', message: 'duplicate asset name "base-usdc"' },
+      { path: '/assets/4/address', message: 'another asset already uses this token on the same network' },
+    ]);
+  });
+
+  it('offers MPP by default, can turn it off, and takes an optional RPC URL (PC-2)', () => {
+    const config = buildPlatformConfig(document());
+    const disabled = buildPlatformConfig(document({ mpp: { enabled: false, rpcUrl: 'https://tempo-rpc.example.com/v1' } }));
+
+    expect(config.mpp).toMatchObject({ network: { id: 'eip155:42431', chain: 'tempo' }, enabled: true, rpcUrl: undefined });
+    expect(disabled.mpp).toMatchObject({ enabled: false, rpcUrl: 'https://tempo-rpc.example.com/v1' });
+    expect(issues(() => assertValidPlatformConfigDocument(patch(loadExamplePlatformDocument(), { mpp: { rpcUrl: 'http://rpc.moderato.tempo.xyz' } }))))
+      .toEqual([{ path: '/mpp/rpcUrl', message: 'must be an HTTPS URL without credentials or a fragment' }]);
+    expect(issues(() => assertValidPlatformConfigDocument(patch(loadExamplePlatformDocument(), { mpp: { rpcUrl: 'https://user:key@rpc.example.com' } }))).map(issue => issue.path))
+      .toEqual(['/mpp/rpcUrl']);
+    expect(issues(() => assertValidPlatformConfigDocument(patch(loadExamplePlatformDocument(), { mpp: { enabled: 'no' } }))).map(issue => issue.path))
+      .toEqual(['/mpp/enabled']);
+  });
+
+  it('takes a Tempo asset for MPP without a facilitator: pathUSD on Moderato, paid to the MPP recipient (PC-6, PR-9)', () => {
+    const config = buildPlatformConfig(document());
+
+    expect(findAsset(config, 'tempo-pathusd')).toMatchObject({
+      network: { id: 'eip155:42431', chain: 'tempo', testnet: true }, address: '0x20c0000000000000000000000000000000000000', decimals: 6, minPrice: 0n,
+      payTo: config.mpp.recipient,
+    });
+    expect(findFacilitator(config, 'eip155:42431')).toBeUndefined();
+  });
+
+  it('rejects a Tempo asset on another Tempo network, or paid to another address (PC-6)', () => {
+    const value = loadExamplePlatformDocument();
+    const assets = value['assets'] as Record<string, unknown>[];
+    const tempo = assets[3]!;
+    assets[3] = { ...tempo, payTo: '0x3333333333333333333333333333333333333333' };
+    // Upper case is the same EVM address
+    assets.push({ ...tempo, name: 'tempo-pathusd-upper', payTo: (tempo['payTo'] as string).toUpperCase().replace('0X', '0x'), address: '0x20C0000000000000000000000000000000000001' });
+    assets.push({ ...tempo, name: 'tempo-mainnet', network: 'eip155:4217' });
+    assertValidPlatformConfigDocument(value);
+
+    expect(issues(() => buildPlatformConfig(value))).toEqual([
+      { path: '/assets/5/network', message: 'Tempo is a mainnet; staging uses testnets' },
+      { path: '/assets/3/payTo', message: 'must be the MPP recipient (mpp.recipient): Tempo assets are paid through MPP' },
+      { path: '/assets/5/network', message: 'is a Tempo network other than mpp.network (eip155:42431). Tempo assets serve MPP, on its network only' },
     ]);
   });
 

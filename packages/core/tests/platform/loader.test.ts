@@ -158,12 +158,14 @@ describe('loadPlatformConfig', () => {
   it('reports every cross-field problem at once, with positions (PC-1, PC-5, PC-7)', async () => {
     const broken = example
       .replace('master: srm_test_', 'master: sr_test_')
-      .replace('network: eip155:42431', 'network: eip155:4217');
+      .replace(/(\nmpp:[^\n]*\n {2}network: )eip155:42431/, '$1eip155:4217');
     const error = await rejection(load({ CONFIG: base64(broken) }));
 
     expect(error).toBeInstanceOf(ValidationError);
     expect((error as ValidationError).issues.map(issue => [issue.path, issue.source])).toEqual([
       ['/keyPrefixes/payment', 'CONFIG'],
+      // The Tempo asset stays on Moderato, so it is no longer on mpp.network (PC-6)
+      ['/assets/3/network', 'CONFIG'],
       ['/mpp/network', 'CONFIG'],
     ]);
     expect((error as ValidationError).issues.every(issue => issue.line !== undefined)).toBe(true);

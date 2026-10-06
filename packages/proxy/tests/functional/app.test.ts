@@ -7,8 +7,8 @@ import { createLogger, runApp, Secret, type Logger, type Server } from '@service
 import { loadPlatformConfig, type PlatformConfig } from '@servicerouter/core';
 import { createPostgres, createRedis, type Postgres, type Redis } from '@servicerouter/db';
 import {
-  createTestDatabase, createTestRedis, createTestSecretKeys, facilitatorAnswers, startFakeFacilitator, type TestDatabase, type TestRedis,
-  type TestSecretKeys,
+  createTestCertificate, createTestDatabase, createTestRedis, createTestSecretKeys, facilitatorAnswers, startFakeFacilitator, startFakeTempoRpc,
+  trustTestCertificate, type TestDatabase, type TestRedis, type TestSecretKeys,
 } from '@servicerouter/testing';
 
 import { createApp } from '../../src/app.js';
@@ -20,8 +20,10 @@ const facilitatorsAt = (url: string, enabled: boolean) => [
   { name: 'cdp', url, networks: ['eip155:84532', 'solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1'], enabled, auth: { type: 'cdp', apiKeyId: 'CDP_API_KEY_ID', apiKeySecret: 'CDP_API_KEY_SECRET' } },
   { name: 'cardano', url: 'http://cardano-facilitator:4022', networks: ['cardano:preprod'], enabled: false },
 ];
-// Facilitators off, so startup needs no CDP key. x402 at startup has its own tests (PR-6).
-const withoutFacilitators = { ...exampleConfig, CONFIG: configOf({ facilitators: facilitatorsAt('https://api.cdp.coinbase.com/platform/v2/x402', false) }) };
+// MPP off, so startup needs no MPP key and calls no Tempo RPC. MPP at startup has its own tests (PR-9).
+const mppOff = { enabled: false };
+// Facilitators and MPP off, so startup needs no CDP key. x402 at startup has its own tests (PR-6).
+const withoutFacilitators = { ...exampleConfig, CONFIG: configOf({ facilitators: facilitatorsAt('https://api.cdp.coinbase.com/platform/v2/x402', false), mpp: mppOff }) };
 const silentLogger = createLogger({ level: 'silent' });
 const buyerHeaderKey = 'buyer-header-key-0123456789abcdef-xyz';
 
@@ -360,7 +362,7 @@ describe('the facilitators at startup (PR-6, PX-17)', () => {
   };
   const env = (url: string) => ({
     CONFIG_PATH: 'config/example.yaml',
-    CONFIG: configOf({ facilitators: facilitatorsAt(url, true) }),
+    CONFIG: configOf({ facilitators: facilitatorsAt(url, true), mpp: mppOff }),
     DATABASE_URL: database.url.expose(),
     REDIS_URL: redis.url.expose(),
     SECRETS_PRIVATE_KEYS: keys.privateKey.trim().replaceAll('\n', '\\n'),
@@ -409,5 +411,88 @@ describe('the facilitators at startup (PR-6, PX-17)', () => {
 
     expect(exit).toHaveBeenCalledWith(1);
     expect(lines.find(line => line['msg'] === 'Failed to start')).toMatchObject({ error: { message: 'Secret CDP_API_KEY_SECRET is not set' } });
+  });
+});
+
+describe('MPP at startup (PR-9, PX-17)', () => {
+  const mppSecretKey = 'mpp-secret-key-for-the-startup-test!';
+  // The Tempo RPC must be HTTPS (PC-6): the fake serves a test certificate, which fetch trusts meanwhile
+  const certificate = createTestCertificate({ hosts: ['127.0.0.1'] });
+  const env = (mpp: Record<string, unknown>) => ({
+    CONFIG_PATH: 'config/example.yaml',
+    CONFIG: configOf({ facilitators: facilitatorsAt('https://api.cdp.coinbase.com/platform/v2/x402', false), mpp }),
+    DATABASE_URL: database.url.expose(),
+    REDIS_URL: redis.url.expose(),
+    SECRETS_PRIVATE_KEYS: keys.privateKey.trim().replaceAll('\n', '\\n'),
+    BUYER_HEADER_KEY: buyerHeaderKey,
+    MPP_SECRET_KEY: mppSecretKey,
+    HOST: '127.0.0.1',
+    PORT: '0',
+    METRICS_PORT: '0',
+  });
+  const withRpc = async (work: (rpc: Awaited<ReturnType<typeof startFakeTempoRpc>>) => Promise<void>) => {
+    const rpc = await startFakeTempoRpc({ tls: certificate });
+    const untrust = trustTestCertificate(certificate);
+    try {
+      await work(rpc);
+    }
+    finally {
+      await untrust();
+      await rpc.close();
+    }
+  };
+  const failure = async (environment: Record<string, string | undefined>) => {
+    const { logger, lines } = captureLogs();
+    const exit = vi.fn();
+
+    await runApp({ name: 'proxy', start: startProxy, logger, exit, env: environment });
+
+    expect(exit).toHaveBeenCalledWith(1);
+    return { message: (lines.find(line => line['msg'] === 'Failed to start')?.['error'] as { message?: string } | undefined)?.message, lines };
+  };
+
+  it('starts once the Tempo RPC answers with mpp.network\'s chain ID', async () => {
+    await withRpc(async rpc => {
+      const app = await startProxy({ env: env({ rpcUrl: rpc.url }), logger: silentLogger });
+      await app.close();
+
+      expect(rpc.calls.map(call => call.method)).toEqual(['eth_chainId']);
+    });
+  });
+
+  it.each([
+    ['unset', undefined, 'Secret MPP_SECRET_KEY is not set'],
+    ['shorter than 32 bytes', 'too-short', 'MPP_SECRET_KEY must be at least 32 bytes. Generate one with: openssl rand -base64 32'],
+  ])('exits with 1 when MPP_SECRET_KEY is %s, without logging it', async (_case, value, message) => {
+    const result = await failure({ ...env({ rpcUrl: 'https://127.0.0.1:1' }), MPP_SECRET_KEY: value });
+
+    expect(result.message).toBe(message);
+    if (value)
+      expect(JSON.stringify(result.lines)).not.toContain(value);
+  });
+
+  it('exits with 1 when the Tempo RPC answers another chain ID than mpp.network', async () => {
+    await withRpc(async rpc => {
+      rpc.answerChainId(4_217);
+
+      const result = await failure(env({ rpcUrl: rpc.url }));
+
+      expect(result.message).toBe('The Tempo RPC answers chain ID 4217, not 42431 (mpp.network)');
+    });
+  });
+
+  it('exits with 1 when the Tempo RPC doesn\'t answer', async () => {
+    const result = await failure(env({ rpcUrl: 'https://127.0.0.1:1' }));
+
+    expect(result.message).toBeDefined();
+  });
+
+  it('starts with mpp.enabled: false without MPP_SECRET_KEY, and never calls the Tempo RPC', async () => {
+    await withRpc(async rpc => {
+      const app = await startProxy({ env: { ...env({ enabled: false, rpcUrl: rpc.url }), MPP_SECRET_KEY: undefined }, logger: silentLogger });
+      await app.close();
+
+      expect(rpc.calls).toEqual([]);
+    });
   });
 });

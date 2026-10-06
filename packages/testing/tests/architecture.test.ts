@@ -17,6 +17,10 @@ const allowedImports: Readonly<Record<string, readonly string[]>> = {
   signer: ['common'],
 };
 
+// PR-11: payments knows no HTTP framework or database. Adapters, such as one from Fastify to Fetch for
+// mppx's HTTP handlers, live in the apps.
+const frameworkImport = /^(?:fastify|@fastify\/|drizzle-orm|pg$|redis$|mppx\/(?:hono|express|nextjs|elysia|proxy)$)/;
+
 // CK-5: domain code takes the Clock and IdGenerator ports. Crypto randomness such as randomBytes is allowed.
 const domainPackages = ['core', 'payments'];
 const bannedCalls: readonly (readonly [RegExp, string])[] = [
@@ -180,6 +184,8 @@ const findViolations = (files: readonly SourceFile[]): readonly Violation[] => {
           add(index, `imports ${specifier}: only test code may import @servicerouter/testing`);
         else if (internal !== undefined && internal !== packageName && allowedImports[packageName] && !allowedImports[packageName].includes(internal))
           add(index, `imports ${specifier}: ${packageName} may import ${allowedImports[packageName].map(name => `@servicerouter/${name}`).join(', ') || 'no internal package'}`);
+        else if (packageName === 'payments' && frameworkImport.test(specifier))
+          add(index, `imports ${specifier}: payments knows no HTTP framework or database (PR-11)`);
         else if (specifier.startsWith('.')) {
           const target = path.posix.join(path.posix.dirname(rest.join('/')), specifier);
           if (target.startsWith('..'))
@@ -248,6 +254,18 @@ describe('architecture rules', () => {
       ['signer', 'signer/src/a.ts', 'const core = await import(\'@servicerouter/core\');'],
     ])('a forbidden import in %s', (_name, filePath, text) => {
       expect(check(filePath, text)).toEqual([expect.stringMatching(/ imports @servicerouter\/\w+: /)]);
+    });
+
+    it.each([
+      ['Fastify', 'import type { FastifyRequest } from \'fastify\';'],
+      ['Drizzle', 'import { eq } from \'drizzle-orm\';'],
+      ['an mppx framework adapter', 'import { Mppx } from \'mppx/hono\';'],
+    ])('%s in payments (PR-11)', (_name, text) => {
+      expect(check('payments/src/mpp/a.ts', text)).toEqual([expect.stringMatching(/^payments\/src\/mpp\/a\.ts:1 imports .+: payments knows no HTTP framework or database \(PR-11\)$/)]);
+    });
+
+    it('nothing in payments\' use of mppx\'s core and Tempo modules (PR-11)', () => {
+      expect(check('payments/src/mpp/a.ts', 'import { Challenge } from \'mppx\';\nimport { Mppx, tempo } from \'mppx/server\';\nimport { Transaction } from \'viem/tempo\';')).toEqual([]);
     });
 
     it('an import of @servicerouter/testing from any src', () => {

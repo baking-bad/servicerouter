@@ -5,7 +5,9 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { createLogger, randomIdGenerator } from '@servicerouter/common';
 import { loadPlatformConfig, type JsonObject, type PlatformConfig } from '@servicerouter/core';
 import { createAccountRepository, createLedger, createPaymentRepository, createServiceRepository } from '@servicerouter/db';
-import { createAssetLookup, createFacilitatorLookup, createFacilitators } from '@servicerouter/payments';
+import {
+  createAssetLookup, createFacilitatorLookup, createFacilitators, toMppSettlementRequest, type MppSettlementCheck, type MppSettlementStatus,
+} from '@servicerouter/payments';
 import { createFakeClock, createTestDatabase, facilitatorAnswers, startFakeFacilitator, type FakeFacilitator, type TestDatabase } from '@servicerouter/testing';
 
 import { createSettlementFollowUp, SettlementFollowUpError } from '../../src/settlementFollowUp.js';
@@ -129,5 +131,106 @@ describe('settlement follow-up (WK-6, PR-12)', () => {
     expect((error as SettlementFollowUpError).result).toMatchObject({ skipped: 1 });
     expect(await statusOf(orphan)).toBe('settling');
     await payments().changeStatus({ paymentId: orphan, to: 'failed' });
+  });
+});
+
+describe('settlement follow-up for MPP (WK-6, PR-9)', () => {
+  const tempo = 'eip155:42431';
+  const pathUsd = '0x20c0000000000000000000000000000000000000';
+
+  /** A settling MPP payment whose broadcast outcome was unknown, as the proxy leaves it: a hash and no receipt. */
+  const settlingMpp = async (): Promise<{ readonly id: string; readonly hash: `0x${string}` }> => {
+    counter += 1;
+    const seller = `acc_seller_${counter}`;
+    await createAccountRepository({ db: database.db }).create({ id: seller, email: undefined, createdAt: clock.now() });
+    await createServiceRepository({ db: database.db }).createIfMissing({ id: `svc-${counter}` as never, ownerAccountId: seller, state: 'live', createdAt: clock.now() });
+    const id = `pay_mpp_settling_${counter}`;
+    const hash = `0x${counter.toString(16).padStart(64, '0')}` as const;
+    await payments().create({
+      id, requestId: undefined, kind: 'service', rail: 'mpp', buyerAccountId: undefined, keyId: undefined, sellerAccountId: seller,
+      serviceId: `svc-${counter}`, routeKey: 'getWeather', targetHost: undefined, targetPath: undefined, network: tempo, asset: pathUsd,
+      atomicAmount: 1_000n, amount: 1_000n, status: 'verified', transactionHash: hash,
+    });
+    await payments().changeStatus({
+      paymentId: id,
+      to: 'settling',
+      transactionHash: hash,
+      settlementRequest: toMppSettlementRequest({
+        rail: 'mpp', transactionHash: hash, validBefore: 1791291000, currency: pathUsd, sender: '0x1111111111111111111111111111111111111111',
+        recipient: '0x2222222222222222222222222222222222222222', amount: '1000',
+      }),
+    });
+
+    return { id, hash };
+  };
+
+  // The Tempo RPC's answers, by transaction hash. Every call is recorded: the follow-up only reads.
+  const scriptedCheck = (answers: Map<string, MppSettlementStatus | Error>) => {
+    const checked: string[] = [];
+    const check: MppSettlementCheck = async request => {
+      checked.push(request.transactionHash);
+      const answer = answers.get(request.transactionHash) ?? { status: 'pending' };
+      if (answer instanceof Error)
+        throw answer;
+
+      return answer;
+    };
+
+    return { check, checked };
+  };
+
+  const followUpMpp = (mppCheck?: MppSettlementCheck) => createSettlementFollowUp({
+    payments: payments(),
+    ledger: createLedger({ db: database.db, clock, ids: randomIdGenerator }),
+    facilitatorFor: () => undefined,
+    assetName: createAssetLookup(config),
+    ...(mppCheck ? { mppCheck } : {}),
+    feeBps: config.feeBps,
+    logger: createLogger({ level: 'silent' }),
+  })();
+
+  it('reads the transaction\'s receipt, books a settled one once, flagged for review, and repeats nothing', async () => {
+    const paid = await settlingMpp();
+    const { check, checked } = scriptedCheck(new Map([[paid.hash, { status: 'settled', receipt: 'eyJyZWNlaXB0Ijp0cnVlfQ' }]]));
+
+    const result = await followUpMpp(check);
+
+    expect(result).toMatchObject({ settled: 1 });
+    expect(checked).toEqual([paid.hash]);
+    expect(await payments().find(paid.id)).toMatchObject({
+      status: 'settled', needsReview: true, transactionHash: paid.hash, receipt: 'eyJyZWNlaXB0Ijp0cnVlfQ', fee: 25n,
+    });
+    expect(await followUpMpp(check)).toEqual({ settled: 0, failed: 0, pending: 0, unknown: 0, skipped: 0 });
+  });
+
+  it('marks a reverted, transferless, or expired transaction failed, and leaves one within its window for the next run', async () => {
+    const reverted = await settlingMpp();
+    const transferless = await settlingMpp();
+    const expired = await settlingMpp();
+    const waiting = await settlingMpp();
+    const { check } = scriptedCheck(new Map<string, MppSettlementStatus>([
+      [reverted.hash, { status: 'failed', reason: 'reverted' }],
+      [transferless.hash, { status: 'failed', reason: 'no_transfer' }],
+      [expired.hash, { status: 'failed', reason: 'expired' }],
+    ]));
+
+    const result = await followUpMpp(check);
+
+    expect(result).toMatchObject({ failed: 3, pending: 1, settled: 0 });
+    expect(await Promise.all([reverted, transferless, expired, waiting].map(payment => statusOf(payment.id)))).toEqual(['failed', 'failed', 'failed', 'settling']);
+    await followUpMpp(scriptedCheck(new Map([[waiting.hash, { status: 'failed', reason: 'expired' }]])).check);
+    expect(await statusOf(waiting.id)).toBe('failed');
+  });
+
+  it('fails the run when the Tempo RPC doesn\'t answer, or isn\'t set, keeping the payment settling', async () => {
+    const waiting = await settlingMpp();
+
+    const unanswered = await followUpMpp(scriptedCheck(new Map([[waiting.hash, new Error('The Tempo RPC timed out')]])).check).catch((thrown: unknown) => thrown);
+    const unset = await followUpMpp().catch((thrown: unknown) => thrown);
+
+    expect((unanswered as SettlementFollowUpError).result).toMatchObject({ unknown: 1 });
+    expect((unset as SettlementFollowUpError).result).toMatchObject({ skipped: 1 });
+    expect(await statusOf(waiting.id)).toBe('settling');
+    await followUpMpp(scriptedCheck(new Map([[waiting.hash, { status: 'failed', reason: 'expired' }]])).check);
   });
 });

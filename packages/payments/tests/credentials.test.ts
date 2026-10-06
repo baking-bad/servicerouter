@@ -37,8 +37,11 @@ describe('credential detection (PR-1)', () => {
     expect(JSON.stringify(credential)).not.toContain(expected.value);
   });
 
-  it('finds Authorization: Payment (MPP)', () => {
-    expect(detectCredential(detectors, { authorization: 'Payment id="abc", method="tempo"' })).toEqual({ rail: 'mpp' });
+  it('finds Authorization: Payment (MPP), keeping the header in a Secret (PR-9)', () => {
+    const credential = detectCredential(detectors, { authorization: 'Payment eyJjaGFsbGVuZ2UiOnt9fQ ' });
+
+    expect(credential?.rail === 'mpp' && credential.header.expose()).toBe('Payment eyJjaGFsbGVuZ2UiOnt9fQ');
+    expect(JSON.stringify(credential)).not.toContain('eyJjaGFsbGVuZ2UiOnt9fQ');
   });
 
   it.each([

@@ -2,7 +2,10 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { createLogger, runApp } from '@servicerouter/common';
 import { loadPlatformConfig } from '@servicerouter/core';
-import { cardanoAnswers, createTestDatabase, startFakeFacilitator, type TestDatabase } from '@servicerouter/testing';
+import {
+  cardanoAnswers, createTestCertificate, createTestDatabase, startFakeFacilitator, startFakeTempoRpc, trustTestCertificate, type FakeTempoRpc,
+  type TestDatabase,
+} from '@servicerouter/testing';
 
 import { createApp, type WorkersServer } from '../../src/app.js';
 import { startWorkers } from '../../src/start.js';
@@ -79,6 +82,8 @@ describe('the facilitators at startup (PR-6, step 6)', () => {
         { name: 'cdp', url: 'https://api.cdp.coinbase.com/platform/v2/x402', networks: ['eip155:84532', 'solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1'], enabled: false },
         { name: 'cardano', url, networks: ['cardano:preprod'] },
       ],
+      // MPP's Tempo RPC at startup has its own tests (PR-9)
+      mpp: { enabled: false },
     })).toString('base64'),
     DATABASE_URL: database.url.expose(),
     HOST: '127.0.0.1',
@@ -117,5 +122,66 @@ describe('the facilitators at startup (PR-6, step 6)', () => {
     finally {
       await facilitator.close();
     }
+  });
+});
+
+describe('the Tempo RPC at startup (PR-9, WK-6)', () => {
+  // The follow-up reads MPP receipts there. It must be HTTPS (PC-6): the fake serves a test certificate.
+  const certificate = createTestCertificate({ hosts: ['127.0.0.1'] });
+  const envFor = (mpp: Record<string, unknown>) => ({
+    CONFIG_PATH: 'config/example.yaml',
+    CONFIG: Buffer.from(JSON.stringify({
+      facilitators: [
+        { name: 'cdp', url: 'https://api.cdp.coinbase.com/platform/v2/x402', networks: ['eip155:84532', 'solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1'], enabled: false },
+        { name: 'cardano', url: 'http://cardano-facilitator:4022', networks: ['cardano:preprod'], enabled: false },
+      ],
+      mpp,
+    })).toString('base64'),
+    DATABASE_URL: database.url.expose(),
+    HOST: '127.0.0.1',
+    METRICS_PORT: '0',
+  });
+  const withRpc = async (work: (rpc: FakeTempoRpc) => Promise<void>) => {
+    const rpc = await startFakeTempoRpc({ tls: certificate });
+    const untrust = trustTestCertificate(certificate);
+    try {
+      await work(rpc);
+    }
+    finally {
+      await untrust();
+      await rpc.close();
+    }
+  };
+
+  it('starts once the Tempo RPC answers with mpp.network\'s chain ID', async () => {
+    await withRpc(async rpc => {
+      const app = await startWorkers({ env: envFor({ rpcUrl: rpc.url }), logger: createLogger({ level: 'silent' }) });
+      await app.close();
+
+      expect(rpc.calls.map(call => call.method)).toEqual(['eth_chainId']);
+    });
+  });
+
+  it('exits with 1 when the Tempo RPC answers another chain ID', async () => {
+    await withRpc(async rpc => {
+      rpc.answerChainId(4_217);
+      const lines: Record<string, unknown>[] = [];
+      const logger = createLogger({}, { write: (line: string) => lines.push(JSON.parse(line) as Record<string, unknown>) });
+      const exit = vi.fn();
+
+      await runApp({ name: 'workers', start: startWorkers, logger, exit, env: envFor({ rpcUrl: rpc.url }) });
+
+      expect(exit).toHaveBeenCalledWith(1);
+      expect(JSON.stringify(lines.find(line => line['msg'] === 'Failed to start'))).toContain('The Tempo RPC answers chain ID 4217, not 42431 (mpp.network)');
+    });
+  });
+
+  it('never calls the Tempo RPC with mpp.enabled: false', async () => {
+    await withRpc(async rpc => {
+      const app = await startWorkers({ env: envFor({ enabled: false, rpcUrl: rpc.url }), logger: createLogger({ level: 'silent' }) });
+      await app.close();
+
+      expect(rpc.calls).toEqual([]);
+    });
   });
 });
