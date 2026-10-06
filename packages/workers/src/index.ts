@@ -9,3 +9,4 @@ export type { SettlementFollowUpOptions, SettlementFollowUpResult } from './sett
 export type { Job, JobRunResult, Scheduler, SchedulerOptions } from './scheduler.js';
 export { createOwnershipRecheck, OwnershipRecheckFailedError, ownershipRecheckBatchSize, ownershipRecheckJobIntervalMs, ownershipRecheckJobName, ownershipRecheckLockId } from './ownershipRecheck.js';
 export { createDepositWatcherJob, DepositWatcherFailedError, depositWatcherBatchSize, depositWatcherIntervalMs, depositWatcherJobName, depositWatcherLockId } from './depositWatcher.js';
+export { catalogIndexIntervalMs, catalogIndexJobName, createCatalogIndex, createServiceStats, serviceStatsIntervalMs, serviceStatsJobName } from './catalog.js';

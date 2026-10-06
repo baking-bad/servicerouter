@@ -7,11 +7,15 @@ import {
   type BlockfrostClient, type InvalidationBus, type PlatformConfig, type RandomSource,
 } from '@servicerouter/core';
 import {
-  createDepositRepository, createLedger, createOwnershipStore, createPaymentRepository, createPayoutRepository, createRedisInvalidationBus,
-  depositAddresses, type Postgres, type Redis,
+  createCatalogRepository, createDepositRepository, createLedger, createOwnershipStore, createPaymentRepository, createPayoutRepository,
+  createRedisInvalidationBus, depositAddresses, type Postgres, type Redis,
 } from '@servicerouter/db';
 import { createAssetLookup, createFacilitatorLookup, type Facilitator, type MppSettlementCheck } from '@servicerouter/payments';
 
+import {
+  catalogIndexIntervalMs, catalogIndexJobName, catalogIndexLockId, createCatalogIndex, createServiceStats, serviceStatsIntervalMs, serviceStatsJobName,
+  serviceStatsLockId,
+} from './catalog.js';
 import { createDepositWatcherJob, depositWatcherIntervalMs, depositWatcherJobName, depositWatcherLockId } from './depositWatcher.js';
 import { createHoldExpiry, holdExpiryIntervalMs, holdExpiryLockId, holdTtlMs } from './holdExpiry.js';
 import { createOwnershipRecheck, ownershipRecheckJobIntervalMs, ownershipRecheckJobName, ownershipRecheckLockId } from './ownershipRecheck.js';
@@ -143,6 +147,9 @@ export const createApp = ({
       };
     })()
     : undefined;
+  const catalog = createCatalogRepository({ db: postgres.db, clock });
+  const catalogIndex = createCatalogIndex({ db: postgres.db, catalog, config, logger });
+  const serviceStats = createServiceStats({ catalog, clock });
   const scheduler = createScheduler({
     jobs: [{
       name: 'hold_expiry',
@@ -164,6 +171,20 @@ export const createApp = ({
       intervalMs: ownershipRecheckJobIntervalMs,
       run: async () => {
         await ownershipRecheck();
+      },
+    }, {
+      name: catalogIndexJobName,
+      lockId: catalogIndexLockId,
+      intervalMs: catalogIndexIntervalMs,
+      run: async () => {
+        await catalogIndex();
+      },
+    }, {
+      name: serviceStatsJobName,
+      lockId: serviceStatsLockId,
+      intervalMs: serviceStatsIntervalMs,
+      run: async () => {
+        await serviceStats();
       },
     }, ...depositWatcher ? [{
       name: depositWatcherJobName,
