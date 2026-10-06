@@ -17,4 +17,8 @@ export type { FakeUpstream, FakeUpstreamOptions, RecordedRequest, UpstreamHandle
 export { createTestSecretKeys } from './secretKeys.js';
 export type { TestSecretKeys } from './secretKeys.js';
 export { nownodesCategory, nownodesHosts, nownodesSecretNames, nownodesServiceConfig } from './fixtures.js';
+export { facilitatorAnswers, fakeTransaction, payerOf, startFakeFacilitator } from './facilitator.js';
+export type { FacilitatorAnswer, FacilitatorPath, FacilitatorRequest, FacilitatorScript, FakeFacilitator, FakeFacilitatorOptions } from './facilitator.js';
+export { encodeBase58, startFakeSolanaRpc, tokenProgramAddress } from './solanaRpc.js';
+export type { FakeSolanaRpc } from './solanaRpc.js';
 export { fixtureInstant, fixtureTime, fixtureDay, fixtureRun } from './dateFixtures.js';
