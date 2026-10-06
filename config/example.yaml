@@ -51,6 +51,12 @@ assets:                         # PC-6. Decimals from the x402 SDKs' defaults
     peg: usd
     minPrice: "0.05"            # Optional. Default: "0". Cardano network fees make tiny payments uneconomic
     payTo: addr_test1vqg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zygxrcya6  # Placeholder
+  - name: tempo-pathusd           # MPP only (PR-9): no facilitator, and x402 doesn't offer it
+    network: eip155:42431         # Tempo Moderato. Must be mpp.network
+    address: "0x20c0000000000000000000000000000000000000"
+    decimals: 6
+    peg: usd
+    payTo: "0x2222222222222222222222222222222222222222"          # Must be mpp.recipient
 
 facilitators:                   # PR-6. One facilitator per network
   - name: cdp
@@ -65,9 +71,11 @@ facilitators:                   # PR-6. One facilitator per network
     networks: [cardano:preprod]
     enabled: true               # Optional. Default: true. A disabled one isn't checked, and its networks aren't offered
 
-mpp:                            # PR-9. Tempo charge recipient
+mpp:                            # PR-9. The Tempo charge: pull mode, charged after a billable answer
   network: eip155:42431         # Tempo Moderato
   recipient: "0x2222222222222222222222222222222222222222"          # Placeholder
+  enabled: true                 # Optional. Default: true. A disabled MPP isn't offered, and its RPC isn't checked
+  # rpcUrl: https://rpc.moderato.tempo.xyz   # Optional. HTTPS, without credentials. Default: the chain's public RPC
 
 payouts:
   assets: [cardano-usdm]        # PO-2: USDM on Cardano only in v1
