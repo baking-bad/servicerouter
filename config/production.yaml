@@ -39,7 +39,7 @@ assets:                         # PC-6. Addresses and decimals from the SDKs: @x
     decimals: 6
     peg: usd
     minPrice: "0.05"            # PR-3: Cardano's network fee makes smaller calls uneconomic
-    payTo: addr1q97yhwkk46wcdz24za643jeme4n9gu7m6v74vkqacy66v3cee07nknkut5k5xw4w7t5aj78a26aw0xw2cn2jcmj9mcxsugtysy       # Our Cardano address that receives USDM
+    payTo: "addr1q97yhwkk46wcdz24za643jeme4n9gu7m6v74vkqacy66v3cee07nknkut5k5xw4w7t5aj78a26aw0xw2cn2jcmj9mcxsugtysy"       # Our Cardano address that receives USDM
   - name: tempo-usdce           # P-3: USDC.e only. MPP only (PR-9)
     network: eip155:4217        # Tempo
     address: "0x20C000000000000000000000b9537d11c60E8b50"
