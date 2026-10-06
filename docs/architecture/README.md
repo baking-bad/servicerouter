@@ -327,7 +327,7 @@ Build one step at a time. Don't start a step before the previous one is done.
 ### Step 6. x402 on Cardano
 
 - **Build:** the [Cardano facilitator](cardano-facilitator.md) service in the stack, the Cardano entry in `accepts`.
-- **Done when:** in functional tests, a USDM payment signed with `@x402/cardano` gets `200` through the fake facilitator, and every facilitator answer shape is handled ([CF-6](cardano-facilitator.md)). In staging, a real USDM payment on `cardano:preprod` settles through the facilitator service. A repeated settle never submits twice.
+- **Done when:** in functional tests, a USDM payment signed with `@x402/cardano` gets `200` through the fake facilitator, and every facilitator answer shape is handled ([CF-6](cardano-facilitator.md)). A real USDM payment on `cardano:mainnet` settles through the facilitator service, with CF-8's checks done ([AR18](#8-open-questions)). A repeated settle never submits twice.
 
 ### Step 7. MPP
 
@@ -395,12 +395,12 @@ The implementing agent uses these defaults until the product owner answers. Keep
 | AR9 | What prefixes do keys use? | Master keys: `srm_live_…`, and `srm_test_…` in staging. Payment keys: `sr_live_…`, and `sr_test_…` in staging. Set in platform config ([PC-7](platform-config.md)). |
 | AR10 | Does an operator approve mainnet payouts? | Yes, every run. |
 | AR11 | Which stack does the website use? | **Answered (product owner, 2026-10-06T19:50:00+08:00):** a frontend framework, built separately, with its own image ([section 1.3](#13-deployables)). Which framework is decided before step 9, the first web work. The website also gets a console for people, signed in with a master key ([WB-8](website-and-link-checker.md)). |
-| AR12 | How many Cardano confirmations make a payment settled? | `0`: block inclusion. The facilitator's default is `1`. Measure latency on preprod before changing it. |
+| AR12 | How many Cardano confirmations make a payment settled? | `0`: block inclusion. The facilitator's default is `1`. Measure latency on mainnet, in step 6's live check, before changing it. |
 | AR13 | Do we pay routed targets on Cardano too? | No. Base, Solana, and Tempo. |
 | AR14 | Where does the catalog list routed endpoints? | A filter on `/discover`, labeled "Unverified". |
 | AR15 | Do we route to targets that also need their own API key? | Yes, when the key is in a custom header, such as `X-Api-Key`. A key in `Authorization` can't pass: it clashes with payment keys and MPP. |
 | AR16 | Do we pay targets with Circle Gateway nanopayments? | Not in v1. We skip those options. |
 | AR17 | A path with an ID, such as `/v1/tx/<hash>`, registers a new endpoint per ID. Do we cap them? | Up to 1,000 routed endpoints per host. Beyond that, log and don't register. |
-| AR18 | When is Cardano enabled on mainnet? | After the readiness checks in [CF-8](cardano-facilitator.md) pass, with the product owner's approval. |
+| AR18 | When is Cardano enabled on mainnet? | **Answered (product owner, 2026-10-06T19:50:00+08:00):** from step 6, since the MVP runs on mainnet only. CF-8's checks are step 6's live check, and the owner signs off on its result. |
 | AR19 | How do we send email? | skip it |
 | AR20 | At what load is PX-19's 50 ms checked? | **Answered (product owner, MVP):** 300 paid requests per second per proxy replica, sent at a fixed rate. One replica handled about 700 paid calls per second on a laptop in step 4. Past a replica's capacity, add replicas. |

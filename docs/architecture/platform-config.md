@@ -28,7 +28,7 @@ Everything about a deployment that isn't a seller config or a secret.
   - the SMTP relay: host, port, sender address, and credentials by name ([AR19](README.md#8-open-questions)).
 - **PC-3** Secrets appear by name only. Their values come from the stack's environment.
 - **PC-4** Read-only at runtime. A change ships as a deploy.
-- **PC-5** Staging and production differ only in this file and in secrets: testnets, key prefixes, hosts.
+- **PC-5** Staging and production differ only in this file and in secrets: testnets, key prefixes, hosts. The MVP deploys production only, on mainnets ([README section 6](README.md#6-deployment)). `config/example.yaml` is the testnet-shaped config for tests.
 - **PC-6** The asset registry has one entry per accepted asset: name, network (CAIP-2), asset address, decimals, USD peg, minimum price, `payTo`. At launch:
 
 | Name | Network | Asset |
@@ -41,7 +41,7 @@ Everything about a deployment that isn't a seller config or a secret.
   - Staging uses the testnet equivalents: Base Sepolia, Solana devnet, Cardano preprod.
   - Pegged stablecoins convert 1:1 to USD. Volatile assets such as ADA aren't supported: they need a price feed.
   - The minimum price keeps costly options out of cheap calls. On Cardano, the buyer pays about 0.17 ADA in network fees per transaction, which is more than a $0.001 call.
-  - **Tempo assets** serve MPP ([PR-9](payment-rails.md)): USD stablecoins on the `mpp.network`, such as pathUSD on Tempo Moderato in staging. They need no facilitator, their `payTo` is the MPP recipient, and x402 doesn't offer them.
+  - **Tempo assets** serve MPP ([PR-9](payment-rails.md)): USD stablecoins on the `mpp.network`, such as USDC.e on Tempo mainnet in production, and pathUSD on Tempo Moderato in the test config. They need no facilitator, their `payTo` is the MPP recipient, and x402 doesn't offer them.
   - `mpp.enabled` (default true) turns MPP off, like a facilitator's `enabled`. `mpp.rpcUrl` (optional, default the chain's public RPC) is the Tempo RPC the proxy and workers use. It holds no credential.
 
 - **PC-7** Key prefixes, one per kind of key ([Accounts and keys](accounts-and-keys.md)):

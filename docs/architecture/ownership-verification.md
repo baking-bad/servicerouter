@@ -45,7 +45,6 @@ The seller adds nothing to the service config. The tokens, the verification stat
 - **OV-6** `POST /v1/services/{id}/verify` checks at once. A daily job re-checks every host of every live or suspended service, and every waiting payout confirmation, spread over the day.
 - **OV-7** A notice to the seller is a status field and a log line. From step 9, it's also an email when the account has a confirmed email ([AK-13](accounts-and-keys.md)).
 - **OV-8** The same parser serves payment routing's opt-out check ([RT-2](payment-routing.md)).
-- **OV-9** Staging only: an internal action marks a host verified, for demos with sellers who haven't published the file yet. Production config can't enable it.
 - **OV-10** Payout confirmation. A stolen master key must not redirect earnings. An activation that changes `payouts` waits for the host owner ([SR-13](service-registry.md)):
   1. The submit or rollback response returns a confirmation token, `sr-confirm=<random>`, bound to the service and the new `payouts`.
   2. The seller adds the token to `verification` in the file on every upstream host.

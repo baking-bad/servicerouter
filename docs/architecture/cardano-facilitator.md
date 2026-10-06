@@ -44,7 +44,7 @@ This is the image's "light" deployment profile: Postgres plus the facilitator, w
 |---|---|---|
 | `BLOCKFROST_PROJECT_ID` | From the stack's secrets | Chain access. |
 | `BLOCKFROST_BASE_URL` | Hosted Blockfrost for the network | Default for the selected network. |
-| `CARDANO_NETWORK` | `preprod` in staging, `mainnet` in production | Network selection. |
+| `CARDANO_NETWORK` | `mainnet` (the MVP has no staging). `preprod` in a staging stack | Network selection. |
 | `POSTGRES_ADMIN_PASSWORD` | From the stack's secrets | The image's default, `postgres`, is for development only. |
 | `x402.networks[].id` | `cardano:preprod` or `cardano:mainnet` | One entry per network. |
 | `x402.settle.accept-mempool` | `false` | Mempool presence is not payment. Always `false`. |
@@ -73,7 +73,7 @@ x402:
 
 - **CF-1** Run the image as the two services above. Pin the image tag. Upgrade it on purpose, never by pulling `latest`.
 - **CF-2** Keep it on the internal network. The image has no authentication and no rate limiting, so only the proxy may reach it. If it ever needs to be reached from outside that network, put an authenticated, rate-limited TLS ingress in front of it first.
-- **CF-3** Staging runs `cardano:preprod`. Production runs `cardano:mainnet` only after [CF-8](#requirements) passes.
+- **CF-3** Staging runs `cardano:preprod`. Production runs `cardano:mainnet` only after [CF-8](#requirements) passes. The MVP runs mainnet only: CF-8's checks are step 6's live check ([AR18](README.md#8-open-questions)).
 - **CF-4** Keep `x402.settle.accept-mempool=false` in every deployment.
 - **CF-5** The confirmation policy comes from us, not from the facilitator's config. The x402 rail puts `extra.confirmationPolicy.l1Confirmations` in our Cardano `accepts` entry ([AR12](README.md#8-open-questions)). `0` means block inclusion. `1..20` means that many blocks on top. `-1` is an operator opt-in for accepting before inclusion. We don't use it. Cardano makes a block about every 20 seconds, so settlement takes tens of seconds.
 - **CF-6** The x402 rail handles every answer shape ([PR-12](payment-rails.md)):
@@ -99,4 +99,4 @@ x402:
   The image's authors haven't run it on mainnet yet. This check is ours to do.
 - **CF-9** Health and metrics: a Docker health check on `/actuator/health`. Prometheus scrapes `/actuator/prometheus`, with the `prometheus-job` and `prometheus-port` labels. The proxy's readiness includes the facilitator's `GET /supported` ([PR-6](payment-rails.md)).
 - **CF-10** One replica is enough for v1. Scaling out means more instances on the same database.
-- **CF-11** Tests: functional tests use the fake x402 facilitator from `packages/testing`, scripted with every answer shape in CF-6. The real image is exercised in staging on `cardano:preprod`.
+- **CF-11** Tests: functional tests use the fake x402 facilitator from `packages/testing`, scripted with every answer shape in CF-6. The real image is exercised on `cardano:mainnet` in step 6's live check, with a small real payment.
