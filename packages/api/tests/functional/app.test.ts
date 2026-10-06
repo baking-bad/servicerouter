@@ -252,7 +252,7 @@ describe('startup (PC-1)', () => {
 
 describe('the secrets public key (S2-D4, SC-2)', () => {
   const connections = () => ({ DATABASE_URL: database.url.expose(), REDIS_URL: redis.url.expose() });
-  const listen = { HOST: '127.0.0.1', PORT: '0', METRICS_PORT: '0' };
+  const listen = { HOST: '127.0.0.1', PORT: '0', METRICS_PORT: '0', INTERNAL_PORT: '0', INTERNAL_API_SECRET: 'internal-secret-0123456789abcdef-xyz' };
   const oneLine = (pem: string) => pem.trim().replaceAll('\n', '\\n');
 
   it('starts with the PEM key on one line, each newline written as \\n', async () => {
@@ -287,5 +287,33 @@ describe('the secrets public key (S2-D4, SC-2)', () => {
       error: { message: 'SECRETS_PUBLIC_KEY can\'t seal secrets: The sealer takes the public key only, and this is a private key. Generate a pair with node scripts/secrets-keygen.mjs' },
     });
     expect(JSON.stringify(lines)).not.toContain(keys.privateKey.split('\n')[1]);
+  });
+});
+
+describe('the internal API secret (PA-4)', () => {
+  const env = () => ({
+    ...exampleConfig,
+    DATABASE_URL: database.url.expose(),
+    REDIS_URL: redis.url.expose(),
+    SECRETS_PUBLIC_KEY: keys.publicKey,
+    HOST: '127.0.0.1',
+    PORT: '0',
+    METRICS_PORT: '0',
+    INTERNAL_PORT: '0',
+  });
+
+  it.each([
+    ['unset', undefined, 'Secret INTERNAL_API_SECRET is not set'],
+    ['shorter than 32 characters', 'too-short', 'INTERNAL_API_SECRET must be at least 32 characters'],
+  ])('exits with 1 when it is %s, without logging it', async (_case, value, message) => {
+    const { logger, lines } = captureLogs();
+    const exit = vi.fn();
+
+    await runApp({ name: 'api', start: startApi, logger, exit, env: { ...env(), INTERNAL_API_SECRET: value } });
+
+    expect(exit).toHaveBeenCalledWith(1);
+    expect(lines.find(line => line['msg'] === 'Failed to start')).toMatchObject({ error: { message } });
+    if (value)
+      expect(JSON.stringify(lines)).not.toContain(value);
   });
 });

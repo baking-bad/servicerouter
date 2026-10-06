@@ -5,7 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { createTestDatabase, type TestDatabase } from '@servicerouter/testing';
 
-import { apiKeys, createAccountRepository, createApiKeyRepository } from '../../src/index.js';
+import { apiKeys, createAccountRepository, createApiKeyRepository, createPaymentKeyRepository } from '../../src/index.js';
 
 let database: TestDatabase;
 let counter = 0;
@@ -27,6 +27,11 @@ const newAccount = async (): Promise<string> => {
 
   return account.id;
 };
+
+// A payment key always has a daily budget (AK-6), so payment keys go through their own repository
+const paymentKey = ({ id, accountId, keyHash }: { id: string; accountId: string; keyHash: string }) => createPaymentKeyRepository({ db: database.db }).insert({
+  id, accountId, keyHash, label: undefined, createdAt, allowance: undefined, dailyBudget: 5_000_000n, maxPrice: undefined, expiresAt: undefined,
+});
 
 const pgError = async (promise: Promise<unknown>) => {
   try {
@@ -87,19 +92,18 @@ describe('api_keys (AK-3)', () => {
     await keys.insert({ id: 'key_master_3', accountId, kind: 'master', keyHash: hash(6), createdAt });
     await keys.revoke({ id: 'key_master_3', accountId, revokedAt: createdAt });
     await keys.insert({ id: 'key_master_4', accountId, kind: 'master', keyHash: hash(7), createdAt });
-    await keys.insert({ id: 'key_payment_1', accountId, kind: 'payment', keyHash: hash(8), createdAt });
-    await keys.insert({ id: 'key_payment_2', accountId, kind: 'payment', keyHash: hash(9), createdAt });
+    await paymentKey({ id: 'key_payment_1', accountId, keyHash: hash(8) });
+    await paymentKey({ id: 'key_payment_2', accountId, keyHash: hash(9) });
     expect(await keys.findActiveByHash(hash(7))).toMatchObject({ id: 'key_master_4' });
   });
 
   it('refuses a hash that is already stored, or isn\'t a SHA-256 in hex', async () => {
     const accountId = await newAccount();
-    const keys = createApiKeyRepository({ db: database.db });
-    await keys.insert({ id: 'key_unique', accountId, kind: 'payment', keyHash: hash(10), createdAt });
+    await paymentKey({ id: 'key_unique', accountId, keyHash: hash(10) });
 
-    expect(await pgError(keys.insert({ id: 'key_duplicate', accountId, kind: 'payment', keyHash: hash(10), createdAt })))
+    expect(await pgError(paymentKey({ id: 'key_duplicate', accountId, keyHash: hash(10) })))
       .toMatchObject({ code: '23505', constraint: 'api_keys_key_hash_idx' });
-    expect(await pgError(keys.insert({ id: 'key_plain', accountId, kind: 'payment', keyHash: 'sr_test_not-a-hash', createdAt })))
+    expect(await pgError(paymentKey({ id: 'key_plain', accountId, keyHash: 'sr_test_not-a-hash' })))
       .toMatchObject({ code: '23514', constraint: 'api_keys_key_hash_check' });
   });
 
@@ -108,7 +112,10 @@ describe('api_keys (AK-3)', () => {
       sql`select column_name from information_schema.columns where table_name = 'api_keys' order by ordinal_position`,
     );
 
-    expect(rows.map(row => row.column_name)).toEqual(['id', 'account_id', 'kind', 'key_hash', 'label', 'created_at', 'revoked_at']);
+    // The limits are a payment key's (AK-6), in micro-USD
+    expect(rows.map(row => row.column_name)).toEqual([
+      'id', 'account_id', 'kind', 'key_hash', 'label', 'created_at', 'revoked_at', 'allowance', 'daily_budget', 'max_price', 'expires_at',
+    ]);
     expect(apiKeys.keyHash.name).toBe('key_hash');
   });
 });
