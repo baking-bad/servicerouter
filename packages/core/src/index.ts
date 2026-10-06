@@ -15,3 +15,4 @@ export * from './deposits/index.js';
 export * from './agentDocs/index.js';
 export * from './payouts/index.js';
 export * from './treasury/index.js';
+export * from './catalog/index.js';

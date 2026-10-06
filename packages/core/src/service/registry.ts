@@ -105,6 +105,8 @@ export interface ServiceRepository {
   }): Promise<void>;
   /** Changes the state alone, after an ownership check (OV-5). */
   setState(input: { readonly id: string; readonly state: ServiceState; readonly updatedAt: Date }): Promise<void>;
+  /** Every service in this state, by ID. */
+  idsInState(state: ServiceState): Promise<readonly string[]>;
   /** The account's services whose active revision uses the host, each locked until the transaction ends (OV-5). */
   lockUsingHost(accountId: string, host: string): Promise<readonly ServiceRecord[]>;
   /** Stores a revision. There is no update or delete: revisions are immutable (SR-4). */
