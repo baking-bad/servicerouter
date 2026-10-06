@@ -41,6 +41,9 @@ Everything about a deployment that isn't a seller config or a secret.
   - Staging uses the testnet equivalents: Base Sepolia, Solana devnet, Cardano preprod.
   - Pegged stablecoins convert 1:1 to USD. Volatile assets such as ADA aren't supported: they need a price feed.
   - The minimum price keeps costly options out of cheap calls. On Cardano, the buyer pays about 0.17 ADA in network fees per transaction, which is more than a $0.001 call.
+  - **Tempo assets** serve MPP ([PR-9](payment-rails.md)): USD stablecoins on the `mpp.network`, such as pathUSD on Tempo Moderato in staging. They need no facilitator, their `payTo` is the MPP recipient, and x402 doesn't offer them.
+  - `mpp.enabled` (default true) turns MPP off, like a facilitator's `enabled`. `mpp.rpcUrl` (optional, default the chain's public RPC) is the Tempo RPC the proxy and workers use. It holds no credential.
+
 - **PC-7** Key prefixes, one per kind of key ([Accounts and keys](accounts-and-keys.md)):
 
   ```yaml

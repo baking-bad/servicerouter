@@ -53,7 +53,7 @@ Serves `pay.servicerouter.ai`: registered services, routed calls, and platform p
 - **PX-11** Billable means `2xx`, until the config adds `chargeOn`. Record the decision on the payment row before finalizing ([rule 5](README.md#2-architecture-rules)).
   - An operation priced at `"0"` is free: no payment step, and any credential on it is dropped (PX-5).
   - A failed decision write is logged, and finalizing goes on. Without a recorded decision, the hold expiry worker releases, so a buyer is never charged by mistake. The opaque `503` records `not_billable` and releases before answering.
-- **PX-12** Credits and MPP responses stream. x402 responses are buffered until the settlement is confirmed or broadcast ([PR-12](payment-rails.md)), so no upstream bytes reach an unpaid client. Above the buffer limit ([AR3](README.md#8-open-questions)), cancel and return `502 response_too_large`. The buyer isn't charged.
+- **PX-12** Credits responses stream. x402 and MPP responses are buffered until the settlement is confirmed or broadcast ([PR-12](payment-rails.md), [PR-9](payment-rails.md)), so no upstream bytes reach an unpaid client. Above the buffer limit ([AR3](README.md#8-open-questions)), cancel and return `502 response_too_large`. The buyer isn't charged.
   - The upstream's status and headers go out only with the settled response, never with the `502`.
   - A body that fails before anyone reads it, while the decision is recorded, must not crash the process: the proxy listens for its error at once.
 - **PX-13** Rate limits in Redis: per payment key, per service, and per IP for unpaid requests that only get a `402`. Over a limit → `429` with `Retry-After`. Limits are keyed by service ID, not by hostname.

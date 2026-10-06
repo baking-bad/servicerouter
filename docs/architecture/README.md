@@ -56,7 +56,7 @@ An app gets its own image only if it can't use the shared build: the website, if
 
 | App | Image | Host | Exposure | Replicas | Keys it holds |
 |---|---|---|---|---|---|
-| Proxy | Ours, app `proxy` | `pay.servicerouter.ai` | Public | 2+, stateless | Private key that opens seller secrets. CDP API key. Shared secrets for the Signer and the internal API. |
+| Proxy | Ours, app `proxy` | `pay.servicerouter.ai` | Public | 2+, stateless | Private key that opens seller secrets. CDP API key. Shared secrets for the Signer, the internal API, and MPP challenges. None of them moves funds. |
 | Platform API | Ours, app `api` | `api.servicerouter.ai`, plus an internal port | Public. Internal port private. | 2+ | Public key that seals seller secrets. Deposit account public key. SMTP credentials. |
 | Workers | Ours, app `workers` | None | Private | 1+, one runner per job | Payout key. Blockfrost key. SMTP credentials. |
 | Signer | Ours, app `signer` | Internal | Private | 1–2 | Hot-wallet keys that pay routed targets. |
@@ -332,7 +332,7 @@ Build one step at a time. Don't start a step before the previous one is done.
 ### Step 7. MPP
 
 - **Build:** [Payment rails](payment-rails.md) (MPP).
-- **Done when:** a valid credential gets `200` through the fake Tempo RPC. A replayed credential is rejected across two proxy instances.
+- **Done when:** a valid credential gets `200` through the fake Tempo RPC. A replayed credential is rejected across two proxy instances. A failed upstream call is never broadcast, so the buyer pays nothing.
 
 ### Step 8. Ownership
 

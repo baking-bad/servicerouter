@@ -34,5 +34,6 @@ Runs every background job.
   - A job runs one interval after the app starts, then one interval after each run ends, so its runs never overlap.
 - **WK-5** Only the jobs that sign transactions load signing keys.
 - **WK-6** Settlement follow-up: for each `settling` payment, repeat the identical `settle` call ([PR-12](payment-rails.md)). Settled → book the earnings, and flag the payment for review if the buyer got no response. Definitively failed or expired → mark it `failed`. Nothing is booked.
+  - MPP payments ([PR-9](payment-rails.md)) have no settle to repeat. The job reads the transaction's receipt by its hash on the Tempo RPC. Succeeded with the expected transfer → book it, flagged for review if no receipt went out. Reverted → `failed`. Not found once the transaction's validity window has passed → `failed`. Otherwise → next run. The job never broadcasts.
   - It repeats the stored `settlement_request` through the network's facilitator. Still pending → next run.
   - A facilitator that doesn't answer, or a payment with nothing to repeat, fails the run after trying the rest, so the job goes stale and its alert fires.
