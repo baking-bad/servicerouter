@@ -21,6 +21,9 @@ interface BaseOptions {
   readonly bodyLimit?: number;
   // Request IDs for requests without a valid `x-request-id`. Default: random UUIDs.
   readonly requestIds?: IdGenerator;
+  // The proxies in front, such as Traefik, whose X-Forwarded-For `request.ip` follows: addresses and
+  // CIDR ranges, comma-separated. Default: none, so `request.ip` is the peer address.
+  readonly trustProxy?: string;
 }
 
 interface FastifyOptions extends BaseOptions {
@@ -74,6 +77,7 @@ const createFastify = ({
   errorStatuses = {},
   bodyLimit = defaultBodyLimit,
   requestIds = randomIdGenerator,
+  trustProxy,
   requestLogging,
 }: FastifyOptions): FastifyInstance => {
   const app = fastify({
@@ -85,6 +89,7 @@ const createFastify = ({
     // While draining, requests on open connections are still served, with `Connection: close`
     return503OnClosing: false,
     bodyLimit,
+    trustProxy: trustProxy ?? false,
     requestIdHeader: false,
     genReqId: createRequestIdGenerator(requestIds),
   });
