@@ -19,6 +19,8 @@ import { createMasterKeyAuth, decorateAccount } from './accounts/auth.js';
 import { registerAccountRoutes } from './accounts/routes.js';
 import { createAccountService } from './accounts/service.js';
 import { createIpLimit, createSignupLimit } from './accounts/signupLimit.js';
+import { registerAgentDocRoutes } from './agentDocs/routes.js';
+import { createAgentDocsService } from './agentDocs/service.js';
 import { registerDepositRoutes } from './deposits/routes.js';
 import { createDepositService } from './deposits/service.js';
 import { errorStatuses } from './errors.js';
@@ -141,6 +143,10 @@ export const createApp = ({
     deposits,
   });
   registerDepositRoutes(app, { deposits, topupLimit: createIpLimit({ limiter, limit: config.rateLimits.topup, name: 'topup' }) });
+  registerAgentDocRoutes(app, {
+    docs: createAgentDocsService({ db: postgres.db, config, clock }),
+    limit: createIpLimit({ limiter, limit: config.rateLimits.documents, name: 'docs' }),
+  });
 
   let http = openApiHttp;
   if (!http) {
