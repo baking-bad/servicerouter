@@ -1,12 +1,12 @@
 import type { FastifyInstance, onRequestHookHandler } from 'fastify';
 
 import { createErrorHandler, Secret, type ValidationIssue } from '@servicerouter/common';
-import { InvalidServiceConfigError, isSecretName } from '@servicerouter/core';
+import { InvalidServiceConfigError, isSecretName, type OwnershipServiceStatus } from '@servicerouter/core';
 
 import { authenticatedAccount } from '../accounts/auth.js';
 import { errorStatuses, InvalidRequestError } from '../errors.js';
 import { findSecretValueProblem, jsonMediaType, parseSubmitBody, submitBodyLimit, yamlMediaTypes } from './body.js';
-import type { ServiceRegistry } from './service.js';
+import type { ServiceRegistry, WaitingPayoutChange } from './service.js';
 
 export interface ServiceRoutesOptions {
   readonly registry: ServiceRegistry;
@@ -42,9 +42,42 @@ const toDetail = ({ path, line, column, message }: ValidationIssue) => ({ path, 
 
 const handleError = createErrorHandler(errorStatuses);
 
+const iso = (date: Date | undefined): string | null => date?.toISOString() ?? null;
+
+/** A payout change waiting for its confirmation token (OV-10): only in a response that started or kept one. */
+const toWaiting = (waiting: WaitingPayoutChange | undefined) => waiting && {
+  payoutConfirmation: { revision: waiting.revision, token: waiting.token, expiresAt: waiting.expiresAt.toISOString() },
+};
+
+/** `GET /v1/services/{id}/status` and the verify answer (OV-7, OV-10). */
+const toStatus = (status: OwnershipServiceStatus) => ({
+  id: status.serviceId,
+  state: status.state,
+  revision: status.revision,
+  verificationToken: status.verificationToken,
+  hosts: status.hosts.map(host => ({
+    host: host.host,
+    state: host.state,
+    checkedAt: iso(host.checkedAt),
+    problem: host.problem ?? null,
+    missingSince: iso(host.missingSince),
+    suspendsAt: iso(host.suspendsAt),
+  })),
+  payoutConfirmation: status.payoutConfirmation
+    ? {
+      revision: status.payoutConfirmation.revision,
+      token: status.payoutConfirmation.token,
+      expiresAt: status.payoutConfirmation.expiresAt.toISOString(),
+      hosts: status.payoutConfirmation.hosts,
+    }
+    : null,
+  notices: status.notices.map(notice => ({ code: notice.code, host: notice.host ?? null, message: notice.message })),
+});
+
 /**
  * Behind the master key: `PUT /v1/services/{id}` (SR-12), `GET /v1/services/{id}`,
- * `GET /v1/services/{id}/revisions`, `POST /v1/services/{id}/rollback` (SR-7), and
+ * `GET /v1/services/{id}/revisions`, `POST /v1/services/{id}/rollback` (SR-7),
+ * `GET /v1/services/{id}/status` and `POST /v1/services/{id}/verify` (OV-6, OV-7), and
  * `PUT /v1/services/{id}/secrets/{name}` (SC-1). No response carries a secret value, hash, or length.
  */
 export const registerServiceRoutes = (app: FastifyInstance, { registry, authenticate }: ServiceRoutesOptions): void => {
@@ -75,6 +108,7 @@ export const registerServiceRoutes = (app: FastifyInstance, { registry, authenti
           changed: result.changed,
           state: result.state,
           warnings: result.warnings.map(toDetail),
+          ...toWaiting(result.payoutConfirmation),
         });
       });
     });
@@ -115,7 +149,20 @@ export const registerServiceRoutes = (app: FastifyInstance, { registry, authenti
       const { accountId } = authenticatedAccount(request);
       const result = await registry.rollback({ accountId, serviceId: request.params.id, requestId: request.id, revision: request.body.revision });
 
-      return { id: request.params.id, revision: result.revision, changed: result.changed, state: result.state };
+      return { id: request.params.id, revision: result.revision, changed: result.changed, state: result.state, ...toWaiting(result.payoutConfirmation) };
+    });
+
+    scope.get<{ Params: ServiceParams }>('/v1/services/:id/status', async request => {
+      const { accountId } = authenticatedAccount(request);
+
+      return toStatus(await registry.status({ accountId, serviceId: request.params.id }));
+    });
+
+    // Checks every host's ownership file now (OV-6). No body.
+    scope.post<{ Params: ServiceParams }>('/v1/services/:id/verify', async request => {
+      const { accountId } = authenticatedAccount(request);
+
+      return toStatus(await registry.verify({ accountId, serviceId: request.params.id, requestId: request.id }));
     });
 
     scope.put<{ Params: SecretParams; Body: { readonly value: string } }>('/v1/services/:id/secrets/:name', {

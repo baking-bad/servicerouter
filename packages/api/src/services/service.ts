@@ -2,14 +2,17 @@ import type {
   Clock, IdGenerator, Logger, OutboundHttp, RequestId, Secret, ServiceId, ValidationIssue,
 } from '@servicerouter/common';
 import {
-  changesPayouts, checkAndCompileParsedServiceConfig, fetchOpenApiDocuments, findMovedSecrets, getSecretOrigins, getSecretUses,
-  InvalidServiceConfigError, isSameRevision, parseServiceConfig, SecretOriginMismatchError, ServiceForbiddenError, ServiceIdMismatchError,
-  ServiceNotFoundError, stateForActivation, UnusedSecretError, type AuditEntry, type AuditLog, type InvalidationBus, type OwnershipStatus,
-  type ParsedServiceConfig, type PlatformConfig, type SealedSecret, type SecretSealer, type ServiceRecord, type ServiceRevisionSummary,
-  type ServiceState, type StoredSecretInfo, type SubmittedConfig,
+  canonicalJson, changesPayouts, checkAndCompileParsedServiceConfig, cryptoRandomSource, fetchOpenApiDocuments, findMovedSecrets,
+  generateConfirmationToken, getSecretOrigins, getSecretUses, getUpstreamHosts, InvalidServiceConfigError, isSameRevision,
+  ownershipRecheckIntervalMs, parseServiceConfig, payoutConfirmationTtlMs, SecretOriginMismatchError, ServiceForbiddenError,
+  ServiceIdMismatchError, ServiceNotFoundError, stateForActivation, UnusedSecretError, type AuditEntry, type AuditLog, type InvalidationBus,
+  type OwnershipServiceStatus, type OwnershipStatus, type OwnershipVerifier, type ParsedServiceConfig, type PlatformConfig, type RandomSource,
+  type SealedSecret, type SecretSealer, type ServiceConfigDocument, type ServiceRecord, type ServiceRevisionSummary, type ServiceState,
+  type StoredSecretInfo, type SubmittedConfig,
 } from '@servicerouter/core';
 import {
-  createAuditLogRepository, createServiceRepository, createServiceSecretRepository, withTransaction, type Database, type DatabaseTransaction,
+  createAuditLogRepository, createPayoutConfirmationRepository, createServiceRepository, createServiceSecretRepository, withTransaction,
+  type Database, type DatabaseTransaction,
 } from '@servicerouter/db';
 
 import { createPublisher } from '../invalidation.js';
@@ -25,6 +28,10 @@ export interface ServiceRegistryOptions {
   // Fetches linked OpenAPI documents at submit time (SR-3)
   readonly http: Pick<OutboundHttp, 'request'>;
   readonly ownership: OwnershipStatus;
+  // Checks the hosts' ownership files and reports the status (OV-6, OV-7)
+  readonly verifier: OwnershipVerifier;
+  // Randomness for payout confirmation tokens (OV-10). Default: node:crypto.
+  readonly random?: RandomSource;
   readonly invalidation: Pick<InvalidationBus, 'publish'>;
   // The audit log inside a change's transaction. Default: the audit_log repository on it.
   readonly auditLog?: (tx: DatabaseTransaction) => AuditLog;
@@ -39,6 +46,14 @@ interface Change extends Caller {
   readonly requestId: RequestId;
 }
 
+/** A payout change waiting for its confirmation token on every upstream host (OV-10, SR-13). */
+export interface WaitingPayoutChange {
+  readonly revision: number;
+  // `sr-confirm=…`
+  readonly token: string;
+  readonly expiresAt: Date;
+}
+
 export interface SubmitResult {
   // The submit created the service
   readonly created: boolean;
@@ -48,6 +63,8 @@ export interface SubmitResult {
   readonly changed: boolean;
   readonly state: ServiceState;
   readonly warnings: readonly ValidationIssue[];
+  // Set when the submit changed `payouts`: the new revision waits, and the active one keeps serving
+  readonly payoutConfirmation?: WaitingPayoutChange;
 }
 
 export interface ServiceView {
@@ -62,6 +79,8 @@ export interface ActivationResult {
   readonly revision: number;
   readonly changed: boolean;
   readonly state: ServiceState;
+  // Set when the rollback changes `payouts`: it waits, and the active revision keeps serving
+  readonly payoutConfirmation?: WaitingPayoutChange;
 }
 
 export interface ServiceRegistry {
@@ -78,6 +97,10 @@ export interface ServiceRegistry {
   rollback(input: Change & { readonly revision: number }): Promise<ActivationResult>;
   /** Seals one secret for the origin of the active revision's upstream that uses it (SC-1, SC-10). */
   putSecret(input: Change & { readonly name: string; readonly value: Secret }): Promise<Pick<StoredSecretInfo, 'name' | 'updatedAt'>>;
+  /** `GET /v1/services/{id}/status` (OV-7, OV-10). */
+  status(input: Caller): Promise<OwnershipServiceStatus>;
+  /** `POST /v1/services/{id}/verify` (OV-6): checks every host now. */
+  verify(input: Change): Promise<OwnershipServiceStatus>;
 }
 
 interface SealedForWrite {
@@ -97,6 +120,8 @@ export const createServiceRegistry = ({
   sealer,
   http,
   ownership,
+  verifier,
+  random = cryptoRandomSource,
   invalidation,
   auditLog = tx => createAuditLogRepository({ db: tx, clock, ids }),
 }: ServiceRegistryOptions): ServiceRegistry => {
@@ -125,6 +150,50 @@ export const createServiceRegistry = ({
   // After the commit (SR-7, SC-7)
   const publishEvent = createPublisher({ invalidation, logger });
   const publish = (serviceId: string): Promise<void> => publishEvent({ kind: 'service', id: serviceId });
+
+  /**
+   * OV-10, SR-13: a revision that changes `payouts` waits for its confirmation token on every host, and
+   * the active revision keeps serving. It replaces any waiting change, keeping its token when the
+   * `payouts` are the same. The active revision must keep its secrets' hosts (SC-10).
+   */
+  const waitForConfirmation = async (tx: DatabaseTransaction, input: {
+    readonly serviceId: string;
+    readonly revision: number;
+    readonly config: ServiceConfigDocument;
+    readonly active: ServiceConfigDocument;
+    readonly now: Date;
+  }): Promise<WaitingPayoutChange> => {
+    const stored = await createServiceSecretRepository({ db: tx }).list(input.serviceId);
+    const moved = findMovedSecrets(input.active, new Map(stored.map(secret => [secret.name, secret.origin])));
+    if (moved.length > 0)
+      throw new SecretOriginMismatchError(moved);
+
+    const confirmations = createPayoutConfirmationRepository({ db: tx });
+    const waiting = await confirmations.find(input.serviceId);
+    const keep = waiting !== undefined && canonicalJson(waiting.payouts) === canonicalJson(input.config.payouts);
+    const token = keep ? waiting.token : generateConfirmationToken(random);
+    const createdAt = keep ? waiting.createdAt : input.now;
+    const expiresAt = keep ? waiting.expiresAt : new Date(input.now.getTime() + payoutConfirmationTtlMs);
+    await confirmations.put({
+      serviceId: input.serviceId as ServiceId,
+      revision: input.revision,
+      token,
+      payouts: input.config.payouts,
+      hosts: getUpstreamHosts(input.config),
+      createdAt,
+      expiresAt,
+      nextCheckAt: new Date(input.now.getTime() + ownershipRecheckIntervalMs),
+    });
+
+    return { revision: input.revision, token, expiresAt };
+  };
+
+  // A newer submit or rollback replaces a waiting payout change (OV-10.5)
+  const dropWaiting = async (tx: DatabaseTransaction, serviceId: string, audit: (action: AuditEntry['action'], details: AuditEntry['details']) => AuditEntry, replacedBy: number): Promise<void> => {
+    const dropped = await createPayoutConfirmationRepository({ db: tx }).delete(serviceId);
+    if (dropped)
+      await auditLog(tx).append(audit('service.payout_change_drop', { revision: dropped.revision, replacedBy }));
+  };
 
   // Pass 1, the service ID, unused secrets, then sealing (SC-9)
   const parseAndSeal = (serviceId: string, body: SubmitBody): { parsed: ParsedServiceConfig; sealed: readonly SealedForWrite[] } => {
@@ -199,7 +268,7 @@ export const createServiceRegistry = ({
       if (!checked.ok)
         throw new InvalidServiceConfigError(body.locate(checked.errors), body.locate(checked.warnings));
 
-      const state = await stateForActivation(ownership, id, parsed.config);
+      const state = await stateForActivation(ownership, accountId, parsed.config);
       const now = clock.now();
       const audit = entry({ accountId, serviceId: id, requestId });
 
@@ -214,7 +283,11 @@ export const createServiceRegistry = ({
 
         const active = service.activeRevision === undefined ? undefined : await repository.findRevision(id, service.activeRevision);
         const changed = active === undefined || !isSameRevision(active, { config: parsed.config, openapiDocuments: fetched.documents });
-        const revision = active !== undefined && !changed ? active.number : await repository.latestRevisionNumber(id) + 1;
+        // The same config as the waiting payout change keeps waiting, with no new revision (OV-10)
+        const waiting = changed ? await createPayoutConfirmationRepository({ db: tx }).find(id) : undefined;
+        const waitingRevision = waiting && await repository.findRevision(id, waiting.revision);
+        const sameAsWaiting = waitingRevision !== undefined && isSameRevision(waitingRevision, { config: parsed.config, openapiDocuments: fetched.documents });
+        const revision = active !== undefined && !changed ? active.number : sameAsWaiting ? waitingRevision.number : await repository.latestRevisionNumber(id) + 1;
         await log.append(audit('service.submit', { revision, changed }));
 
         // Secrets belong to the service, so they apply even when the config is a no-op (SR-12, SC-9)
@@ -226,8 +299,17 @@ export const createServiceRegistry = ({
           if (await secretRepository.delete(id, name))
             await log.append(audit('secret.delete', { name }));
         }
-        if (!changed)
+        if (!changed) {
+          await dropWaiting(tx, id, audit, revision);
+
           return { created, revision, changed, state: service.state };
+        }
+        if (sameAsWaiting && waiting) {
+          return {
+            created, revision: active!.number, changed, state: service.state,
+            payoutConfirmation: { revision: waiting.revision, token: waiting.token, expiresAt: waiting.expiresAt },
+          };
+        }
 
         // Checked again under the lock: a secret written since validation must still match its host (SC-10)
         const moved = findMovedSecrets(parsed.config, new Map((await secretRepository.list(id)).map(secret => [secret.name, secret.origin])));
@@ -243,16 +325,26 @@ export const createServiceRegistry = ({
           createdBy: accountId,
           createdAt: now,
         });
-        // SR-13 hook: from step 8, an activation that changes `payouts` waits here for its payout
-        // confirmation (OV-10), and the active revision keeps serving. Until then it applies at once.
-        const payoutsChanged = changesPayouts(active?.config, parsed.config);
-        await repository.activate({ id, revision, state, updatedAt: now });
-        await log.append(audit('service.activate', { revision, previousRevision: active?.number ?? null, state, payoutsChanged }));
+        // SR-13: an activation that changes `payouts` waits for its payout confirmation (OV-10), and the
+        // active revision keeps serving
+        if (active && changesPayouts(active.config, parsed.config)) {
+          const payoutConfirmation = await waitForConfirmation(tx, { serviceId: id, revision, config: parsed.config, active: active.config, now });
+          await log.append(audit('service.payout_change_wait', {
+            revision, activeRevision: active.number, expiresAt: payoutConfirmation.expiresAt.toISOString(),
+          }));
+
+          return { created, revision: active.number, changed, state: service.state, payoutConfirmation };
+        }
+
+        await dropWaiting(tx, id, audit, revision);
+        await repository.activate({ id, revision, hosts: getUpstreamHosts(parsed.config), state, updatedAt: now });
+        await log.append(audit('service.activate', { revision, previousRevision: active?.number ?? null, state, payoutsChanged: false }));
 
         return { created, revision, changed, state };
       });
 
-      if (result.changed || sealed.length > 0 || deleted.length > 0)
+      // A waiting payout change changes nothing the proxy serves (OV-10)
+      if ((result.changed && !result.payoutConfirmation) || sealed.length > 0 || deleted.length > 0)
         await publish(id);
 
       return { ...result, warnings: body.locate(checked.warnings) };
@@ -282,7 +374,7 @@ export const createServiceRegistry = ({
       if (!target)
         throw new ServiceNotFoundError(`The service has no revision ${revision}`);
 
-      const state = await stateForActivation(ownership, target.serviceId, target.config);
+      const state = await stateForActivation(ownership, accountId, target.config);
       const audit = entry({ accountId, serviceId, requestId });
       const result = await withTransaction(db, async tx => {
         const repository = createServiceRepository({ db: tx });
@@ -301,11 +393,22 @@ export const createServiceRegistry = ({
           throw new SecretOriginMismatchError(moved);
 
         const active = service.activeRevision === undefined ? undefined : await repository.findRevision(serviceId, service.activeRevision);
-        // SR-13 hook: as on submit, a rollback that changes `payouts` waits here from step 8
-        const payoutsChanged = changesPayouts(active?.config, target.config);
-        await repository.activate({ id: serviceId, revision, state, updatedAt: clock.now() });
+        const now = clock.now();
+        // SR-13: as on submit, a rollback that changes `payouts` waits for its payout confirmation (OV-10)
+        if (active && changesPayouts(active.config, target.config)) {
+          const payoutConfirmation = await waitForConfirmation(tx, { serviceId, revision, config: target.config, active: active.config, now });
+          await log.append(audit('service.rollback', { revision, previousRevision: active.number, changed: false }));
+          await log.append(audit('service.payout_change_wait', {
+            revision, activeRevision: active.number, expiresAt: payoutConfirmation.expiresAt.toISOString(),
+          }));
+
+          return { revision: active.number, changed: false, state: service.state, payoutConfirmation };
+        }
+
+        await dropWaiting(tx, serviceId, audit, revision);
+        await repository.activate({ id: serviceId, revision, hosts: getUpstreamHosts(target.config), state, updatedAt: now });
         await log.append(audit('service.rollback', { revision, previousRevision: service.activeRevision ?? null, changed: true }));
-        await log.append(audit('service.activate', { revision, previousRevision: service.activeRevision ?? null, state, payoutsChanged }));
+        await log.append(audit('service.activate', { revision, previousRevision: service.activeRevision ?? null, state, payoutsChanged: false }));
 
         return { revision, changed: true, state };
       });
@@ -340,6 +443,18 @@ export const createServiceRegistry = ({
       finally {
         value.destroy();
       }
+    },
+
+    status: async caller => {
+      await owned(caller);
+
+      return verifier.status(caller.serviceId);
+    },
+
+    verify: async ({ accountId, serviceId, requestId }) => {
+      await owned({ accountId, serviceId });
+
+      return verifier.verifyService({ serviceId, actor: { kind: 'account', id: accountId }, requestId });
     },
   };
 };

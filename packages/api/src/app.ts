@@ -7,11 +7,12 @@ import {
   type Server, type ServerAddresses,
 } from '@servicerouter/common';
 import {
-  assumeHostsVerified, cryptoRandomSource, openApiFetchLimits, type ApiKeyRepository, type InvalidationBus, type OwnershipStatus,
-  type PlatformConfig, type RandomSource, type SecretSealer,
+  createOwnershipFileFetcher, createOwnershipVerifier, cryptoRandomSource, openApiFetchLimits, ownershipFileLimits, type ApiKeyRepository,
+  type InvalidationBus, type OwnershipStatus, type PlatformConfig, type RandomSource, type SecretSealer,
 } from '@servicerouter/core';
 import {
-  createApiKeyRepository, createRedisInvalidationBus, createRedisRateLimiter, type Postgres, type Redis,
+  createApiKeyRepository, createOwnershipStatus, createOwnershipStore, createRedisInvalidationBus, createRedisRateLimiter, type Postgres,
+  type Redis,
 } from '@servicerouter/db';
 
 import { createMasterKeyAuth, decorateAccount } from './accounts/auth.js';
@@ -48,8 +49,15 @@ export interface ApiDependencies {
   // Fetches sellers' OpenAPI documents (SR-3). Default: Outbound HTTP with the production address
   // policy, the platform's own hosts refused (OH-5), and the S2-D2 connect timeout. Closed with the app.
   readonly openApiHttp?: Pick<OutboundHttp, 'request'>;
-  // Whether a service's hosts are verified (SR-8). Default: the step 2 adapter, every host verified (S2-D1).
+  // The hosts' states at activation (SR-8). Default: the upstream_hosts table. Tests that aren't about
+  // ownership pass `assumeHostsVerified`.
   readonly ownership?: OwnershipStatus;
+  // Fetches the hosts' ownership files (OV-2). Default: Outbound HTTP with the production address policy,
+  // the platform's own hosts refused, and a 5 s connect timeout. Closed with the app.
+  readonly ownershipHttp?: Pick<OutboundHttp, 'request'>;
+  // The ownership file's URL for a host. Default: https://<host>/.well-known/servicerouter.json. Tests
+  // point it at a fake upstream's port.
+  readonly ownershipFileUrl?: (host: string) => string;
   // Where activations, secret writes, and key changes are announced (SR-7, SC-7, AK-9). Default: the Redis channel.
   readonly invalidation?: Pick<InvalidationBus, 'publish'>;
   // INTERNAL_API_SECRET, the shared secret of the internal API (PA-4). Without it, every internal call is refused.
@@ -98,7 +106,9 @@ export const createApp = ({
   apiKeys = createApiKeyRepository({ db: postgres.db }),
   sealer,
   openApiHttp,
-  ownership = assumeHostsVerified,
+  ownership = createOwnershipStatus({ db: postgres.db }),
+  ownershipHttp,
+  ownershipFileUrl,
   invalidation = createRedisInvalidationBus({ redis, logger }),
   internalSecret,
 }: ApiDependencies): ApiServer => {
@@ -129,8 +139,23 @@ export const createApp = ({
     app.addHook('onClose', async () => outbound.close());
     http = outbound;
   }
+  let fileHttp = ownershipHttp;
+  if (!fileHttp) {
+    const outbound = new OutboundHttp({ ownHosts: config.ownHosts, connectTimeoutMs: ownershipFileLimits.connectTimeoutMs });
+    app.addHook('onClose', async () => outbound.close());
+    fileHttp = outbound;
+  }
+  const verifier = createOwnershipVerifier({
+    store: createOwnershipStore({ db: postgres.db, clock, ids, random }),
+    fetchFile: createOwnershipFileFetcher({ http: fileHttp, ...(ownershipFileUrl ? { fileUrl: ownershipFileUrl } : {}) }),
+    clock,
+    invalidation,
+    logger,
+  });
   registerServiceRoutes(app, {
-    registry: createServiceRegistry({ db: postgres.db, platform: config, clock, ids, logger, sealer, http, ownership, invalidation }),
+    registry: createServiceRegistry({
+      db: postgres.db, platform: config, clock, ids, logger, sealer, http, ownership, verifier, random, invalidation,
+    }),
     authenticate,
   });
   registerKeyRoutes(app, {
@@ -151,7 +176,7 @@ export const createApp = ({
 
   // The internal API on a listener of its own, with the same request IDs, logs, and error envelope
   const internal = createServer({ logger, errorStatuses, requestIds });
-  registerInternalRoutes(internal.app, { db: postgres.db, clock, ids, secret: internalSecret });
+  registerInternalRoutes(internal.app, { db: postgres.db, clock, ids, secret: internalSecret, verifier, environment: config.environment });
 
   return {
     ...server,

@@ -1,7 +1,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 
 import { formatUsd, parseUsd, Secret, ServiceRouterError, usdAmountPattern, type Clock, type IdGenerator } from '@servicerouter/common';
-import type { AuditLog } from '@servicerouter/core';
+import type { AuditLog, Environment, OwnershipVerifier } from '@servicerouter/core';
 import { createAccountRepository, createAuditLogRepository, createLedger, withTransaction, type Database, type DatabaseTransaction } from '@servicerouter/db';
 
 import { InvalidRequestError, NotFoundError } from '../errors.js';
@@ -19,6 +19,10 @@ export interface InternalRoutesOptions {
   readonly ids: IdGenerator;
   // INTERNAL_API_SECRET. Without it, every internal call is refused.
   readonly secret: Secret | undefined;
+  // Marks hosts verified for OV-9
+  readonly verifier: Pick<OwnershipVerifier, 'markHostVerified'>;
+  // OV-9's action exists in staging only
+  readonly environment: Environment;
   // The audit log inside a call's transaction. Default: the audit_log repository on it.
   readonly auditLog?: (tx: DatabaseTransaction) => AuditLog;
 }
@@ -38,6 +42,16 @@ interface CreditBody {
   readonly amount: string;
   readonly reference: string;
 }
+
+const markVerifiedBodySchema = {
+  type: 'object',
+  required: ['accountId'],
+  properties: { accountId: { type: 'string', minLength: 1, maxLength: 256 } },
+  additionalProperties: false,
+} as const;
+
+// A lowercase DNS name, as `new URL(…).hostname` gives it
+const hostPattern = /^(?=.{1,253}$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/;
 
 /** An internal call without the right shared secret (PA-4). */
 class InternalUnauthorizedError extends ServiceRouterError {
@@ -76,9 +90,46 @@ export const registerInternalRoutes = (app: FastifyInstance, {
   clock,
   ids,
   secret,
+  verifier,
+  environment,
   auditLog = tx => createAuditLogRepository({ db: tx, clock, ids }),
 }: InternalRoutesOptions): void => {
   app.addHook('onRequest', createInternalAuth(secret));
+
+  const callerOf = (request: FastifyRequest): string => {
+    const header = request.headers[internalCallerHeader];
+
+    return typeof header === 'string' && callerPattern.test(header) ? header : 'unknown';
+  };
+
+  // OV-9: staging only, for demos with sellers who haven't published the file yet. Production can't
+  // enable it: the route doesn't exist there.
+  if (environment === 'staging') {
+    app.post<{ Params: { readonly host: string }; Body: { readonly accountId: string } }>('/internal/v1/hosts/:host/verify', {
+      schema: { body: markVerifiedBodySchema },
+    }, async request => {
+      const { host } = request.params;
+      if (!hostPattern.test(host))
+        throw new InvalidRequestError('host must be a lowercase DNS name');
+
+      const { accountId } = request.body;
+      if (!await createAccountRepository({ db }).findById(accountId))
+        throw new NotFoundError('No such account');
+
+      const actor = { kind: 'internal_api', id: callerOf(request) } as const;
+      const recorded = await verifier.markHostVerified({ accountId, host, actor, requestId: request.id });
+      await withTransaction(db, tx => auditLog(tx).append({
+        actor, action: 'ownership.mark_verified', subject: { kind: 'upstream_host', id: host }, requestId: request.id, details: { accountId },
+      }));
+
+      return {
+        host,
+        accountId,
+        state: 'verified',
+        services: recorded.serviceChanges.map(change => ({ id: change.serviceId, state: change.to })),
+      };
+    });
+  }
 
   app.post<{ Params: { readonly id: string }; Body: CreditBody }>('/internal/v1/accounts/:id/credits', {
     schema: { body: creditBodySchema },
@@ -96,8 +147,7 @@ export const registerInternalRoutes = (app: FastifyInstance, {
     if (!await createAccountRepository({ db }).findById(accountId))
       throw new NotFoundError('No such account');
 
-    const header = request.headers[internalCallerHeader];
-    const caller = typeof header === 'string' && callerPattern.test(header) ? header : 'unknown';
+    const caller = callerOf(request);
     const { reference } = request.body;
     const result = await withTransaction(db, async tx => {
       const credited = await createLedger({ db: tx, clock, ids }).credit({ accountId, amount, reference, requestId: request.id });
