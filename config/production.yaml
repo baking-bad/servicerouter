@@ -1,0 +1,119 @@
+# Production platform config (docs/architecture/platform-config.md): mainnets only, real funds.
+#
+# public: secrets appear by name only, and their values come from the stack's environment.
+#
+# FILL IN before the first deploy: the three FILL_ME addresses below. The apps refuse to start while
+
+version: 1
+environment: production         # Mainnets only
+
+logger:
+  level: info
+
+urls:                           # The temporary domain (P-7)
+  website: https://servicerouter.agents.bakingbad.dev
+  api: https://api.servicerouter.agents.bakingbad.dev
+  pay: https://pay.servicerouter.agents.bakingbad.dev
+
+ownHosts: []
+
+keyPrefixes:
+  master: srm_live_
+  payment: sr_live_
+
+paymentKeyDefaults:
+  dailyBudget: "5"
+
+feeBps: 0                       # P-2: the flat fee on x402 through CDP needs its own task; none until then
+routingFeeBps: 0                # P-2, P-9: no routing fee in the MVP
+
+assets:                         # PC-6. Addresses and decimals from the SDKs: @x402/evm, @x402/cardano, viem/tokens
+  - name: base-usdc
+    network: eip155:8453        # Base
+    address: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+    decimals: 6
+    peg: usd
+    payTo: FILL_ME_BASE_TREASURY          # Our Base address that receives USDC
+  - name: cardano-usdm
+    network: cardano:mainnet
+    address: c48cbb3d5e57ed56e276bc45f99ab39abe94e6cd7ac39fb402da47ad.0014df105553444d
+    decimals: 6
+    peg: usd
+    minPrice: "0.05"            # PR-3: Cardano's network fee makes smaller calls uneconomic
+    payTo: FILL_ME_CARDANO_TREASURY       # Our Cardano address that receives USDM
+  - name: tempo-usdce           # P-3: USDC.e only. MPP only (PR-9)
+    network: eip155:4217        # Tempo
+    address: "0x20C000000000000000000000b9537d11c60E8b50"
+    decimals: 6
+    peg: usd
+    payTo: FILL_ME_TEMPO_RECIPIENT        # The same address as mpp.recipient
+
+facilitators:
+  - name: cdp
+    url: https://api.cdp.coinbase.com/platform/v2/x402
+    networks: [eip155:8453]     # Solana later (P-6)
+    auth:
+      type: cdp
+      apiKeyId: CDP_API_KEY_ID
+      apiKeySecret: CDP_API_KEY_SECRET
+  - name: cardano
+    url: http://servicerouter_cardano-facilitator:4022   # The stack's service, for STACK_NAME=servicerouter
+    networks: [cardano:mainnet]
+
+mpp:
+  network: eip155:4217          # Tempo
+  recipient: FILL_ME_TEMPO_RECIPIENT      # Our Tempo address that receives USDC.e
+
+deposits:                       # Buyers top up credits with USDM on Cardano
+  asset: cardano-usdm
+  confirmations: 15
+
+payouts:
+  assets: [cardano-usdm]
+  minimum: "10"
+
+categories:
+  - id: ai
+    title: AI
+  - id: ai/image-generation
+    title: Image generation
+  - id: ai/speech
+    title: Speech
+  - id: ai/translation
+    title: Translation
+  - id: blockchain
+    title: Blockchain
+  - id: blockchain/rpc
+    title: Node RPC
+  - id: data
+    title: Data
+  - id: data/companies
+    title: Company data
+  - id: data/geo
+    title: Geocoding
+  - id: finance
+    title: Finance
+  - id: finance/fx
+    title: Currency exchange
+  - id: finance/market-data
+    title: Market data
+  - id: search
+    title: Search
+  - id: weather
+    title: Weather
+
+rateLimits:
+  paymentKey: { requests: 600, windowSeconds: 60 }
+  service: { requests: 6000, windowSeconds: 60 }
+  unpaidIp: { requests: 60, windowSeconds: 60 }
+  signup: { requests: 10, windowSeconds: 3600 }   # P-5
+
+timeouts:
+  connectMs: 5000
+  requestMs: 30000
+  settleMs: 30000
+
+signer:                         # Payment routing's hot wallet (P-9). These cap a routing loss (RT-9)
+  maxPerCall: "0.1"
+  maxPerNetworkPerHour: "5"
+  maxPerNetworkPerDay: "20"
