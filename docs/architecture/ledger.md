@@ -29,7 +29,7 @@ Balances, earnings, and the record of every paid call.
 | Payout | Seller earned → seller paid out, against the treasury |
 | Routed call | Buyer held, or the treasury of the buyer's asset → the treasury of the target's asset + routing fees |
 | Routing loss | Routing losses → the treasury of the target's asset. The target kept our payment and the buyer wasn't charged. |
-| Treasury transfer | The treasury of one asset → the treasury of another. Rebalancing, recorded by an operator. |
+| Treasury transfer | The treasury of one asset → the treasury of another. Rebalancing, recorded by an operator. The USD lost between them goes to `platform:conversion`. |
 
 Ledger account IDs are readable: `<account ID>:available`, `<account ID>:held`, `<account ID>:earned`, `platform:fees`, `platform:deposits_clearing`, and `platform:treasury:<asset name>`, such as `platform:treasury:base-usdc`. Each is created on first use, with a `balances` row. Until deposits exist (step 9), an operator's admin credit through the internal API is the deposit: deposits clearing → buyer available.
 

@@ -20,3 +20,10 @@ The platform's own wallets: what we hold, where, and whether it matches the ledg
 - **TR-5** Daily reconciliation compares ledger treasury balances with on-chain balances. It alerts on drift above a threshold.
 - **TR-6** Earnings are fixed in USD at payment time. The platform absorbs peg moves and conversion costs.
 - **TR-7** Keep hot wallets at minimal balances.
+
+## As built in step 11
+
+- **Wallets (TR-1)** come from platform config: each asset's `payTo` (the MPP recipient for Tempo assets), the payout wallet's address, and every deposit address. The Signer's wallets join in step 12.
+- **The balance monitor (TR-3)**, `treasury_balances`, every 5 minutes: `treasury_balance_usd{wallet,asset}`. Cardano reads through Blockfrost. Base and Tempo use the token's `balanceOf` over JSON-RPC: public RPCs by default, `mpp.rpcUrl` for Tempo, and `EVM_RPC_URLS` to override. Solana has no reader yet: it's off in production (P-6). It alerts when the payout wallet holds less than the runs waiting for it.
+- **Transfers (TR-4):** `POST /internal/v1/treasury/transfers` with `{ reference, from: { asset, amount }, to: { asset, amount }, transactions }`. USD amounts: what arrives is at most what left. One ledger transaction (`treasury_transfer`): the source treasury +from, the target −to, and `platform:conversion` the difference (TR-6). A reused reference for another transfer is `409 idempotency_conflict`. Audited as `treasury.transfer`.
+- **Reconciliation (TR-5)**, `reconciliation`, daily: per asset, minus the treasury's balance (and minus deposits clearing for the deposit asset) against the chain. A drift above $1 alerts and sets `treasury_drift_usd{asset}`. Each run is stored in `reconciliation_runs`.

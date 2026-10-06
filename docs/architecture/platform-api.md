@@ -79,7 +79,8 @@ Every `401` carries `WWW-Authenticate: Bearer`.
 | `401` | `wrong_key_type` | A payment key ([AK-4](accounts-and-keys.md)). |
 | `403` | `forbidden` | The service belongs to another account. |
 | `404` | `not_found` | An unknown route, service, revision, or payment key, including another account's key or a revoked one. An unknown account on the internal API. |
-| `409` | `idempotency_conflict` | An admin credit's `reference` was already used for another account or amount ([LG-3](ledger.md)). |
+| `409` | `idempotency_conflict` | An admin credit's or a treasury transfer's `reference` was already used for another movement ([LG-3](ledger.md)). |
+| `409` | `conflict` | A payout run that isn't awaiting approval ([PO-6](payouts.md)). |
 | `409` | `secret_origin_mismatch` | A rollback, or a racing submit, would send stored secrets to another host than they're sealed for ([SC-10](secrets.md)). |
 | `413` | `request_too_large` | The request body is over the limit. |
 | `415` | `unsupported_media_type` | A content type the route doesn't take. |

@@ -18,8 +18,8 @@ Runs every background job.
 | Settlement follow-up | Every 30 seconds | [Payment rails](payment-rails.md) | 5 |
 | Ownership re-check | Each host daily: the job runs every 5 minutes and checks what is due | [Ownership verification](ownership-verification.md) | 8 |
 | Deposit watcher | Every 20 seconds, a batch of due addresses | [Deposits](deposits.md) | 9 |
-| Payouts | The 1st of the month, UTC | [Payouts](payouts.md) | 11 |
-| Treasury balances | Every few minutes | [Treasury](treasury.md) | 11 |
+| Payouts | Every 10 minutes: builds once per cutoff, the 1st of the month, UTC | [Payouts](payouts.md) | 11 |
+| Treasury balances | Every 5 minutes | [Treasury](treasury.md) | 11 |
 | Reconciliation | Daily | [Treasury](treasury.md) | 11 |
 | Service stats | Every few minutes | [Catalog and intents](catalog-and-intents.md) | 13 |
 
