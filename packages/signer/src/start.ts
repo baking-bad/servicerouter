@@ -24,15 +24,19 @@ const readSignerSecret = (env: AppEnvironment): Secret => {
   return secret;
 };
 
-/** SIGNER_BASE_KEY: the Base hot wallet's private key, `0x` and 64 hex characters (SG-1). Optional: without it, nothing is paid on Base. */
-const readBaseWallet = (env: AppEnvironment) => {
-  if (!env['SIGNER_BASE_KEY']?.trim())
+/**
+ * A hot wallet's private key, `0x` and 64 hex characters (SG-1): SIGNER_BASE_KEY for Base, SIGNER_TEMPO_KEY
+ * for Tempo. Optional: without it, nothing is paid on that chain. One key may serve both: the address is
+ * the same on each.
+ */
+const readWallet = (env: AppEnvironment, name: 'SIGNER_BASE_KEY' | 'SIGNER_TEMPO_KEY') => {
+  if (!env[name]?.trim())
     return undefined;
-  const key = readSecret('SIGNER_BASE_KEY', env);
+  const key = readSecret(name, env);
   try {
     const value = key.expose().trim();
     if (!/^0x[0-9a-fA-F]{64}$/.test(value))
-      throw new InvalidEnvironmentError('SIGNER_BASE_KEY must be 0x and 64 hex characters');
+      throw new InvalidEnvironmentError(`${name} must be 0x and 64 hex characters`);
 
     return privateKeyToAccount(value as `0x${string}`);
   }
@@ -56,9 +60,10 @@ export const startSigner = async ({ env, logger }: AppContext): Promise<RunningA
     metricsPort: readPort(env, 'METRICS_PORT', defaultMetricsPort),
   };
   const secret = readSignerSecret(env);
-  const base = readBaseWallet(env);
-  if (!base)
-    logger.warn('The Signer has no wallet: SIGNER_BASE_KEY is not set, so routed payments are refused');
+  const base = readWallet(env, 'SIGNER_BASE_KEY');
+  const tempo = readWallet(env, 'SIGNER_TEMPO_KEY');
+  if (!base && !tempo)
+    logger.warn('The Signer has no wallet: SIGNER_BASE_KEY and SIGNER_TEMPO_KEY are not set, so routed payments are refused');
   const databaseUrl = readSecret('DATABASE_URL', env);
   const redisUrl = readSecret('REDIS_URL', env);
 
@@ -67,7 +72,7 @@ export const startSigner = async ({ env, logger }: AppContext): Promise<RunningA
   const closeConnections = async () => {
     await Promise.all([postgres.close(), redis.close()]);
   };
-  const server = createApp({ config, logger, postgres, redis, secret, wallets: base ? { base } : {} });
+  const server = createApp({ config, logger, postgres, redis, secret, wallets: { ...base ? { base } : {}, ...tempo ? { tempo } : {} } });
   let ports;
   try {
     ports = await server.listen(listen);
@@ -83,7 +88,7 @@ export const startSigner = async ({ env, logger }: AppContext): Promise<RunningA
     commit: readCommit(env) ?? null,
     logLevel: logger.level,
     environment: platformSummary(config).environment,
-    wallets: { base: base?.address ?? null },
+    wallets: { base: base?.address ?? null, tempo: tempo?.address ?? null },
     limits: {
       maxPerCall: formatUsd(signer.maxPerCall),
       maxPerNetworkPerHour: signer.maxPerNetworkPerHour === undefined ? null : formatUsd(signer.maxPerNetworkPerHour),

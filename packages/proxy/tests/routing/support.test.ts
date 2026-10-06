@@ -10,7 +10,7 @@ const signerSecret = 'signer-secret-for-the-support-tests-0123456789';
 const internalSecret = 'internal-secret-for-the-support-tests-0123456789';
 
 const signInput = {
-  requestId: 'req-support-1', quoteId: 'pay_1', x402Version: 2, requirement: {} as never, resource: undefined, url: 'https://api.target.dev/v1', quotedPrice: 1_000n as MicroUsd,
+  requestId: 'req-support-1', quoteId: 'pay_1', protocol: 'x402' as const, x402Version: 2, requirement: {} as never, resource: undefined, url: 'https://api.target.dev/v1', quotedPrice: 1_000n as MicroUsd,
 };
 
 const refusal = async (fetch: typeof globalThis.fetch): Promise<SignerUnavailableError> => {

@@ -62,16 +62,25 @@ export interface SignedPayment {
   readonly payTo: string;
 }
 
+/** What the Signer pays (SG-2): the chosen x402 option, or the target's MPP challenge as it sent it. */
+export type SignInput = {
+  readonly requestId: string;
+  readonly quoteId: string;
+  readonly url: string;
+  readonly quotedPrice: MicroUsd;
+} & ({
+  readonly protocol: 'x402';
+  readonly x402Version: number;
+  readonly requirement: PaymentRequirements;
+  readonly resource: unknown;
+} | {
+  readonly protocol: 'mpp';
+  readonly challenge: string;
+});
+
 export interface SignerClient {
-  sign(input: {
-    readonly requestId: string;
-    readonly quoteId: string;
-    readonly x402Version: number;
-    readonly requirement: PaymentRequirements;
-    readonly resource: unknown;
-    readonly url: string;
-    readonly quotedPrice: MicroUsd;
-  }): Promise<SignedPayment>;
+  /** The PAYMENT-SIGNATURE value for x402, or the Authorization value for MPP. */
+  sign(input: SignInput): Promise<SignedPayment>;
 }
 
 /** The Signer's internal API (SG-2), with its shared secret. Any failure is SignerUnavailableError. */

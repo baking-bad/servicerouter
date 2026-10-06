@@ -263,6 +263,7 @@ export const createApp = ({
     optedOut: createOptOutCheck({ http: upstreams, redis, logger, ...ownershipFileUrl ? { fileUrl: ownershipFileUrl } : {} }),
     registrar,
     limitIp: ip => limits.unpaid(ip),
+    clock,
     logger,
   });
   registerProxyRoutes(app, { cache, http: upstreams, payUrl: config.urls.pay, metrics, payments, routing });

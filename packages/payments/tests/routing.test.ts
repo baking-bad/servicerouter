@@ -1,14 +1,28 @@
-import { encodePaymentRequiredHeader } from '@x402/core/http';
+import { fixtureTime } from '@servicerouter/testing';
+
+import { encodePaymentRequiredHeader, encodePaymentResponseHeader } from '@x402/core/http';
+import { Challenge, Receipt } from 'mppx';
 import { describe, expect, it } from 'vitest';
 
 import type { MicroUsd } from '@servicerouter/common';
 import { loadPlatformConfig } from '@servicerouter/core';
 
-import { chooseOption, InvalidTargetError, parseRoutingTarget, parseTargetChallenge, routingQuote } from '../src/index.js';
+import {
+  chooseOption, InvalidTargetError, mppRefusals, parseRoutingTarget, parseTargetChallenge, routingQuote, targetReceipt,
+} from '../src/index.js';
 
 const config = await loadPlatformConfig({ env: { CONFIG_PATH: 'config/example.yaml' } });
 const usdc = config.assets.find(asset => asset.name === 'base-usdc')!.address;
+const pathUsd = config.assets.find(asset => asset.name === 'tempo-pathusd')!.address;
 const base = 'eip155:84532';
+const now = new Date(fixtureTime(0, 7, 12, 0, 0, 0));
+
+/** A target's Tempo charge, as `mppx`'s server writes it in `WWW-Authenticate: Payment`. */
+const mppChallenge = (amount: string, details: Record<string, unknown> = {}, overrides: Record<string, unknown> = {}): string => Challenge.serialize(Challenge.from({
+  id: `challenge-${amount}`, realm: 'api.target.dev', method: 'tempo', intent: 'charge', expires: fixtureTime(0, 7, 12, 5, 0, 0),
+  request: { amount, currency: pathUsd, recipient: '0x5555555555555555555555555555555555555555', methodDetails: { chainId: 42_431, supportedModes: ['pull'], ...details } },
+  ...overrides,
+} as never));
 
 describe('the routing link (RT-1)', () => {
   it('takes the host, path, and query, and targets HTTPS', () => {
@@ -43,8 +57,64 @@ describe('choosing the target\'s option (RT-3, RT-4) and the quote (RT-5)', () =
       plain,
     ]), new Uint8Array())!;
 
-    expect(chooseOption(challenge, config)).toMatchObject({ protocol: 'x402', asset: { name: 'base-usdc' }, atomicAmount: 2000n, price: 2000n });
-    expect(chooseOption(parseTargetChallenge(header([{ ...plain, scheme: 'upto' }]), new Uint8Array())!, config)).toBeUndefined();
+    expect(chooseOption(challenge, config, now)).toMatchObject({ protocol: 'x402', asset: { name: 'base-usdc' }, atomicAmount: 2000n, price: 2000n });
+    expect(chooseOption(parseTargetChallenge(header([{ ...plain, scheme: 'upto' }]), new Uint8Array())!, config, now)).toBeUndefined();
+  });
+
+  it('reads an MPP challenge of WWW-Authenticate: Payment, alone or beside x402, keeping its expiry and digest (RT-3, T27)', () => {
+    const alone = parseTargetChallenge({ 'www-authenticate': mppChallenge('1000', {}, { digest: 'sha-256=:X48E9qOokqqrvdts8nOJRJN3OWDUoyWxBf7kbu9DBPE=:' }) }, new Uint8Array())!;
+    const both = parseTargetChallenge({ ...header([plain]), 'www-authenticate': [mppChallenge('1000'), mppChallenge('2000')] }, new Uint8Array())!;
+
+    expect(alone).toMatchObject({ x402Version: 0, accepts: [], mpp: [{ method: 'tempo', intent: 'charge', expires: fixtureTime(0, 7, 12, 5, 0, 0) }] });
+    expect(alone.mpp[0]!.digest).toBeDefined();
+    expect(both).toMatchObject({ x402Version: 2, accepts: [plain] });
+    expect(both.mpp.map(item => item.request['amount'])).toEqual(['1000', '2000']);
+    expect(parseTargetChallenge({ 'www-authenticate': 'Bearer realm="api"' }, new Uint8Array())).toBeUndefined();
+  });
+
+  it('chooses an MPP Tempo charge at its price, rounded up, and binds no quote to a body unless its challenge does (RT-4, T27)', () => {
+    const chosen = chooseOption(parseTargetChallenge({ 'www-authenticate': mppChallenge('1500') }, new Uint8Array())!, config, now);
+
+    expect(chosen).toMatchObject({
+      protocol: 'mpp', asset: { name: 'tempo-pathusd' }, atomicAmount: 1500n, price: 1500n, expires: fixtureTime(0, 7, 12, 5, 0, 0), bindsBody: false,
+    });
+    expect(chosen?.protocol === 'mpp' && Challenge.deserialize(chosen.challenge).id).toBe('challenge-1500');
+  });
+
+  it('chooses x402 on Base on a tie, and MPP on Tempo when it is cheaper (RT-4, T27)', () => {
+    const tie = parseTargetChallenge({ ...header([plain]), 'www-authenticate': mppChallenge('2000') }, new Uint8Array())!;
+    const cheaper = parseTargetChallenge({ ...header([plain]), 'www-authenticate': mppChallenge('1999') }, new Uint8Array())!;
+
+    expect(chooseOption(tie, config, now)).toMatchObject({ protocol: 'x402', price: 2000n });
+    expect(chooseOption(cheaper, config, now)).toMatchObject({ protocol: 'mpp', price: 1999n });
+  });
+
+  it('pays no MPP challenge in push mode only, with splits, in another currency, on another chain, or expired, and says why (RT-4, T27)', () => {
+    const challenge = parseTargetChallenge({
+      'www-authenticate': [
+        mppChallenge('1000', { supportedModes: ['push'] }),
+        mppChallenge('1001', { splits: [{ amount: '100', recipient: '0x6666666666666666666666666666666666666666' }] }),
+        mppChallenge('1002', {}, { request: { amount: '1002', currency: '0x20c0000000000000000000000000000000000001', recipient: '0x5555555555555555555555555555555555555555' } }),
+        mppChallenge('1003', { chainId: 4_217 }),
+        mppChallenge('1004', {}, { expires: fixtureTime(0, 7, 11, 59, 59, 0) }),
+      ].join(', '),
+    }, new Uint8Array())!;
+
+    expect(challenge.mpp).toHaveLength(5);
+    expect(chooseOption(challenge, config, now)).toBeUndefined();
+    expect(mppRefusals(challenge, config, now)).toEqual(['push_only', 'splits', 'unsupported_currency', 'wrong_chain', 'expired']);
+  });
+
+  it('reads the target\'s receipt: an x402 PAYMENT-RESPONSE that succeeded, or an MPP Payment-Receipt, with its transaction (RT-9, RT-11)', () => {
+    const settled = encodePaymentResponseHeader({ success: true, transaction: '0xabc', network: base } as never);
+    const failed = encodePaymentResponseHeader({ success: false, transaction: '', network: base, errorReason: 'insufficient_funds' } as never);
+    const receipt = Receipt.serialize(Receipt.from({ method: 'tempo', status: 'success', reference: '0xdef', timestamp: now.toISOString() }));
+
+    expect(targetReceipt({ 'payment-response': settled })).toEqual({ receipt: settled, transaction: '0xabc' });
+    expect(targetReceipt({ 'payment-response': failed })).toBeUndefined();
+    expect(targetReceipt({ 'payment-receipt': receipt })).toEqual({ receipt, transaction: '0xdef' });
+    expect(targetReceipt({ 'payment-receipt': 'not-a-receipt' })).toBeUndefined();
+    expect(targetReceipt({})).toBeUndefined();
   });
 
   it('adds the routing fee, rounded down (AR6)', () => {

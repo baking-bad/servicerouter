@@ -1,14 +1,14 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 
 import {
-  formatUsd, isRecord, OutboundHttpError, outboundFields, OwnHostError, upstreamRequestIdOf, type Logger, type LogSink, type MicroUsd, type OutboundHttp,
+  formatUsd, isRecord, OutboundHttpError, outboundFields, OwnHostError, upstreamRequestIdOf, type Clock, type Logger, type LogSink, type MicroUsd, type OutboundHttp,
   type OutboundResponse,
 } from '@servicerouter/common';
 import { findAsset, type PlatformConfig } from '@servicerouter/core';
 import type { Ledger, Redis, RoutingRepository } from '@servicerouter/db';
 import {
-  chooseOption, HostNotAllowedError, NotPayableError, parseRoutingTarget, parseTargetChallenge, QuoteExceededError, routingQuote,
-  UnsupportedPaymentError, type RoutingTarget, type TargetChallenge,
+  chooseOption, HostNotAllowedError, mppRefusals, NotPayableError, parseRoutingTarget, parseTargetChallenge, QuoteExceededError, routingQuote,
+  targetReceipt, UnsupportedPaymentError, type ChosenOption, type RoutingTarget, type TargetChallenge,
 } from '@servicerouter/payments';
 import type { PaymentRequirements } from '@x402/core/types';
 
@@ -21,6 +21,8 @@ import {
 
 // RT-5: a quote is reused for this long, so a repeat call skips the probe
 export const quoteTtlSeconds = 30;
+// An MPP quote leaves the cache this long before its challenge expires, so the Signer never gets an expired one
+const challengeMarginSeconds = 10;
 // The probe's 402 body is small: options, never content
 const challengeBodyLimit = 64 * 1024;
 // The target's payment headers, which never reach the buyer (RT-10)
@@ -38,29 +40,42 @@ export interface RoutingOptions {
   readonly registrar: EndpointRegistrar;
   // The per-IP limit of the link checker (RT-19)
   readonly limitIp: (ip: string) => Promise<void>;
+  // Whether an MPP challenge has expired (CK-5)
+  readonly clock: Clock;
   readonly logger: Logger;
 }
 
-/** A target's price and our quote (RT-4, RT-5), as cached. */
-interface RoutingQuote {
-  readonly x402Version: number;
-  readonly requirement: PaymentRequirements;
-  readonly resource: unknown;
+/** A target's price and our quote (RT-4, RT-5), as cached: an x402 option or an MPP challenge. */
+type RoutingQuote = {
+  readonly network: string;
   readonly asset: string;
   readonly price: MicroUsd;
   readonly fee: MicroUsd;
   readonly quote: MicroUsd;
-}
+} & ({
+  readonly protocol: 'x402';
+  readonly x402Version: number;
+  readonly requirement: PaymentRequirements;
+  readonly resource: unknown;
+} | {
+  readonly protocol: 'mpp';
+  // The target's `WWW-Authenticate: Payment` challenge, as it sent it
+  readonly challenge: string;
+});
 
-// What the target offered, for the log when we can pay none of it (L-5): scheme and network only
-const offeredOptions = (challenge: TargetChallenge | undefined): string[] => (challenge?.accepts ?? []).slice(0, 10)
-  .map(option => isRecord(option) ? `${String(option['scheme']).slice(0, 32)} ${String(option['network']).slice(0, 64)}` : 'invalid');
+// What the target offered, for the log when we can pay none of it (L-5): scheme and network only, and the MPP challenges' methods
+const offeredOptions = (challenge: TargetChallenge | undefined): string[] => [
+  ...(challenge?.accepts ?? []).slice(0, 10)
+    .map(option => isRecord(option) ? `${String(option['scheme']).slice(0, 32)} ${String(option['network']).slice(0, 64)}` : 'invalid'),
+  ...(challenge?.mpp ?? []).slice(0, 10).map(item => `mpp ${item.method.slice(0, 32)}.${item.intent.slice(0, 32)}`),
+];
 
-/** A quote's fields on a log line (L-5): the option chosen, the target's price, the fee, and our quote. */
+/** A quote's fields on a log line (L-5): the protocol and option chosen, the target's price, the fee, and our quote. */
 const quoteFields = (quote: RoutingQuote): Record<string, string | number> => ({
-  network: quote.requirement.network,
+  protocol: quote.protocol,
+  network: quote.network,
   asset: quote.asset,
-  x402Version: quote.x402Version,
+  ...quote.protocol === 'x402' ? { x402Version: quote.x402Version } : {},
   price: formatUsd(quote.price),
   fee: formatUsd(quote.fee),
   quote: formatUsd(quote.quote),
@@ -69,12 +84,27 @@ const quoteFields = (quote: RoutingQuote): Record<string, string | number> => ({
 const serializeQuote = (quote: RoutingQuote): string => JSON.stringify({ ...quote, price: quote.price.toString(), fee: quote.fee.toString(), quote: quote.quote.toString() });
 const parseQuote = (text: string): RoutingQuote => {
   const value = JSON.parse(text) as RoutingQuote & { price: string; fee: string; quote: string };
+  const amounts = { price: BigInt(value.price) as MicroUsd, fee: BigInt(value.fee) as MicroUsd, quote: BigInt(value.quote) as MicroUsd };
 
-  return { ...value, price: BigInt(value.price) as MicroUsd, fee: BigInt(value.fee) as MicroUsd, quote: BigInt(value.quote) as MicroUsd };
+  // A quote cached before MPP routing is an x402 one, without its protocol or network
+  return value.protocol === 'mpp'
+    ? { ...value, ...amounts }
+    : { ...value, protocol: 'x402', network: value.network ?? value.requirement.network, ...amounts };
 };
 
-/** Payment routing (RT-1 to RT-19): `/<host>/<path>` pays any x402 API for the buyer, and `GET /_/check` quotes one. */
-export const createRouting = ({ config, http, redis, payments, routing, ledger, signer, optedOut, registrar, limitIp }: RoutingOptions) => {
+/** How long a quote stays cached (RT-5): an MPP quote until shortly before its challenge expires, and never one bound to a body. */
+const cacheSecondsOf = (chosen: ChosenOption, now: Date): number => {
+  if (chosen.protocol === 'x402')
+    return quoteTtlSeconds;
+  if (chosen.bindsBody)
+    return 0;
+  const expires = chosen.expires === undefined ? Number.NaN : Date.parse(chosen.expires);
+
+  return Number.isFinite(expires) ? Math.min(quoteTtlSeconds, Math.floor((expires - now.getTime()) / 1_000) - challengeMarginSeconds) : quoteTtlSeconds;
+};
+
+/** Payment routing (RT-1 to RT-19): `/<host>/<path>` pays any x402 or MPP API for the buyer, and `GET /_/check` quotes one. */
+export const createRouting = ({ config, http, redis, payments, routing, ledger, signer, optedOut, registrar, limitIp, clock }: RoutingOptions) => {
   const payUrl = config.urls.pay.replace(/\/+$/, '');
   const ownDomains = ownDomainsOf(config);
 
@@ -156,21 +186,29 @@ export const createRouting = ({ config, http, redis, payments, routing, ledger, 
       challengeBody = Buffer.alloc(0);
     }
     const challenge = parseTargetChallenge(response.headers, challengeBody);
-    const chosen = challenge && chooseOption(challenge, config);
+    const now = clock.now();
+    const chosen = challenge && chooseOption(challenge, config, now);
     if (!challenge || !chosen) {
-      log.info({ ...probe, code: 'unsupported_payment', offered: offeredOptions(challenge) }, 'The routed target offers no payment we make');
+      // L-5: and why each MPP challenge isn't payable, such as push_only or splits
+      const refusals = challenge ? mppRefusals(challenge, config, now) : [];
+      log.info({
+        ...probe, code: 'unsupported_payment', offered: offeredOptions(challenge), ...refusals.length > 0 ? { reasons: [...new Set(refusals)] } : {},
+      }, 'The routed target offers no payment we make');
       throw new UnsupportedPaymentError();
     }
 
     const feeBps = await routing.endpointFee(target.host, target.path) ?? config.routingFeeBps;
     const { quote, fee } = routingQuote(chosen.price, feeBps);
-    const result: RoutingQuote = {
-      x402Version: challenge.x402Version, requirement: chosen.requirement, resource: challenge.resource, asset: chosen.asset.name, price: chosen.price, fee, quote,
-    };
+    const amounts = { network: chosen.asset.network.id, asset: chosen.asset.name, price: chosen.price, fee, quote };
+    const result: RoutingQuote = chosen.protocol === 'x402'
+      ? { protocol: 'x402', x402Version: challenge.x402Version, requirement: chosen.requirement, resource: challenge.resource, ...amounts }
+      : { protocol: 'mpp', challenge: chosen.challenge, ...amounts };
     // L-5: the option chosen and the quote
     log.info({ ...probe, ...quoteFields(result), cached: false }, 'Routing quote');
+    const cacheSeconds = cacheSecondsOf(chosen, now);
     try {
-      await redis.client.set(key, serializeQuote(result), { expiration: { type: 'EX', value: quoteTtlSeconds } });
+      if (cacheSeconds > 0)
+        await redis.client.set(key, serializeQuote(result), { expiration: { type: 'EX', value: cacheSeconds } });
     }
     catch (error) {
       log.warn({ error }, 'Failed to cache a quote');
@@ -194,22 +232,6 @@ export const createRouting = ({ config, http, redis, payments, routing, ledger, 
     });
 
     return Object.fromEntries(Object.entries(headers).filter(([name]) => !targetPaymentHeaders.has(name)));
-  };
-
-  /** What the target's PAYMENT-RESPONSE says it settled, if anything (RT-9). */
-  const settledReceipt = (response: OutboundResponse): string | undefined => {
-    const header = response.headers['payment-response'] ?? response.headers['x-payment-response'];
-    const value = Array.isArray(header) ? header[0] : header;
-    if (typeof value !== 'string' || value === '')
-      return undefined;
-    try {
-      const decoded = JSON.parse(Buffer.from(value, 'base64').toString('utf8')) as { success?: unknown };
-
-      return decoded.success === true ? value : undefined;
-    }
-    catch {
-      return undefined;
-    }
   };
 
   const serve = async (request: FastifyRequest, reply: FastifyReply): Promise<FastifyReply> => {
@@ -243,10 +265,10 @@ export const createRouting = ({ config, http, redis, payments, routing, ledger, 
     }
     let signed;
     try {
-      signed = await signer.sign({
-        requestId: request.id, quoteId: paymentId, x402Version: quoted.x402Version, requirement: quoted.requirement, resource: quoted.resource,
-        url: target.url, quotedPrice: quoted.price,
-      });
+      const option = quoted.protocol === 'x402'
+        ? { protocol: 'x402' as const, x402Version: quoted.x402Version, requirement: quoted.requirement, resource: quoted.resource }
+        : { protocol: 'mpp' as const, challenge: quoted.challenge };
+      signed = await signer.sign({ requestId: request.id, quoteId: paymentId, ...option, url: target.url, quotedPrice: quoted.price });
     }
     catch (error) {
       await abortBuyer(undefined);
@@ -263,11 +285,12 @@ export const createRouting = ({ config, http, redis, payments, routing, ledger, 
     }
     // RT-11: the target leg, recorded before the payment goes out
     await routing.recordTargetPayment({
-      paymentId, protocol: 'x402', network: signed.network, asset: signed.asset, amount: signed.amount, atomicAmount: signed.atomicAmount,
+      paymentId, protocol: quoted.protocol, network: signed.network, asset: signed.asset, amount: signed.amount, atomicAmount: signed.atomicAmount,
       payTo: signed.payTo, signatureId: signed.signatureId,
     });
 
-    const paymentHeader = quoted.x402Version >= 2 ? 'payment-signature' : 'x-payment';
+    // Our payment, never the buyer's own Authorization (RT-16). An MPP transaction expires within about 25 s: sent now.
+    const paymentHeader = quoted.protocol === 'mpp' ? 'authorization' : quoted.x402Version >= 2 ? 'payment-signature' : 'x-payment';
     const signedLeg = { ...leg, signatureId: signed.signatureId, payTo: signed.payTo };
     const started = performance.now();
     let response: OutboundResponse;
@@ -287,7 +310,7 @@ export const createRouting = ({ config, http, redis, payments, routing, ledger, 
     // RT-8: a retry that asks for more than the quote is refused; the buyer isn't charged
     if (response.status === 402) {
       const challenge = parseTargetChallenge(response.headers, (await response.bytes().catch(() => Buffer.alloc(0))).subarray(0, challengeBodyLimit));
-      const again = challenge && chooseOption(challenge, config);
+      const again = challenge && chooseOption(challenge, config, clock.now());
       await routing.updateTargetPayment(paymentId, { status: 'failed' });
       await abortBuyer(402);
       await redis.client.del(`${redis.prefix}quote:${request.method} ${target.url}`).catch(() => undefined);
@@ -300,7 +323,9 @@ export const createRouting = ({ config, http, redis, payments, routing, ledger, 
       throw new UpstreamUnavailableError();
     }
 
-    const receipt = settledReceipt(response);
+    // RT-9, RT-11: its PAYMENT-RESPONSE or Payment-Receipt, and the transaction it names
+    const settled = targetReceipt(response.headers);
+    const receipt = settled && { receipt: settled.receipt, ...settled.transaction === undefined ? {} : { transactionHash: settled.transaction } };
     // L-5: the target's status, and whether it returned a receipt. A target's 5xx is an expected outcome: info.
     log.info({ ...answered, receipt: receipt !== undefined }, 'Routed call answered');
     response.body.on('error', () => undefined);
@@ -311,9 +336,11 @@ export const createRouting = ({ config, http, redis, payments, routing, ledger, 
       // RT-9: not charged. If the target kept our payment anyway, it's a routing loss.
       await payments.finish(call, decision);
       if (receipt) {
-        await routing.updateTargetPayment(paymentId, { status: 'settled', receipt });
+        await routing.updateTargetPayment(paymentId, { status: 'settled', ...receipt });
         await ledger.routingLoss({ paymentId });
-        log.warn({ paymentId, host: target.host, status: response.status, amount: formatUsd(signed.amount), asset: signed.asset }, 'A target kept a routed payment for a failed call: booked as a routing loss');
+        log.warn({
+          paymentId, host: target.host, status: response.status, protocol: quoted.protocol, network: signed.network, amount: formatUsd(signed.amount), asset: signed.asset,
+        }, 'A target kept a routed payment for a failed call: booked as a routing loss');
       }
       else
         await routing.updateTargetPayment(paymentId, { status: 'failed' });
@@ -327,7 +354,7 @@ export const createRouting = ({ config, http, redis, payments, routing, ledger, 
       return bodyless ? (response.dispose(), reply.send()) : reply.send(response.body);
     }
 
-    await routing.updateTargetPayment(paymentId, { status: 'settled', ...receipt ? { receipt } : {} });
+    await routing.updateTargetPayment(paymentId, { status: 'settled', ...receipt });
     registrar.register(target.host, target.path, quoted.quote, request.id);
     if (call.rail.settlesBeforeResponse) {
       // x402 and MPP buyers: settle before any byte goes out (PX-12)
