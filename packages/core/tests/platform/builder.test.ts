@@ -151,6 +151,7 @@ describe('assertValidPlatformConfigDocument', () => {
     ['an empty asset registry (PC-6)', { assets: [] }, '/assets', 'must have at least 1 item'],
     ['an unknown peg (PC-6)', { assets: [{ name: 'x', network: 'eip155:84532', address: '0x0', decimals: 6, peg: 'eur', payTo: '0x0' }] }, '/assets/0/peg', 'must be "usd"'],
     ['an unknown log level', { logger: { level: 'verbose' } }, '/logger/level', 'must be one of: "trace", "debug", "info", "warn", "error", "fatal"'],
+    ['a missing signup rate limit (PA-5)', { rateLimits: { signup: undefined } }, '/rateLimits', 'missing required field "signup"'],
   ])('rejects %s', (_name, changes, path, message) => {
     const value = patch(loadExamplePlatformDocument(), changes);
 

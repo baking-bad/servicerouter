@@ -70,7 +70,7 @@ describe('loadPlatformConfig', () => {
     expect(config.routingFeeBps).toEqual(expect.any(Number));
     expect(config.payouts.minimum).toBe(10_000_000n);
     expect(config.categories.length).toBeGreaterThan(0);
-    expect(Object.keys(config.rateLimits)).toEqual(['paymentKey', 'service', 'unpaidIp']);
+    expect(Object.keys(config.rateLimits)).toEqual(['paymentKey', 'service', 'unpaidIp', 'signup']);
     expect(Object.keys(config.timeouts)).toEqual(['connectMs', 'requestMs', 'settleMs']);
     expect(config.signer.maxPerCall).toBe(1_000_000n);
     // Key prefixes and the default limits for new payment keys
