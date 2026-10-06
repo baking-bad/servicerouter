@@ -24,8 +24,11 @@ export interface RedisOptions {
 export interface Redis {
   readonly client: RedisClient;
   readonly prefix: string;
-  /** Opens another connection with the same settings, such as for a pub/sub subscriber. The caller closes it. */
-  duplicate(): RedisClient;
+  /**
+   * Opens another connection with the same settings, such as for a pub/sub subscriber. `name` is its
+   * CLIENT SETNAME, set again on every reconnect. The caller closes it.
+   */
+  duplicate(options?: { readonly name?: string }): RedisClient;
   /** Readiness: fails at once while disconnected, otherwise one round trip to the server. */
   ping(): Promise<void>;
   close(): Promise<void>;
@@ -58,7 +61,7 @@ export const createRedis = ({ url, logger, prefix = '' }: RedisOptions): Redis =
   return {
     client,
     prefix,
-    duplicate: () => open(client.duplicate()),
+    duplicate: ({ name } = {}) => open(client.duplicate(name === undefined ? {} : { name })),
     ping: async () => {
       if (!client.isReady)
         throw new RedisNotReadyError();
