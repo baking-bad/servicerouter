@@ -5,8 +5,8 @@ import { getTopup } from '../../../src/api/topup';
 import { CopyText } from '../../../src/components/CopyText';
 import { SampleBadge } from '../../../src/components/SampleBadge';
 import { readSettings } from '../../../src/config';
+import { depositAmount, depositStatusTitles } from '../../../src/content';
 import { shortDate } from '../../../src/format';
-import { displayUsd } from '../../../src/money';
 import { qrSvg } from '../../../src/qr';
 
 interface TopupProps {
@@ -19,8 +19,6 @@ export const generateMetadata = async ({ params }: TopupProps): Promise<Metadata
   robots: { index: false, follow: false },
   alternates: { types: { 'text/markdown': `/topup/${(await params).token}.md` } },
 });
-
-const statusLabels = { seen: 'Seen', confirming: 'Confirming', credited: 'Credited' } as const;
 
 const TopupPage = async ({ params }: TopupProps) => {
   const { token } = await params;
@@ -65,10 +63,10 @@ const TopupPage = async ({ params }: TopupProps) => {
                 <thead><tr><th>Seen</th><th className="num">Amount</th><th>Status</th><th className="num">Confirmations</th><th>Transaction</th></tr></thead>
                 <tbody>
                   {topup.deposits.map(deposit => (
-                    <tr key={deposit.transactionHash}>
+                    <tr key={`${deposit.transactionHash}:${deposit.outputIndex}`}>
                       <td>{shortDate(deposit.seenAt)}</td>
-                      <td className="num">{displayUsd(deposit.amount)}</td>
-                      <td><span className={deposit.status === 'credited' ? 'badge badge-mint' : 'badge'}>{statusLabels[deposit.status]}</span></td>
+                      <td className="num">{depositAmount(deposit.amount)}</td>
+                      <td><span className={deposit.status === 'credited' ? 'badge badge-mint' : 'badge'}>{depositStatusTitles[deposit.status]}</span></td>
                       <td className="num">{deposit.confirmations}/{deposit.confirmationsRequired}</td>
                       <td><code className="faint">{deposit.transactionHash.slice(0, 10)}…{deposit.transactionHash.slice(-6)}</code></td>
                     </tr>

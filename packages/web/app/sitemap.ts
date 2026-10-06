@@ -16,7 +16,8 @@ const sitemap = async (): Promise<MetadataRoute.Sitemap> => {
     page('/discover', 0.9),
     page('/agents', 0.8),
     page('/llms.txt', 0.7),
-    ...catalog.value.services.map(item => ({ ...page(`/discover/${item.id}`, 0.6), lastModified: item.updatedAt })),
+    // Routed endpoints have no page of their own (AR14)
+    ...catalog.value.services.filter(item => item.verified).map(item => ({ ...page(`/discover/${item.id}`, 0.6), lastModified: item.updatedAt })),
   ];
 };
 

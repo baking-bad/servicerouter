@@ -43,7 +43,6 @@ const DiscoverPage = async ({ searchParams }: DiscoverProps) => {
   const query = parseCatalogQuery(await searchParams);
   const { value: page, sample } = await listCatalog(settings, query);
   const titles = new Map(page.categories.map(category => [category.id, category.title]));
-  const total = page.categories.filter(category => !category.id.includes('/')).reduce((sum, category) => sum + category.count, 0);
 
   return (
     <div className="container">
@@ -58,7 +57,7 @@ const DiscoverPage = async ({ searchParams }: DiscoverProps) => {
         <div className="discover">
           <nav className="category-tree card" aria-label="Categories">
             <a href={href(query, { category: undefined })} aria-current={query.category === undefined ? 'page' : undefined}>
-              <span>All</span><span className="count num">{total}</span>
+              <span>All</span>
             </a>
             {categoryTree(page.categories).map(category => (
               <a key={category.id} href={href(query, { category: category.id })} className={category.sub ? 'sub' : undefined} aria-current={query.category === category.id ? 'page' : undefined}>
