@@ -15,6 +15,8 @@ export { createApiKeyRepository } from './apiKeyRepository.js';
 export type { ApiKeyRepositoryOptions } from './apiKeyRepository.js';
 export { createRedisRateLimiter, rateLimitKeyPrefix } from './rateLimiter.js';
 export type { RedisRateLimiterOptions } from './rateLimiter.js';
+export { createRedisReplayStore, replayKeyPrefix } from './replayStore.js';
+export type { RedisReplayStore, RedisReplayStoreOptions, ReplayStoreChange } from './replayStore.js';
 export { createServiceRepository } from './serviceRepository.js';
 export type { ServiceRepositoryOptions } from './serviceRepository.js';
 export { createServiceSecretRepository } from './serviceSecretRepository.js';

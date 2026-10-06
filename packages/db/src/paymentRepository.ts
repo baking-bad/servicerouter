@@ -34,7 +34,7 @@ export interface SettlingPayment {
 
 /** The `payments` rows (LG-7, LG-8). Implements the rails' PaymentRecorder port (PR-10). */
 export interface PaymentRepository {
-  create(payment: NewPayment & { readonly status: InitialPaymentStatus }): Promise<Payment>;
+  create(payment: NewPayment & { readonly status: InitialPaymentStatus; readonly transactionHash?: string }): Promise<Payment>;
   recordDecision(input: {
     readonly paymentId: string;
     readonly decision: BillingDecision;
@@ -131,6 +131,7 @@ export const createPaymentRepository = ({ db, clock }: PaymentRepositoryOptions)
         atomicAmount: payment.atomicAmount ?? null,
         amount: payment.amount,
         status: payment.status,
+        transactionHash: payment.transactionHash ?? null,
         needsReview: false,
         createdAt: now,
         updatedAt: now,
