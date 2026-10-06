@@ -9,6 +9,12 @@
     },
     {
       "path": "packages/db"
+    },
+    {
+      "path": "packages/payments"
+    },
+    {
+      "path": "packages/testing"
     }
   ]
 }
