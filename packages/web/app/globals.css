@@ -581,6 +581,9 @@ code, pre, .mono {
 
 .service-card h3 {
   font-size: 14px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .service-card .summary {
