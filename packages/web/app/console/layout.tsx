@@ -22,6 +22,7 @@ const ConsoleLayout = ({ children }: { readonly children: ReactNode }) => {
         payUrl: settings.payUrl,
         topupMocked: isMocked(settings, 'topup'),
         agentDocsMocked: isMocked(settings, 'agent-docs'),
+        catalogMocked: isMocked(settings, 'catalog'),
       }}
     >
       {children}

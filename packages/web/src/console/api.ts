@@ -1,4 +1,5 @@
 import { ApiError, callApi } from '../api/http';
+import type { CatalogStats } from '../api/types';
 import type {
   Account, Balance, CreatedKey, Earnings, KeyLimits, OwnedService, PaymentKey, PaymentPage, Revision, ServiceDetail, ServiceStatus, Signup,
 } from './types';
@@ -25,6 +26,8 @@ export interface ConsoleApi {
   status(service: ServiceDetail): Promise<{ readonly value: ServiceStatus; readonly sample: boolean }>;
   /** Checks every upstream host now (OV-6), and returns the new status. */
   verify(service: ServiceDetail): Promise<{ readonly value: ServiceStatus; readonly sample: boolean }>;
+  /** The service's last 30 days from the public catalog (CI-4). Undefined until it's live and indexed. */
+  serviceStats(id: string): Promise<{ readonly value: CatalogStats | undefined; readonly sample: boolean }>;
   /** A new master key, shown once. The old one stops working at once. */
   rotateMasterKey(): Promise<string>;
 }
@@ -59,6 +62,19 @@ export const createHttpConsoleApi = ({ apiUrl, key, fetch: fetchFn }: HttpConsol
     earnings: id => call('GET', `${path(id)}/earnings`),
     status: async service => ({ value: await call<ServiceStatus>('GET', `${path(service.id)}/status`), sample: false }),
     verify: async service => ({ value: await call<ServiceStatus>('POST', `${path(service.id)}/verify`), sample: false }),
+    // The catalog is public: no key goes with it
+    serviceStats: async id => {
+      try {
+        const entry = await callApi<{ readonly stats: CatalogStats }>(apiUrl, { path: `/v1/catalog/${encodeURIComponent(id)}`, ...(fetchFn ? { fetch: fetchFn } : {}) });
+
+        return { value: entry.stats, sample: false };
+      }
+      catch (error) {
+        if (error instanceof ApiError && error.status === 404)
+          return { value: undefined, sample: false };
+        throw error;
+      }
+    },
     rotateMasterKey: async () => (await call<{ readonly masterKey: string }>('POST', '/v1/account/master-key/rotate')).masterKey,
   };
 };

@@ -17,6 +17,7 @@ export interface ConsoleSettings {
   readonly payUrl: string;
   readonly topupMocked: boolean;
   readonly agentDocsMocked: boolean;
+  readonly catalogMocked: boolean;
 }
 
 interface ConsoleContextValue {

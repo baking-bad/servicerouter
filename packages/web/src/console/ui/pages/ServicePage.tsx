@@ -7,7 +7,6 @@ import { methodInfo } from '../../../content';
 import { compactCount, latency, percent, shortDate } from '../../../format';
 import { displayUsd } from '../../../money';
 import { SampleBadge } from '../../../components/SampleBadge';
-import { sampleServiceStats } from '../../sample';
 import type { HostState, HostStatus, ServiceDetail, ServiceStatus } from '../../types';
 import { useConsole, useConsoleData } from '../ConsoleRoot';
 import { ConfirmButton, ConsoleHeading, ErrorNotice, StatTile } from '../parts';
@@ -86,20 +85,26 @@ export const ServicePage = ({ id }: { readonly id: string }) => {
   const { api, settings } = useConsole();
   const { data, error, reload } = useConsoleData(async consoleApi => {
     const [detail, revisions, earnings, list] = await Promise.all([consoleApi.service(id), consoleApi.revisions(id), consoleApi.earnings(id), consoleApi.services()]);
-    const status = await consoleApi.status(detail);
+    // Stats are a nice-to-have: an unreachable catalog leaves the rest of the page working
+    const [status, stats] = await Promise.all([consoleApi.status(detail), consoleApi.serviceStats(id).catch(() => undefined)]);
 
-    return { detail, revisions, earnings, status, title: list.find(service => service.id === id)?.title ?? id };
+    return { detail, revisions, earnings, status, stats, title: list.find(service => service.id === id)?.title ?? id };
   }, [id]);
-  const stats = sampleServiceStats(id);
-  const docs = settings.agentDocsMocked
+  // A real account's service: the Platform API's documents. The website serves sample ones for sample services only.
+  const sample = api?.sample ?? false;
+  const docs = sample && settings.agentDocsMocked
     ? { llms: `/discover/${id}/llms.txt`, skill: `/discover/${id}/skill.md`, openapi: `/discover/${id}/openapi.json` }
     : { llms: `${settings.apiUrl}/v1/services/${id}/llms.txt`, skill: `${settings.apiUrl}/v1/services/${id}/skill.md`, openapi: `${settings.apiUrl}/v1/services/${id}/openapi.json` };
+  // While the website's catalog is sample data, a real service has no page there yet: link its catalog entry instead
+  const publicLink = sample || !settings.catalogMocked
+    ? { href: `/discover/${id}`, label: 'Public page' }
+    : { href: `${settings.apiUrl}/v1/catalog/${id}`, label: 'Catalog entry' };
 
   if (error)
     return <><ConsoleHeading title={id} /><ErrorNotice error={error} /></>;
   if (!data)
     return <><ConsoleHeading title={id} /><p className="faint">Loading…</p></>;
-  const { detail, revisions, earnings, status, title } = data;
+  const { detail, revisions, earnings, status, stats, title } = data;
 
   return (
     <>
@@ -130,16 +135,20 @@ export const ServicePage = ({ id }: { readonly id: string }) => {
       <section className="section grid grid-2">
         <OwnershipCard detail={detail} initial={status} />
         <div className="card stack">
-          <div className="row"><h3>Last 30 days</h3><SampleBadge /></div>
-          <div className="stats stats-4">
-            <div><div className="label">Calls</div><div className="value-small">{compactCount(stats.calls30d)}</div></div>
-            <div><div className="label">Success</div><div className="value-small">{percent(stats.successRate)}</div></div>
-            <div><div className="label">Median</div><div className="value-small">{latency(stats.p50Ms)}</div></div>
-            <div><div className="label">p95</div><div className="value-small">{latency(stats.p95Ms)}</div></div>
-          </div>
+          <div className="row"><h3>Last 30 days</h3>{stats?.sample ? <SampleBadge /> : null}</div>
+          {stats?.value
+            ? (
+              <div className="stats stats-4">
+                <div><div className="label">Calls</div><div className="value-small">{compactCount(stats.value.calls30d)}</div></div>
+                <div><div className="label">Success</div><div className="value-small">{percent(stats.value.successRate)}</div></div>
+                <div><div className="label">Median</div><div className="value-small">{latency(stats.value.p50Ms)}</div></div>
+                <div><div className="label">p95</div><div className="value-small">{latency(stats.value.p95Ms)}</div></div>
+              </div>
+            )
+            : <p className="muted">{stats ? 'No calls yet. Stats appear once the service is live and the catalog has indexed it, within a minute.' : 'Stats are unavailable right now. Reload in a moment.'}</p>}
           <h3 className="mt-8">For agents</h3>
           <div className="row">
-            <a className="mono" href={`/discover/${id}`}>Public page</a>
+            <a className="mono" href={publicLink.href}>{publicLink.label}</a>
             <a className="mono" href={docs.llms}>llms.txt</a>
             <a className="mono" href={docs.skill}>skill.md</a>
             <a className="mono" href={docs.openapi}>openapi.json</a>

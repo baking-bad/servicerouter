@@ -168,6 +168,22 @@ describe('the console\'s Platform API client (WB-8, WB-2)', () => {
     expect(sample.value.hosts.map(host => [host.host, host.state])).toEqual([['api.weather.example', 'verified']]);
   });
 
+  it('reads a real service\'s last 30 days from the public catalog, without the key, and none until it is indexed; only the sample console has sample stats (CI-4, WB-8, WB-10)', async () => {
+    const stats = { calls30d: 42, successRate: 0.95, p50Ms: 120, p95Ms: 480 };
+    const found = recordingFetch(() => jsonAnswer({ id: 'my-weather', stats }));
+
+    expect(await createHttpConsoleApi({ apiUrl, key: masterKey, fetch: found.fetch }).serviceStats('my-weather')).toEqual({ value: stats, sample: false });
+    expect(found.calls.map(call => `${call.method} ${call.url.origin}${call.url.pathname}`)).toEqual([`GET ${apiUrl}/v1/catalog/my-weather`]);
+    expect(found.calls[0]!.headers['authorization']).toBeUndefined();
+
+    const missing = recordingFetch(() => jsonAnswer({ error: { code: 'not_found', message: 'No such service' } }, 404));
+    expect(await createHttpConsoleApi({ apiUrl, key: masterKey, fetch: missing.fetch }).serviceStats('pending-weather')).toEqual({ value: undefined, sample: false });
+
+    const sampleStats = await createSampleConsoleApi(() => now).serviceStats('skycast-weather');
+    expect(sampleStats.sample).toBe(true);
+    expect(sampleStats.value?.calls30d).toBeGreaterThan(0);
+  });
+
   it('keeps the API\'s error code and message (PA-3)', async () => {
     const { fetch } = recordingFetch(() => jsonAnswer({ error: { code: 'wrong_key_type', message: 'This is a payment key. The console takes the master key.' } }, 401));
 

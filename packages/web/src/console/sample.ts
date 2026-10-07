@@ -211,6 +211,7 @@ export const createSampleConsoleApi = (now: () => Date = () => new Date()): Cons
     earnings: async id => find(earnings[id]),
     status: async service => ({ value: sampleStatus(service), sample: true }),
     verify: async service => ({ value: sampleStatus(service), sample: true }),
+    serviceStats: async id => ({ value: sampleServiceStats(id), sample: true }),
     rotateMasterKey: async () => `srm_live_sample${'0'.repeat(30)}${Date.now() % 1_000}`,
   };
 };

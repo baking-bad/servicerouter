@@ -167,6 +167,8 @@ describe('the console against the Platform API, from the website\'s origin (WB-8
     const earnings = await client.earnings(id);
     expect(earnings).toMatchObject({ serviceId: id, calls: 0, earned: { total: '0' }, pending: '0', nextPayoutDate: expect.stringMatching(/^\d{4}-\d{2}-01$/) });
     expect(totalEarnings([earnings])).toMatchObject({ earned: '0', calls: 0 });
+    // Its 30-day stats come from the catalog, which indexes live services each minute: none before that (CI-4)
+    expect(await client.serviceStats(id)).toEqual({ value: undefined, sample: false });
 
     // A new master key replaces the one in the tab; the old one signs out on its next call (AK-5)
     const rotated = await client.rotateMasterKey();
