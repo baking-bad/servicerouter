@@ -37,7 +37,7 @@ const LandingPage = async () => {
           </div>
         </div>
         <pre className="code code-wrap" aria-label="A call through Service Router">
-          <span className="prompt">$ </span>curl {new URL(settings.payUrl).host}/service/skycast-weather/current/oslo{'\n'}
+          <span className="prompt">$ </span>curl {new URL(settings.payUrl).host}/service/skycast-weather/current/singapore{'\n'}
           <span className="warn">402 Payment Required</span>  credits · x402 · MPP{'\n\n'}
           <span className="prompt">$ </span>curl … -H &quot;Authorization: Bearer sr_live_…&quot;{'\n'}
           <span className="ok">200 OK</span>{'\n'}
