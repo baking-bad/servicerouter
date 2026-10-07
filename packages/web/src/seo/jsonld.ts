@@ -16,7 +16,7 @@ export const websiteJsonLd = ({ siteUrl }: SiteSettings): Record<string, unknown
     target: { '@type': 'EntryPoint', urlTemplate: `${siteUrl}/discover?q={search_term_string}` },
     'query-input': 'required name=search_term_string',
   },
-  publisher: { '@type': 'Organization', name: 'Baking Bad' },
+  publisher: { '@type': 'Organization', name: 'Baking Bad', url: 'https://bakingbad.dev' },
 });
 
 /** A service page's: the API, its documents, and an offer per route. */
