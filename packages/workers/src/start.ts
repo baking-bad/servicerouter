@@ -1,13 +1,13 @@
 import {
   readCommit, readHost, readLogLevel, readPort, readSecret, systemClock, type AppContext, type RunningApp,
 } from '@servicerouter/common';
-import { createBlockfrostClient, findAsset, loadPlatformConfig, platformDefaults, platformSummary, type PlatformConfig } from '@servicerouter/core';
+import { createBlockfrostClient, findAsset, loadPlatformConfig, platformDefaults, platformSummary, readSolanaRpc, type PlatformConfig } from '@servicerouter/core';
 import { createPostgres, createRedis } from '@servicerouter/db';
 import { checkFacilitators, createFacilitators, createMppSettlementCheck, createTempoRpc, type MppSettlementCheck } from '@servicerouter/payments';
 
 import { createApp } from './app.js';
 import { createCardanoPayoutWallet } from './payouts/wallet.js';
-import { createCardanoBalanceReader, createEvmBalanceReader } from './treasury/readers.js';
+import { createCardanoBalanceReader, createEvmBalanceReader, createSolanaBalanceReader } from './treasury/readers.js';
 
 export const defaultMetricsPort = 9082;
 // How long the facilitators get to answer /supported at startup, as for the proxy (PR-6), and the Tempo
@@ -84,9 +84,14 @@ export const startWorkers = async ({ env, logger }: AppContext): Promise<Running
   if (!payoutWallet)
     logger.warn('Payouts are off: PAYOUT_WALLET_MNEMONIC is not set');
   const evmRpcUrls = readEvmRpcUrls(env, config);
+  // TR-3, TR-5: Solana through SOLANA_RPC_URL, which may carry a key in its path
+  const solanaRpc = readSolanaRpc(env, config);
+  if (solanaRpc?.public)
+    logger.warn({ host: solanaRpc.host }, 'SOLANA_RPC_URL is not set: the treasury reads Solana through its public RPC, which is rate limited');
   const balanceReaders = {
     ...blockfrost ? { cardano: createCardanoBalanceReader(blockfrost) } : {},
     evm: createEvmBalanceReader({ rpcUrlFor: network => evmRpcUrls.get(network), timeoutMs: blockfrostTimeoutMs }),
+    ...solanaRpc ? { solana: createSolanaBalanceReader({ rpcUrl: solanaRpc.url, timeoutMs: blockfrostTimeoutMs }) } : {},
   };
 
   const postgres = createPostgres({ url: databaseUrl, logger });
@@ -106,7 +111,7 @@ export const startWorkers = async ({ env, logger }: AppContext): Promise<Running
     await closeConnections();
     throw error;
   }
-  // L-1: once, what this replica runs. Network names only: an RPC URL can carry a key, so it stays out.
+  // L-1: once, what this replica runs. Network names and the Solana RPC's host only: an RPC URL can carry a key, so it stays out.
   logger.info({
     app: 'workers',
     commit: readCommit(env) ?? null,
@@ -116,7 +121,7 @@ export const startWorkers = async ({ env, logger }: AppContext): Promise<Running
     blockfrost: blockfrost !== undefined,
     payouts: payoutWallet !== undefined,
     settlementFollowUp: { facilitators: facilitators.map(facilitator => facilitator.name), mpp: mppCheck !== undefined },
-    treasuryReaders: { cardano: balanceReaders.cardano !== undefined, evm: [...evmRpcUrls.keys()] },
+    treasuryReaders: { cardano: balanceReaders.cardano !== undefined, evm: [...evmRpcUrls.keys()], solana: solanaRpc?.host ?? null },
     ports: { metricsPort: port },
   }, 'Started');
 

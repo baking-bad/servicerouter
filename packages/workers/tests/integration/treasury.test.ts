@@ -9,10 +9,12 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createLogger, randomIdGenerator, Secret, type MicroUsd } from '@servicerouter/common';
 import { createBlockfrostClient, findAsset, loadPlatformConfig, treasuryWallets, type PlatformConfig } from '@servicerouter/core';
 import { createLedger, reconciliationRuns } from '@servicerouter/db';
-import { createFakeClock, createTestDatabase, startFakeBlockfrost, type FakeBlockfrost, type TestDatabase } from '@servicerouter/testing';
+import {
+  createFakeClock, createTestDatabase, startFakeBlockfrost, startFakeSolanaRpc, type FakeBlockfrost, type FakeSolanaRpc, type TestDatabase,
+} from '@servicerouter/testing';
 
 import { createReconciliationJob, createTreasuryBalancesJob, createTreasuryMetrics } from '../../src/treasury/jobs.js';
-import { createCardanoBalanceReader, createEvmBalanceReader, readerFor } from '../../src/treasury/readers.js';
+import { createCardanoBalanceReader, createEvmBalanceReader, createSolanaBalanceReader, readerFor } from '../../src/treasury/readers.js';
 
 const clock = createFakeClock(fixtureTime(1, 2, 0, 0, 0, 0));
 const logs: Record<string, unknown>[] = [];
@@ -22,6 +24,7 @@ let database: TestDatabase;
 let blockfrost: FakeBlockfrost;
 let config: PlatformConfig;
 let evm: { url: string; close(): Promise<void>; balances: Map<string, bigint> };
+let solana: FakeSolanaRpc;
 
 /** A JSON-RPC that answers ERC-20 balanceOf calls from a map, by holder address. */
 const startFakeEvmRpc = async () => {
@@ -47,13 +50,13 @@ const startFakeEvmRpc = async () => {
 };
 
 beforeAll(async () => {
-  [database, blockfrost, config, evm] = await Promise.all([
-    createTestDatabase(), startFakeBlockfrost(), loadPlatformConfig({ env: { CONFIG_PATH: 'config/example.yaml' } }), startFakeEvmRpc(),
+  [database, blockfrost, config, evm, solana] = await Promise.all([
+    createTestDatabase(), startFakeBlockfrost(), loadPlatformConfig({ env: { CONFIG_PATH: 'config/example.yaml' } }), startFakeEvmRpc(), startFakeSolanaRpc(),
   ]);
 });
 
 afterAll(async () => {
-  await Promise.all([blockfrost?.close(), evm?.close()]);
+  await Promise.all([blockfrost?.close(), evm?.close(), solana?.close()]);
   await database?.drop();
 });
 
@@ -144,5 +147,110 @@ describe('the treasury jobs (TR-3, TR-5)', () => {
       return run!.results;
     };
     expect(await reconcileWith(withSigner)).toEqual(await reconcileWith({ ...config, assets }));
+  });
+});
+
+describe('the Solana balance reader and the treasury jobs on Solana (TR-1, TR-3, TR-5, P-6)', () => {
+  // The fake answers on any path: production's NOWNodes URL carries its key there
+  const rpcUrl = () => Secret.from(`${solana.url}/solana-rpc-key-secret`);
+  const solanaReader = () => createSolanaBalanceReader({ rpcUrl: rpcUrl(), timeoutMs: 2_000 });
+  const owner = '9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM';
+  const usdc = () => findAsset(config, 'solana-usdc')!;
+
+  it('reads the sum of the owner\'s token accounts for the mint, and 0 without one (TR-3)', async () => {
+    solana.setTokenAccounts(owner, usdc().address, [3_000_000n, 1_250_000n]);
+    const reader = solanaReader();
+
+    expect(await reader.balance({ address: owner, asset: usdc() })).toBe(4_250_000n);
+    expect(await reader.hasTokenAccount({ address: owner, asset: usdc() })).toBe(true);
+    // Another mint's accounts don't count
+    expect(await reader.balance({ address: owner, asset: { ...usdc(), address: 'So11111111111111111111111111111111111111112' } })).toBe(0n);
+
+    solana.setTokenAccounts(owner, usdc().address, []);
+    expect(await reader.balance({ address: owner, asset: usdc() })).toBe(0n);
+    expect(await reader.hasTokenAccount({ address: owner, asset: usdc() })).toBe(false);
+  });
+
+  it.each([
+    ['a JSON-RPC error', 'error', /refused getTokenAccountsByOwner/],
+    ['an answer without accounts', 'malformed', /without a list of accounts/],
+  ] as const)('throws on %s, without the RPC\'s URL (TR-3)', async (_case, mode, message) => {
+    solana.failTokenAccounts(mode);
+    try {
+      const failure = await solanaReader().balance({ address: owner, asset: usdc() }).then(() => undefined, (error: unknown) => error as Error);
+
+      expect(failure?.message).toMatch(message);
+      expect(JSON.stringify({ message: failure?.message, cause: String(failure?.cause) })).not.toContain('solana-rpc-key-secret');
+    }
+    finally {
+      solana.failTokenAccounts(undefined);
+    }
+  });
+
+  it('throws when the RPC doesn\'t answer, without its URL (TR-3)', async () => {
+    const failing = createSolanaBalanceReader({ rpcUrl: Secret.from('http://127.0.0.1:9/solana-rpc-key-secret'), timeoutMs: 2_000 });
+    const failure = await failing.balance({ address: owner, asset: usdc() }).then(() => undefined, (error: unknown) => error as Error);
+
+    expect(failure?.message).toBe('The Solana RPC didn\'t answer getTokenAccountsByOwner');
+    expect(failure?.message).not.toContain('solana-rpc-key-secret');
+  });
+
+  it('reports the Solana treasury\'s balance, and warns once a run about a payTo without a USDC account (TR-1, TR-3)', async () => {
+    const assets = config.assets.filter(asset => asset.name === 'solana-usdc');
+    const wallets = async () => treasuryWallets({ ...config, assets });
+    const solanaReaders = readerFor({ solana: solanaReader() });
+    const run = async () => {
+      const registry = new Registry();
+      logs.length = 0;
+      await createTreasuryBalancesJob({ wallets, readerFor: solanaReaders, payouts: undefined, signerDailyLimit: config.signer.maxPerNetworkPerDay, metrics: createTreasuryMetrics(registry), logger })();
+
+      return { text: await registry.metrics(), warnings: logs.filter(line => line['msg'] === 'A payTo has no token account for its asset: payments to it fail until it has one') };
+    };
+
+    solana.setTokenAccounts(usdc().payTo, usdc().address, [7_500_000n]);
+    const funded = await run();
+    expect(funded.text).toMatch(/treasury_balance_usd\{wallet="payTo:solana-usdc",asset="solana-usdc"\} 7\.5/);
+    expect(funded.warnings).toEqual([]);
+
+    solana.setTokenAccounts(usdc().payTo, usdc().address, []);
+    const missing = await run();
+    expect(missing.text).toMatch(/treasury_balance_usd\{wallet="payTo:solana-usdc",asset="solana-usdc"\} 0/);
+    expect(missing.warnings).toEqual([expect.objectContaining({
+      level: 40, wallet: 'payTo:solana-usdc', asset: 'solana-usdc', network: usdc().network.id, address: usdc().payTo, alert: true,
+    })]);
+
+    // A USDC account that is merely empty is no warning
+    solana.setTokenAccounts(usdc().payTo, usdc().address, [0n]);
+    expect((await run()).warnings).toEqual([]);
+    expect(JSON.stringify(logs)).not.toContain('solana-rpc-key-secret');
+  });
+
+  it('reconciles solana-usdc: it matches when the ledger and the chain agree, and alerts above $1 of drift (TR-5)', async () => {
+    const ledger = createLedger({ db: database.db, clock, ids: randomIdGenerator });
+    const assets = config.assets.filter(asset => asset.name === 'solana-usdc');
+    const reconcileOnce = async () => {
+      await database.db.delete(reconciliationRuns);
+      const registry = new Registry();
+      logs.length = 0;
+      await createReconciliationJob({
+        db: database.db, config: { ...config, assets }, wallets: async () => treasuryWallets({ ...config, assets }), readerFor: readerFor({ solana: solanaReader() }),
+        ledger, metrics: createTreasuryMetrics(registry), clock, ids: randomIdGenerator, logger,
+      })();
+      const [run] = await database.db.select().from(reconciliationRuns);
+
+      return { run: run!, text: await registry.metrics() };
+    };
+    // The ledger knows of 6 USDC on Solana
+    await ledger.treasuryTransfer({ reference: 'seed-solana-usdc', from: { asset: 'seed', amount: 6_000_000n as MicroUsd }, to: { asset: 'solana-usdc', amount: 6_000_000n as MicroUsd } });
+
+    solana.setTokenAccounts(usdc().payTo, usdc().address, [6_000_000n]);
+    const agreed = await reconcileOnce();
+    expect(agreed.run).toMatchObject({ alerts: 0, results: { 'solana-usdc': { ledger: '6', chain: '6', drift: '0', alert: false } } });
+
+    solana.setTokenAccounts(usdc().payTo, usdc().address, [4_500_000n]);
+    const drifted = await reconcileOnce();
+    expect(drifted.run).toMatchObject({ alerts: 1, results: { 'solana-usdc': { ledger: '6', chain: '4.5', drift: '-1.5', alert: true } } });
+    expect(logs).toContainEqual(expect.objectContaining({ asset: 'solana-usdc', drift: '-1.5', alert: true }));
+    expect(drifted.text).toMatch(/treasury_drift_usd\{asset="solana-usdc"\} -1\.5/);
   });
 });

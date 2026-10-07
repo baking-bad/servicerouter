@@ -32,6 +32,12 @@ assets:                         # PC-6. Addresses and decimals from the SDKs: @x
     decimals: 6
     peg: usd
     payTo: "0x5d0b54076191062bea66176c6a0c94ab3aeafb26"          # Our Base address that receives USDC
+  - name: solana-usdc           # P-6: yes (owner). Mint from @x402/svm's USDC_MAINNET_ADDRESS
+    network: solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp   # Solana
+    address: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+    decimals: 6
+    peg: usd
+    payTo: "4SHMcqadX3DViKFermsfRSzGVSF7XLMpZWyJanK1PWKX"   # Our Solana treasury (owner). Its USDC account must exist before the first payment: x402 on Solana only transfers
   - name: cardano-usdm
     network: cardano:mainnet
     address: c48cbb3d5e57ed56e276bc45f99ab39abe94e6cd7ac39fb402da47ad.0014df105553444d
@@ -49,7 +55,7 @@ assets:                         # PC-6. Addresses and decimals from the SDKs: @x
 facilitators:
   - name: cdp
     url: https://api.cdp.coinbase.com/platform/v2/x402
-    networks: [eip155:8453]     # Solana later (P-6)
+    networks: [eip155:8453, solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp]   # Base and Solana (P-6). CDP's fee payer pays Solana's network fee
     auth:
       type: cdp
       apiKeyId: CDP_API_KEY_ID

@@ -60,7 +60,7 @@ export interface WorkersDependencies {
   // The payout wallet, with the payout key (PO-8). The payouts job runs only with it and Blockfrost.
   readonly payoutWallet?: PayoutWallet;
   // Balance readers per chain (TR-3, TR-5). The treasury jobs run only with one.
-  readonly balanceReaders?: { readonly cardano?: BalanceReader; readonly evm?: BalanceReader };
+  readonly balanceReaders?: { readonly cardano?: BalanceReader; readonly evm?: BalanceReader; readonly solana?: BalanceReader };
 }
 
 export interface WorkersServer extends MetricsServer {
@@ -156,7 +156,7 @@ export const createApp = ({
     ...payoutWallet ? { payoutAddress: payoutWallet.address } : {},
     depositAddresses: (await postgres.db.select({ address: depositAddresses.address }).from(depositAddresses)).map(row => row.address),
   });
-  const treasuryJobs = balanceReaders && (balanceReaders.cardano || balanceReaders.evm)
+  const treasuryJobs = balanceReaders && (balanceReaders.cardano || balanceReaders.evm || balanceReaders.solana)
     ? (() => {
       const metrics = createTreasuryMetrics(server.registry);
 

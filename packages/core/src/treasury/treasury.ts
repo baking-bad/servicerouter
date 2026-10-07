@@ -15,6 +15,11 @@ export interface TreasuryWallet {
 /** Port: reads what an address holds of an asset, in its atomic units. One per chain. */
 export interface BalanceReader {
   balance(input: { readonly address: string; readonly asset: Asset }): Promise<bigint>;
+  /**
+   * Solana only: whether the address has a token account for the asset. x402's `exact` payment on
+   * Solana only transfers, so a `payTo` without one can't be paid. Absent on chains without token accounts.
+   */
+  hasTokenAccount?(input: { readonly address: string; readonly asset: Asset }): Promise<boolean>;
 }
 
 /**

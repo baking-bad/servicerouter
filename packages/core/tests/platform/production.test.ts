@@ -28,11 +28,14 @@ const loadText = async (yaml: string) => {
   return loadPlatformConfig({ env: { CONFIG_PATH: 'production.yaml' }, cwd: directory });
 };
 
+// The owner's Solana treasury (P-6)
+const solanaTreasury = '"4SHMcqadX3DViKFermsfRSzGVSF7XLMpZWyJanK1PWKX"';
 const placeholders: Readonly<Record<string, string>> = {
-  'base-usdc': '"FILL_ME_BASE_TREASURY"', 'cardano-usdm': '"FILL_ME_CARDANO_TREASURY"', 'tempo-usdce': '"FILL_ME_TEMPO_RECIPIENT"',
+  'base-usdc': '"FILL_ME_BASE_TREASURY"', 'solana-usdc': solanaTreasury, 'cardano-usdm': '"FILL_ME_CARDANO_TREASURY"', 'tempo-usdce': '"FILL_ME_TEMPO_RECIPIENT"',
 };
 const samples: Readonly<Record<string, string>> = {
   'base-usdc': '"0x1111111111111111111111111111111111111111"',
+  'solana-usdc': solanaTreasury,
   'cardano-usdm': 'addr1v9zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3q09h6pt',
   'tempo-usdce': '"0x2222222222222222222222222222222222222222"',
 };
@@ -56,7 +59,7 @@ const filled = (yaml: string): string => yaml.includes('FILL_ME_') ? withAddress
 describe('config/production.yaml (PC-1, PC-5, P-1 to P-9)', () => {
   it('refuses to start while a treasury address is still its placeholder, naming each one', async () => {
     await expect(loadText(withAddresses(text, asset => placeholders[asset]!))).rejects
-      .toThrow(/assets\/0\/payTo: is not a valid address on Base[\s\S]*assets\/1\/payTo: is not a valid address on Cardano[\s\S]*mpp\/recipient: is not a valid address on Tempo/);
+      .toThrow(/assets\/0\/payTo: is not a valid address on Base[\s\S]*assets\/2\/payTo: is not a valid address on Cardano[\s\S]*mpp\/recipient: is not a valid address on Tempo/);
   });
 
   it('refuses an unquoted 0x… address, which YAML reads as a number, and says to quote it', async () => {
@@ -65,17 +68,18 @@ describe('config/production.yaml (PC-1, PC-5, P-1 to P-9)', () => {
     await expect(loadText(unquoted)).rejects.toThrow(/assets\/0\/payTo: must be a string: put the address in quotes, since YAML reads an unquoted 0x… as a number/);
   });
 
-  it('loads once they are filled in: mainnets only, USDC.e on Tempo, no Solana yet, live key prefixes, the temporary domain', async () => {
+  it('loads once they are filled in: mainnets only, USDC on Solana through CDP, USDC.e on Tempo, live key prefixes, the temporary domain (P-6)', async () => {
     const config = await loadText(filled(text));
 
     expect(config.environment).toBe('production');
     expect(config.assets.map(asset => [asset.name, asset.network.id, asset.decimals])).toEqual([
       ['base-usdc', 'eip155:8453', 6],
+      ['solana-usdc', 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp', 6],
       ['cardano-usdm', 'cardano:mainnet', 6],
       ['tempo-usdce', 'eip155:4217', 6],
     ]);
     expect(config.facilitators.map(facilitator => [facilitator.name, [...facilitator.networks]])).toEqual([
-      ['cdp', ['eip155:8453']],
+      ['cdp', ['eip155:8453', 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp']],
       ['cardano', ['cardano:mainnet']],
     ]);
     expect(config.keyPrefixes).toEqual({ master: 'srm_live_', payment: 'sr_live_' });
@@ -95,7 +99,7 @@ describe('config/production.yaml (PC-1, PC-5, P-1 to P-9)', () => {
   it('offers USDM on Cardano from $0.001, lowered for the hackathon, so routed $0.001 calls take it (PR-3)', async () => {
     const config = await loadText(filled(text));
 
-    expect(config.assets.map(asset => [asset.name, asset.minPrice])).toEqual([['base-usdc', 0n], ['cardano-usdm', 1_000n], ['tempo-usdce', 0n]]);
+    expect(config.assets.map(asset => [asset.name, asset.minPrice])).toEqual([['base-usdc', 0n], ['solana-usdc', 0n], ['cardano-usdm', 1_000n], ['tempo-usdce', 0n]]);
   });
 
   it('reaches the Cardano facilitator by a host without an underscore, since its Tomcat answers 400 to one (PR-6)', async () => {
@@ -106,12 +110,22 @@ describe('config/production.yaml (PC-1, PC-5, P-1 to P-9)', () => {
     expect(new URL(cardano!.url).hostname).not.toContain('_');
   });
 
-  it('takes $0.0005 on each x402 payment CDP settles, and no flat fee on Cardano or MPP (P-2)', async () => {
+  it('takes $0.0005 on each x402 payment CDP settles, Solana included, and no flat fee on Cardano or MPP (P-2, PR-6)', async () => {
     const config = await loadText(filled(text));
 
     expect(config.facilitators.map(facilitator => [facilitator.name, facilitator.feePerPayment])).toEqual([['cdp', 500n], ['cardano', 0n]]);
     expect(facilitatorFee(config, 'eip155:8453')).toBe(500n);
+    expect(facilitatorFee(config, 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp')).toBe(500n);
     expect(facilitatorFee(config, 'cardano:mainnet')).toBe(0n);
     expect(facilitatorFee(config, config.mpp.network.id)).toBe(0n);
+  });
+
+  it('takes USDC on Solana at the owner\'s Solana treasury, with USDC\'s mainnet mint (P-6, PC-6)', async () => {
+    const config = await loadText(filled(text));
+    const usdc = config.assets.find(asset => asset.name === 'solana-usdc');
+
+    expect(usdc).toMatchObject({
+      address: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v', decimals: 6, peg: 'usd', payTo: '4SHMcqadX3DViKFermsfRSzGVSF7XLMpZWyJanK1PWKX',
+    });
   });
 });

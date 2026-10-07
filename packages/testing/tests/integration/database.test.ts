@@ -38,7 +38,8 @@ describe('createTestDatabase', () => {
 
     expect(await databaseExists(first.name)).toBe(false);
     expect(await databaseExists(second.name)).toBe(false);
-  });
+  // About 2 s alone, past 5 s under the full suite's load: two databases created and migrated at once (D-23)
+  }, 30_000);
 
   it('creates an empty database on request', async () => {
     const database = await createTestDatabase({ migrate: false });

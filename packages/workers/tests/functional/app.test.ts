@@ -12,7 +12,7 @@ import {
 
 import { createApp, type WorkersServer } from '../../src/app.js';
 import { startWorkers } from '../../src/start.js';
-import { createCardanoBalanceReader, createEvmBalanceReader } from '../../src/treasury/readers.js';
+import { createCardanoBalanceReader, createEvmBalanceReader, createSolanaBalanceReader } from '../../src/treasury/readers.js';
 
 const exampleConfig = { CONFIG_PATH: 'config/example.yaml' };
 
@@ -255,7 +255,7 @@ describe('the workers\' lines (L-1, L-8, L-9, L-11)', () => {
     return port;
   };
 
-  it('runs every job without logging a secret: an RPC\'s error is its short message, never its URL with a key, and Blockfrost\'s project ID stays out', async () => {
+  it('runs every job without logging a secret: an RPC\'s error is its short message, never its URL with a key, and Blockfrost\'s project ID stays out (L-9, TR-3)', async () => {
     const lines: Record<string, unknown>[] = [];
     const logger = createLogger({ level: 'debug' }, { write: (line: string) => lines.push(JSON.parse(line) as Record<string, unknown>) });
     const config = await loadPlatformConfig({ env: exampleConfig });
@@ -268,6 +268,8 @@ describe('the workers\' lines (L-1, L-8, L-9, L-11)', () => {
         cardano: createCardanoBalanceReader(client),
         // An RPC that refuses, at a URL that carries a key in its path and its query
         evm: createEvmBalanceReader({ rpcUrlFor: () => `http://127.0.0.1:${port}/v2/evm-rpc-key-secret?apikey=evm-query-secret`, timeoutMs: 2_000 }),
+        // A Solana RPC that refuses, with a key in its path as NOWNodes' (P-6)
+        solana: createSolanaBalanceReader({ rpcUrl: Secret.from(`http://127.0.0.1:${port}/solana-rpc-key-secret`), timeoutMs: 2_000 }),
       },
     });
     try {
@@ -284,9 +286,12 @@ describe('the workers\' lines (L-1, L-8, L-9, L-11)', () => {
     expect(lines.find(line => line['msg'] === 'Failed to read a treasury balance' && line['network'] === 'eip155:84532')).toMatchObject({
       level: 50, error: { message: expect.stringContaining('HTTP request failed.') },
     });
+    expect(lines.find(line => line['msg'] === 'Failed to read a treasury balance' && line['network'] === 'solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1')).toMatchObject({
+      level: 50, error: { message: expect.stringMatching(/^The Solana RPC didn't answer getTokenAccountsByOwner: fetch failed: connect ECONNREFUSED/) },
+    });
     expect(lines.find(line => line['msg'] === 'A job failed' && line['job'] === 'treasury_balances')).toMatchObject({ level: 50, error: { message: expect.stringContaining('treasury balances couldn\'t be read') } });
     const logged = JSON.stringify(lines);
-    for (const secret of ['evm-rpc-key-secret', 'evm-query-secret', 'preprodSecretProjectId0123456789', 'balanceOf', 'Request body'])
+    for (const secret of ['evm-rpc-key-secret', 'evm-query-secret', 'solana-rpc-key-secret', 'preprodSecretProjectId0123456789', 'balanceOf', 'Request body'])
       expect(logged).not.toContain(secret);
   });
 
@@ -308,6 +313,7 @@ describe('the workers\' lines (L-1, L-8, L-9, L-11)', () => {
       BLOCKFROST_PROJECT_ID: 'preprodStartupProjectId0123456789',
       PAYOUT_WALLET_MNEMONIC: mnemonic,
       EVM_RPC_URLS: 'eip155:8453=https://base.example/v2/startup-rpc-key',
+      SOLANA_RPC_URL: 'https://sol.example/startup-solana-key',
       HOST: '127.0.0.1',
       METRICS_PORT: '0',
       LOG_LEVEL: 'debug',
@@ -324,11 +330,39 @@ describe('the workers\' lines (L-1, L-8, L-9, L-11)', () => {
       deposits: { network: 'cardano:preprod', asset: 'cardano-usdm', confirmations: 15 },
       jobs: expect.arrayContaining(['hold_expiry', 'settlement_follow_up', 'deposit_watcher', 'payouts', 'treasury_balances', 'reconciliation']),
       blockfrost: true, payouts: true, settlementFollowUp: { facilitators: [], mpp: false },
-      treasuryReaders: { cardano: true, evm: expect.arrayContaining(['eip155:8453', 'eip155:84532']) },
+      treasuryReaders: { cardano: true, evm: expect.arrayContaining(['eip155:8453', 'eip155:84532']), solana: 'sol.example' },
       ports: { metricsPort: expect.any(Number) },
     })]);
     const logged = JSON.stringify(lines);
-    for (const secret of [mnemonic, mnemonic.split(' ').slice(0, 3).join(' '), 'preprodStartupProjectId0123456789', 'startup-rpc-key', database.url.expose()])
+    for (const secret of [mnemonic, mnemonic.split(' ').slice(0, 3).join(' '), 'preprodStartupProjectId0123456789', 'startup-rpc-key', 'startup-solana-key', database.url.expose()])
       expect(logged).not.toContain(secret);
+  });
+
+  it('warns at startup when SOLANA_RPC_URL is unset, and reads Solana through the network\'s public RPC (TR-3, P-6)', async () => {
+    const lines: Record<string, unknown>[] = [];
+    const logger = createLogger({}, { write: (line: string) => lines.push(JSON.parse(line) as Record<string, unknown>) });
+    const env = {
+      CONFIG_PATH: 'config/example.yaml',
+      CONFIG: Buffer.from(JSON.stringify({
+        facilitators: [
+          { name: 'cdp', url: 'https://api.cdp.coinbase.com/platform/v2/x402', networks: ['eip155:84532', 'solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1'], enabled: false },
+          { name: 'cardano', url: 'http://cardano-facilitator:4022', networks: ['cardano:preprod'], enabled: false },
+        ],
+        mpp: { enabled: false },
+      })).toString('base64'),
+      DATABASE_URL: database.url.expose(),
+      REDIS_URL: process.env['TEST_REDIS_URL']!,
+      BLOCKFROST_PROJECT_ID: 'preprodStartupProjectId0123456789',
+      HOST: '127.0.0.1',
+      METRICS_PORT: '0',
+    };
+
+    const app = await startWorkers({ env, logger });
+    await app.close();
+
+    expect(lines.filter(line => typeof line['msg'] === 'string' && line['msg'].startsWith('SOLANA_RPC_URL is not set'))).toEqual([
+      expect.objectContaining({ level: 40, host: 'api.devnet.solana.com' }),
+    ]);
+    expect(lines.find(line => line['msg'] === 'Started')).toMatchObject({ treasuryReaders: { solana: 'api.devnet.solana.com' } });
   });
 });

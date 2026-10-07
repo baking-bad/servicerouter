@@ -58,9 +58,37 @@ const holdingsOf = async (wallet: TreasuryWallet, readerFor: (asset: Asset) => B
 };
 
 /**
+ * Warns about each empty `payTo` that has no token account for its asset (Solana): x402's `exact`
+ * payment there only transfers, so buyers' payments fail until the account exists. Returns how many
+ * checks failed.
+ */
+const warnWithoutTokenAccounts = async (wallet: TreasuryWallet, held: ReadonlyMap<string, MicroUsd>, readerFor: (asset: Asset) => BalanceReader | undefined, logger: Logger): Promise<number> => {
+  let failed = 0;
+  for (const asset of wallet.assets) {
+    const reader = readerFor(asset);
+    // Only an empty balance can lack the account: a read that failed has no entry
+    if (!reader?.hasTokenAccount || held.get(asset.name) !== 0n)
+      continue;
+    for (const address of wallet.addresses) {
+      try {
+        if (!await reader.hasTokenAccount({ address, asset }))
+          logger.warn({ wallet: wallet.name, asset: asset.name, network: asset.network.id, address, alert: true }, 'A payTo has no token account for its asset: payments to it fail until it has one');
+      }
+      catch (error) {
+        failed += 1;
+        logger.error({ error, wallet: wallet.name, asset: asset.name, network: asset.network.id }, 'Failed to read a treasury balance');
+      }
+    }
+  }
+
+  return failed;
+};
+
+/**
  * The balance monitor (TR-3): each wallet's holdings as a metric. Alerts when the payout wallet won't
- * cover a run that waits for it, and warns when a Signer wallet holds less than a day's spend limit.
- * A balance that can't be read fails the run, so the job goes stale.
+ * cover a run that waits for it, warns when a Signer wallet holds less than a day's spend limit, and
+ * warns when a Solana `payTo` has no token account. A balance that can't be read fails the run, so the
+ * job goes stale.
  */
 export const createTreasuryBalancesJob = ({ wallets, readerFor, payouts, signerDailyLimit, metrics, logger }: {
   readonly wallets: () => Promise<readonly TreasuryWallet[]>;
@@ -80,6 +108,8 @@ export const createTreasuryBalancesJob = ({ wallets, readerFor, payouts, signerD
     read += result.held.size;
     for (const [asset, amount] of result.held)
       metrics.balance.set({ wallet: wallet.name, asset }, Number(formatUsd(amount)));
+    if (wallet.role === 'pay_to')
+      failed += await warnWithoutTokenAccounts(wallet, result.held, readerFor, logger);
 
     if (wallet.role === 'payout' && payouts) {
       const due = (await payouts.runsWithStatus(['awaiting_approval', 'approved'])).reduce((sum, run) => sum + run.total, 0n);
@@ -128,8 +158,7 @@ export const createReconciliationJob = ({ db, config, wallets, readerFor, ledger
   if (failed > 0)
     throw new Error(`${failed} treasury balances couldn't be read: no reconciliation without them`);
 
-  const readable = config.assets.filter(asset => asset.network.namespace === 'cardano' || asset.network.namespace === 'eip155')
-    .filter(asset => readerFor(asset) !== undefined);
+  const readable = config.assets.filter(asset => readerFor(asset) !== undefined);
   const ledgerBalances = await ledger.balancesOf([...readable.map(asset => ledgerAccountIds.treasury(asset.name)), ledgerAccountIds.depositsClearing]);
   const results = reconcile({ assets: readable, ledgerBalances, chainBalances: chain, depositAsset: config.deposits?.asset.name });
   let alerts = 0;
