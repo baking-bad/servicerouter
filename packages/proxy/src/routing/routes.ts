@@ -7,7 +7,7 @@ import {
 import { findAsset, type PlatformConfig } from '@servicerouter/core';
 import type { Ledger, Redis, RoutingRepository } from '@servicerouter/db';
 import {
-  chooseOption, HostNotAllowedError, mppRefusals, NotPayableError, parseRoutingTarget, parseTargetChallenge, QuoteExceededError, routingQuote,
+  chooseOption, HostNotAllowedError, mppRefusals, NotPayableError, parseRoutingTarget, parseTargetChallenge, QuoteExceededError, routingQuote, solanaRefusals,
   targetReceipt, UnsupportedPaymentError, type ChosenOption, type RoutingTarget, type TargetChallenge,
 } from '@servicerouter/payments';
 import type { PaymentRequirements } from '@x402/core/types';
@@ -189,8 +189,8 @@ export const createRouting = ({ config, http, redis, payments, routing, ledger, 
     const now = clock.now();
     const chosen = challenge && chooseOption(challenge, config, now);
     if (!challenge || !chosen) {
-      // L-5: and why each MPP challenge isn't payable, such as push_only or splits
-      const refusals = challenge ? mppRefusals(challenge, config, now) : [];
+      // L-5: and why each MPP challenge or Solana option isn't payable, such as push_only, splits, or no_fee_payer
+      const refusals = challenge ? [...mppRefusals(challenge, config, now), ...solanaRefusals(challenge, config)] : [];
       log.info({
         ...probe, code: 'unsupported_payment', offered: offeredOptions(challenge), ...refusals.length > 0 ? { reasons: [...new Set(refusals)] } : {},
       }, 'The routed target offers no payment we make');

@@ -174,8 +174,32 @@ export type ChosenOption = {
   readonly bindsBody: boolean;
 });
 
-// The chains the Signer holds wallets on (SG-1), by protocol: x402 on Base, MPP on Tempo. Solana joins later (P-6).
-export const routableChains = { x402: ['base'], mpp: ['tempo'] } as const;
+// The chains the Signer holds wallets on (SG-1), by protocol: x402 on Base and Solana (P-6), MPP on Tempo.
+export const routableChains = { x402: ['base', 'solana'], mpp: ['tempo'] } as const;
+
+/**
+ * Why the platform won't pay a Solana x402 option (RT-4): the target's facilitator must pay the
+ * transaction's fee, so the option names its `feePayer`, and that fee payer is never our own wallet.
+ */
+export type SolanaRefusal = 'no_fee_payer' | 'fee_payer_is_us';
+
+const solanaRefusalOf = (requirement: PaymentRequirements, config: PlatformConfig): SolanaRefusal | undefined => {
+  const feePayer = isRecord(requirement.extra) ? requirement.extra['feePayer'] : undefined;
+  if (typeof feePayer !== 'string' || feePayer === '')
+    return 'no_fee_payer';
+
+  return feePayer === config.signer.wallets.solana ? 'fee_payer_is_us' : undefined;
+};
+
+/** Why the platform pays none of the target's Solana x402 options it otherwise would, one reason each, for the log (L-5). */
+export const solanaRefusals = (challenge: TargetChallenge, config: PlatformConfig): readonly SolanaRefusal[] =>
+  challenge.accepts.flatMap(requirement => {
+    if (!isRecord(requirement) || requirement.scheme !== 'exact' || typeof requirement.network !== 'string' || findNetwork(requirement.network)?.chain !== 'solana')
+      return [];
+    const refusal = solanaRefusalOf(requirement, config);
+
+    return refusal === undefined ? [] : [refusal];
+  });
 
 /** Why the platform won't pay an MPP challenge: the Tempo charge's check (RT-4), or its expiry. */
 export type MppRefusal = TempoChargeRefusal | 'expired';
@@ -207,13 +231,14 @@ const atomicOf = (requirement: PaymentRequirements): bigint | undefined => {
 const priceOf = (atomic: bigint, decimals: number): MicroUsd =>
   (decimals >= 6 ? (atomic + 10n ** BigInt(decimals - 6) - 1n) / 10n ** BigInt(decimals - 6) : atomic * 10n ** BigInt(6 - decimals)) as MicroUsd;
 
-// On a tie, x402 on Base: nothing moves until the target settles it, and its transaction costs us no fee
-const protocolOrder = { x402: 0, mpp: 1 } as const;
+// On a tie: x402 on Base, then x402 on Solana, then MPP. Nothing moves until the target settles an x402
+// payment, and its transaction costs us no fee.
+const tieOrder = (option: ChosenOption): number => option.protocol === 'mpp' ? 2 : option.asset.network.chain === 'solana' ? 1 : 0;
 
 /**
- * Picks the cheapest option the platform pays (RT-4). On a tie, x402 on Base.
- * - x402: `exact`, on Base, in an asset of the registry pegged to USD, and not a Circle Gateway
- *   nanopayment (AR16);
+ * Picks the cheapest option the platform pays (RT-4). On a tie, x402 on Base, then on Solana, then MPP.
+ * - x402: `exact`, on Base or Solana, in an asset of the registry pegged to USD, and not a Circle Gateway
+ *   nanopayment (AR16). On Solana, the option names a fee payer that isn't our wallet;
  * - MPP: a Tempo charge on `mpp.network` in pull mode, without splits, in an asset of the registry on
  *   that network, and not expired.
  */
@@ -227,6 +252,8 @@ export const chooseOption = (challenge: TargetChallenge, config: PlatformConfig,
       continue;
     const network = findNetwork(requirement.network);
     if (!network || !(routableChains.x402 as readonly string[]).includes(network.chain))
+      continue;
+    if (network.chain === 'solana' && solanaRefusalOf(requirement, config) !== undefined)
       continue;
     const asset = config.assets.find(item => item.network.id === network.id && item.address.toLowerCase() === requirement.asset.toLowerCase());
     const atomicAmount = atomicOf(requirement);
@@ -244,7 +271,7 @@ export const chooseOption = (challenge: TargetChallenge, config: PlatformConfig,
     });
   }
 
-  return candidates.sort((left, right) => left.price < right.price ? -1 : left.price > right.price ? 1 : protocolOrder[left.protocol] - protocolOrder[right.protocol])[0];
+  return candidates.sort((left, right) => left.price < right.price ? -1 : left.price > right.price ? 1 : tieOrder(left) - tieOrder(right))[0];
 };
 
 /**

@@ -80,7 +80,7 @@ Put \`${payUrl}/\` in front of the API's URL, without \`https://\`:
 curl ${payUrl}/api.example.com/v1/pools -H "Authorization: Bearer $SERVICEROUTER_PAYMENT_KEY"
 \`\`\`
 
-Service Router pays the API in its own protocol, x402 on Base or MPP on Tempo, and returns its answer. You pay the quote, the API's price plus any routing fee, with the payment key, or with an option of the \`402\` (step 5), such as x402 with USDM on Cardano. \`GET ${payUrl}/_/check?url=<link>\` quotes a link without paying. \`502 unsupported_payment\`: the API asks for no payment Service Router makes. You weren't charged.
+Service Router pays the API in its own protocol, x402 on Base or Solana, or MPP on Tempo, and returns its answer. You pay the quote, the API's price plus any routing fee, with the payment key, or with an option of the \`402\` (step 5), such as x402 with USDM on Cardano. \`GET ${payUrl}/_/check?url=<link>\` quotes a link without paying. \`502 unsupported_payment\`: the API asks for no payment Service Router makes. You weren't charged.
 `,
 };
 

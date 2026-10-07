@@ -1,5 +1,6 @@
 import { Counter } from '@prometheus-io/client';
 import type { PaymentRequirements } from '@x402/core/types';
+import type { ClientSvmSigner } from '@x402/svm';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import { Challenge } from 'mppx';
 import type { LocalAccount } from 'viem';
@@ -26,9 +27,11 @@ export interface SignerDependencies {
   // SIGNER_SECRET. Without it, every sign request is refused.
   readonly secret: Secret | undefined;
   // The hot wallets (SG-1)
-  readonly wallets: { readonly base?: LocalAccount; readonly tempo?: LocalAccount };
+  readonly wallets: { readonly base?: LocalAccount; readonly tempo?: LocalAccount; readonly solana?: ClientSvmSigner };
   // The Tempo RPC for MPP targets. Default: mpp.rpcUrl, else the chain's public RPC.
   readonly tempoRpcUrl?: string;
+  // The Solana RPC for Solana targets: SOLANA_RPC_URL, which may carry a key. Default: the SDK's public RPC.
+  readonly solanaRpcUrl?: Secret;
   readonly clock?: Clock;
   readonly ids?: IdGenerator;
   // Request IDs for requests without one. Default: random UUIDs.
@@ -122,7 +125,7 @@ const signRequestOf = (body: SignBody, quotedPrice: MicroUsd): SignRequest => {
  * secret. Readiness covers Postgres and Redis: without its spend counters, it signs nothing.
  */
 export const createApp = ({
-  config, logger, postgres, redis, secret, wallets, tempoRpcUrl, clock = systemClock, ids = randomIdGenerator, requestIds,
+  config, logger, postgres, redis, secret, wallets, tempoRpcUrl, solanaRpcUrl, clock = systemClock, ids = randomIdGenerator, requestIds,
   spend = createRedisSpendLimits({ redis, clock, hourly: config.signer.maxPerNetworkPerHour, daily: config.signer.maxPerNetworkPerDay }),
 }: SignerDependencies): Server => {
   const server = createServer({
@@ -151,7 +154,8 @@ export const createApp = ({
     ? createTempoClient({ network: config.mpp.network, url: tempoRpcUrl ?? config.mpp.rpcUrl, timeoutMs: config.timeouts.connectMs })
     : undefined;
   const signer = createSigner({
-    config, wallets, ...tempoClient ? { tempoClient } : {}, spend, signatures: createRoutingRepository({ db: postgres.db, clock }), clock, ids, logger,
+    config, wallets, ...tempoClient ? { tempoClient } : {}, ...solanaRpcUrl ? { solanaRpcUrl } : {}, spend, signatures: createRoutingRepository({ db: postgres.db, clock }), clock, ids,
+    logger,
     onSigned: ({ network, amount, maxFee }) => {
       spent.inc({ network }, Number(amount) / 1_000_000);
       if (maxFee !== undefined)
@@ -193,7 +197,7 @@ export const createApp = ({
           ...asked, result: 'refused', reason: error.reason, message: error.message, ...error.spend, durationMs: Math.round(performance.now() - started),
         }, 'Refused to sign a routed payment');
       }
-      // The Tempo RPC's short message only: never a request or a transaction (L-9)
+      // The RPC's short message only: never a request, a transaction, or the RPC's URL (L-9)
       else if (error instanceof SigningFailedError)
         request.log.warn({ ...asked, result: 'failed', reason: error.reason, durationMs: Math.round(performance.now() - started) }, 'Failed to sign a routed payment');
       throw error;

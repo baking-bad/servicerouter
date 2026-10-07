@@ -76,7 +76,7 @@ export const platformConfigSchema: SchemaObject = {
     timeouts: object({ connectMs: positive, requestMs: positive, settleMs: positive }),
     sizeLimits: object({ requestBodyBytes: positive, bufferedResponseBytes: positive }),
     signer: object({
-      maxPerCall: usdAmount, maxPerNetworkPerHour: usdAmount, maxPerNetworkPerDay: usdAmount, wallets: object({ base: addressText, tempo: addressText }),
+      maxPerCall: usdAmount, maxPerNetworkPerHour: usdAmount, maxPerNetworkPerDay: usdAmount, wallets: object({ base: addressText, tempo: addressText, solana: addressText }),
     }),
     smtp: object({
       host,

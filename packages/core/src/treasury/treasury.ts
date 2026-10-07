@@ -25,8 +25,8 @@ export interface BalanceReader {
 /**
  * Every platform wallet (TR-1), from platform config: each asset's `payTo` (which is the MPP
  * recipient for Tempo assets), the payout wallet, the deposit addresses, and the Signer's hot wallets
- * from `signer.wallets`, each with the registry's assets on its chain: Base's, and `mpp.network`'s for
- * Tempo. Keys stay offline for receiving addresses (TR-2).
+ * from `signer.wallets`, each with the registry's assets on its chain: Base's, `mpp.network`'s for
+ * Tempo, and Solana's. Keys stay offline for receiving addresses (TR-2).
  */
 export const treasuryWallets = (config: PlatformConfig, extra: {
   readonly payoutAddress?: string;
@@ -40,10 +40,11 @@ export const treasuryWallets = (config: PlatformConfig, extra: {
     payTo.set(key, wallet);
   }
   const payoutAssets = config.assets.filter(asset => config.payouts.assets.includes(asset.name));
-  const { base, tempo } = config.signer.wallets;
+  const { base, tempo, solana } = config.signer.wallets;
   const signerWallets = [
     { chain: 'base', address: base, assets: config.assets.filter(asset => asset.network.chain === 'base') },
     { chain: 'tempo', address: tempo, assets: config.assets.filter(asset => asset.network.id === config.mpp.network.id) },
+    { chain: 'solana', address: solana, assets: config.assets.filter(asset => asset.network.chain === 'solana') },
   ].filter(wallet => wallet.address !== undefined && wallet.assets.length > 0);
 
   return [

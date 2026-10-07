@@ -89,7 +89,7 @@ describe('buildPlatformConfig', () => {
     expect(config.payouts.minimum).toBe(10_000_000n);
     expect(config.timeouts).toEqual(platformDefaults.timeouts);
     expect(config.sizeLimits).toEqual({ requestBodyBytes: 1_048_576, bufferedResponseBytes: 10_485_760 });
-    expect(config.signer).toEqual({ maxPerCall: 1_000_000n, maxPerNetworkPerHour: undefined, maxPerNetworkPerDay: 100_000_000n, wallets: { base: undefined, tempo: undefined } });
+    expect(config.signer).toEqual({ maxPerCall: 1_000_000n, maxPerNetworkPerHour: undefined, maxPerNetworkPerDay: 100_000_000n, wallets: { base: undefined, tempo: undefined, solana: undefined } });
     expect(config.smtp).toBeUndefined();
     expect(findAsset(config, 'base-usdc')?.minPrice).toBe(0n);
   });
@@ -133,15 +133,16 @@ describe('buildPlatformConfig', () => {
     ['a payout asset outside the registry (PC-6)', { payouts: { assets: ['cardano-ada'] } }, '/payouts/assets/0'],
     ['an amount that overflows', { payouts: { minimum: '99999999999999' } }, '/payouts/minimum'],
     ['a Signer wallet that isn\'t an address (TR-1)', { signer: { wallets: { tempo: '0x12' } } }, '/signer/wallets/tempo'],
+    ['a Solana Signer wallet that isn\'t a base58 address (TR-1, SG-1)', { signer: { wallets: { solana: '0x4444444444444444444444444444444444444444' } } }, '/signer/wallets/solana'],
   ])('rejects %s', (_name, changes, path) => {
     expect(issues(() => buildPlatformConfig(document(changes))).map(issue => issue.path)).toContain(path);
   });
 
-  it('takes the Signer\'s hot wallets by their public addresses, each optional (TR-1)', () => {
-    const wallets = { base: '0x3333333333333333333333333333333333333333', tempo: '0x4444444444444444444444444444444444444444' };
+  it('takes the Signer\'s hot wallets by their public addresses, each optional, Solana\'s in base58 (TR-1, SG-1)', () => {
+    const wallets = { base: '0x3333333333333333333333333333333333333333', tempo: '0x4444444444444444444444444444444444444444', solana: 'HGvHArgEcqSUut2Cppn6fBQzLxtsaj8vBccTFyxFJzhC' };
 
     expect(buildPlatformConfig(document({ signer: { wallets } })).signer.wallets).toEqual(wallets);
-    expect(buildPlatformConfig(document({ signer: { wallets: { tempo: wallets.tempo } } })).signer.wallets).toEqual({ base: undefined, tempo: wallets.tempo });
+    expect(buildPlatformConfig(document({ signer: { wallets: { tempo: wallets.tempo } } })).signer.wallets).toEqual({ base: undefined, tempo: wallets.tempo, solana: undefined });
   });
 
   it('rejects mainnets in staging and testnets in production (PC-5)', () => {

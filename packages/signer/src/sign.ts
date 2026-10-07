@@ -2,10 +2,12 @@ import { x402Client } from '@x402/core/client';
 import { encodePaymentSignatureHeader } from '@x402/core/http';
 import type { PaymentRequirements } from '@x402/core/types';
 import { ExactEvmScheme } from '@x402/evm/exact/client';
+import type { ClientSvmSigner } from '@x402/svm';
+import { ExactSvmScheme } from '@x402/svm/exact/client';
 import { Challenge } from 'mppx';
 import type { Client, LocalAccount } from 'viem';
 
-import { formatUsd, isRecord, ServiceRouterError, type Clock, type IdGenerator, type Logger, type LogSink, type MicroUsd } from '@servicerouter/common';
+import { formatUsd, isRecord, ServiceRouterError, type Clock, type IdGenerator, type Logger, type LogSink, type MicroUsd, type Secret } from '@servicerouter/common';
 import { checkTempoCharge, findNetwork, type Asset, type PlatformConfig, type TempoChargeRefusal } from '@servicerouter/core';
 import type { RoutingRepository } from '@servicerouter/db';
 
@@ -14,7 +16,7 @@ import { errorReason, maxFeeOf, signTempoCharge } from './tempo.js';
 
 /** Why the Signer refused, as a code for the log (L-6). The message says it in words. */
 export type SigningRefusal = 'not_exact' | 'not_in_registry' | 'no_wallet' | 'invalid_amount' | 'above_quote' | 'above_max_per_call' | 'expired'
-  | TempoChargeRefusal | SpendRefusal;
+  | 'no_fee_payer' | 'fee_payer_is_us' | TempoChargeRefusal | SpendRefusal;
 
 /** A spend window's total against its limit, in USD, when a limit refused (L-6). */
 export interface SpendWindow {
@@ -37,13 +39,13 @@ export class SigningRefusedError extends ServiceRouterError {
   }
 }
 
-/** The Tempo RPC failed while the Signer built a transaction: nothing was signed. The buyer pays nothing. */
+/** The chain's RPC failed while the Signer built a transaction (Tempo, Solana): nothing was signed. The buyer pays nothing. */
 export class SigningFailedError extends ServiceRouterError {
   readonly code = 'signing_failed';
   readonly reason: string;
 
-  constructor(reason: string, options?: ErrorOptions) {
-    super('The Signer couldn\'t build the Tempo payment: the Tempo RPC failed', options);
+  constructor(chain: string, reason: string, options?: ErrorOptions) {
+    super(`The Signer couldn't build the ${chain} payment: the ${chain} RPC failed`, options);
 
     this.reason = reason;
   }
@@ -91,10 +93,13 @@ export interface Signer {
 
 export interface SignerOptions {
   readonly config: PlatformConfig;
-  // One hot wallet per chain (SG-1): Base, and Tempo for MPP targets
-  readonly wallets: { readonly base?: LocalAccount; readonly tempo?: LocalAccount };
+  // One hot wallet per chain (SG-1): Base and Solana for x402 targets, and Tempo for MPP targets
+  readonly wallets: { readonly base?: LocalAccount; readonly tempo?: LocalAccount; readonly solana?: ClientSvmSigner };
   // The Tempo RPC of mpp.network, for MPP targets
   readonly tempoClient?: Client;
+  // The Solana RPC the x402 client builds payments with: SOLANA_RPC_URL, which may carry a key in its path.
+  // Undefined: the SDK's public RPC for the network.
+  readonly solanaRpcUrl?: Secret;
   readonly spend: SpendLimits;
   readonly signatures: Pick<RoutingRepository, 'recordSignature'>;
   readonly clock: Clock;
@@ -123,7 +128,17 @@ const mppRefusalMessages: Readonly<Record<TempoChargeRefusal, string>> = {
  * order. Then it signs with the official client, x402's or `mppx`'s, and records the signature. It never
  * hand-rolls an authorization or a transaction.
  */
-export const createSigner = ({ config, wallets, tempoClient, spend, signatures, clock, ids, logger, onSigned }: SignerOptions): Signer => {
+export const createSigner = ({ config, wallets, tempoClient, solanaRpcUrl, spend, signatures, clock, ids, logger, onSigned }: SignerOptions): Signer => {
+  // One per Signer, so the SDK's cache of mint accounts lasts across payments
+  const solanaScheme = wallets.solana && new ExactSvmScheme(wallets.solana, solanaRpcUrl ? { rpcUrl: solanaRpcUrl.expose() } : undefined);
+  // An RPC error's reason without a URL, or SOLANA_RPC_URL's path, which may be its key (L-9)
+  const solanaRpcPath = solanaRpcUrl && new URL(solanaRpcUrl.expose()).pathname;
+  const solanaReason = (error: unknown): string => {
+    const reason = errorReason(error).replace(/https?:\/\/\S+/g, '<rpc>');
+
+    return solanaRpcPath && solanaRpcPath.length > 1 ? reason.split(solanaRpcPath).join('<rpc>') : reason;
+  };
+
   // SG-3, SG-4: the amount against the quote and the per-call maximum, then the spend limits
   const checkAmount = async (network: string, amount: MicroUsd, quotedPrice: MicroUsd, log: LogSink): Promise<void> => {
     if (amount > quotedPrice)
@@ -172,9 +187,17 @@ export const createSigner = ({ config, wallets, tempoClient, spend, signatures, 
     const asset = network && config.assets.find(item => item.network.id === network.id && item.address.toLowerCase() === requirement.asset.toLowerCase());
     if (!network || !asset)
       return refuse('The network and asset aren\'t in the registry', 'not_in_registry');
-    const account = network.chain === 'base' ? wallets.base : undefined;
-    if (!account)
+    const scheme = network.chain === 'base' ? wallets.base && new ExactEvmScheme(wallets.base) : network.chain === 'solana' ? solanaScheme : undefined;
+    if (!scheme)
       return refuse(`The Signer holds no wallet on ${network.title}`, 'no_wallet');
+    // Solana: the target's facilitator pays the transaction's fee, never our wallet. Checked before the spend limits count it.
+    if (network.chain === 'solana') {
+      const feePayer = isRecord(requirement.extra) ? requirement.extra['feePayer'] : undefined;
+      if (typeof feePayer !== 'string' || feePayer === '')
+        return refuse('The Solana option names no fee payer: the Signer never pays a transaction\'s fee', 'no_fee_payer');
+      if (feePayer === wallets.solana?.address)
+        return refuse('The Solana option names our wallet as its fee payer', 'fee_payer_is_us');
+    }
     const amountText = (requirement as { amount?: unknown }).amount;
     if (typeof amountText !== 'string' || !/^\d{1,30}$/.test(amountText) || BigInt(amountText) <= 0n)
       return refuse('The option has no valid amount', 'invalid_amount');
@@ -182,12 +205,21 @@ export const createSigner = ({ config, wallets, tempoClient, spend, signatures, 
     const amount = amountOf(atomicAmount, asset);
     await checkAmount(network.id, amount, request.quotedPrice, log);
 
-    const client = new x402Client().register(network.id as `${string}:${string}`, new ExactEvmScheme(account));
-    const payload = await client.createPaymentPayload({
-      x402Version: request.x402Version,
-      accepts: [requirement],
-      ...request.resource === undefined ? {} : { resource: request.resource },
-    } as Parameters<typeof client.createPaymentPayload>[0]);
+    const client = new x402Client().register(network.id as `${string}:${string}`, scheme);
+    let payload;
+    try {
+      payload = await client.createPaymentPayload({
+        x402Version: request.x402Version,
+        accepts: [requirement],
+        ...request.resource === undefined ? {} : { resource: request.resource },
+      } as Parameters<typeof client.createPaymentPayload>[0]);
+    }
+    catch (error) {
+      // Solana's client reads the mint and a blockhash from the RPC. Its error stays out: it may name the RPC.
+      if (network.chain === 'solana')
+        throw new SigningFailedError(network.title, solanaReason(error));
+      throw error;
+    }
 
     return record(request, {
       protocol: 'x402', header: encodePaymentSignatureHeader(payload), network: network.id, asset: asset.name, atomicAmount, amount,
@@ -219,7 +251,7 @@ export const createSigner = ({ config, wallets, tempoClient, spend, signatures, 
       header = await signTempoCharge({ account, client: tempoClient, challenge });
     }
     catch (error) {
-      throw new SigningFailedError(errorReason(error), { cause: error });
+      throw new SigningFailedError('Tempo', errorReason(error), { cause: error });
     }
 
     return record(request, {

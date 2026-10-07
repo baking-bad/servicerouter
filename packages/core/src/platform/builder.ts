@@ -146,7 +146,7 @@ export const checkPlatformConfig = (document: PlatformConfigDocument): readonly 
   checkAmount(['signer', 'maxPerCall'], document.signer?.maxPerCall);
   checkAmount(['signer', 'maxPerNetworkPerHour'], document.signer?.maxPerNetworkPerHour);
   checkAmount(['signer', 'maxPerNetworkPerDay'], document.signer?.maxPerNetworkPerDay);
-  // TR-1: the Signer's hot wallets, by their public addresses. Both chains are EVM.
+  // TR-1: the Signer's hot wallets, by their public addresses: EVM on Base and Tempo, base58 on Solana
   for (const [chain, address] of Object.entries(document.signer?.wallets ?? {})) {
     const network = supportedNetworks.find(item => item.chain === chain);
     if (network && typeof address === 'string' && !isValidAddress(network, address))
@@ -249,7 +249,7 @@ export const buildPlatformConfig = (document: PlatformConfigDocument, locator?: 
       maxPerCall: usd(document.signer?.maxPerCall, signer.maxPerCall),
       maxPerNetworkPerHour: document.signer?.maxPerNetworkPerHour === undefined ? undefined : parseUsd(document.signer.maxPerNetworkPerHour),
       maxPerNetworkPerDay: usd(document.signer?.maxPerNetworkPerDay, signer.maxPerNetworkPerDay),
-      wallets: { base: document.signer?.wallets?.base, tempo: document.signer?.wallets?.tempo },
+      wallets: { base: document.signer?.wallets?.base, tempo: document.signer?.wallets?.tempo, solana: document.signer?.wallets?.solana },
     },
     smtp: document.smtp ? { ...document.smtp, host: document.smtp.host.toLowerCase() } : undefined,
   });

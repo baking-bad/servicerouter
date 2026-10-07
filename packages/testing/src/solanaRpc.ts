@@ -2,6 +2,10 @@ import { randomBytes } from 'node:crypto';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 
+import {
+  address as toAddress, getAddressEncoder, getBase64Encoder, getCompiledTransactionMessageDecoder, getProgramDerivedAddress, getTransactionDecoder,
+} from '@solana/kit';
+
 // The classic SPL token program, which owns USDC's mints
 export const tokenProgramAddress = 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA';
 
@@ -113,5 +117,60 @@ export const startFakeSolanaRpc = async ({ decimals = 6 }: { readonly decimals?:
       server.closeAllConnections();
       await new Promise<void>(resolve => server.close(() => resolve()));
     },
+  };
+};
+
+// The associated token account program: a wallet's token account for a mint is its address
+const associatedTokenProgram = 'ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL';
+// The token program's TransferChecked instruction: discriminator, amount (u64, little-endian), decimals
+const transferCheckedDiscriminator = 12;
+
+/** A wallet's associated token account for a mint of the classic token program, where x402 sends USDC on Solana. */
+export const associatedTokenAddress = async (owner: string, mint: string): Promise<string> => {
+  const encoder = getAddressEncoder();
+  const [address] = await getProgramDerivedAddress({
+    programAddress: toAddress(associatedTokenProgram),
+    seeds: [encoder.encode(toAddress(owner)), encoder.encode(toAddress(tokenProgramAddress)), encoder.encode(toAddress(mint))],
+  });
+
+  return address;
+};
+
+/** What a signed x402 payment on Solana does, read from its base64 transaction (the `exact` scheme's payload). */
+export interface SolanaPayment {
+  // The account that pays the transaction's fee: the first of the message
+  readonly feePayer: string;
+  // Who signed it already, and who must still sign
+  readonly signedBy: readonly string[];
+  readonly unsignedBy: readonly string[];
+  // Its TransferChecked instruction, if any
+  readonly transfer: {
+    readonly source: string;
+    readonly mint: string;
+    readonly destination: string;
+    readonly authority: string;
+    readonly amount: bigint;
+    readonly decimals: number;
+  } | undefined;
+}
+
+/** Decodes a signed x402 payment on Solana, so a test can check its fee payer, signers, and transfer. */
+export const decodeSolanaPayment = (transaction: string): SolanaPayment => {
+  const decoded = getTransactionDecoder().decode(getBase64Encoder().encode(transaction));
+  const message = getCompiledTransactionMessageDecoder().decode(decoded.messageBytes);
+  const accounts = message.staticAccounts.map(String);
+  const signatures = Object.entries(decoded.signatures);
+  const transfer = (message.instructions ?? []).find(instruction =>
+    accounts[instruction.programAddressIndex] === tokenProgramAddress && instruction.data?.[0] === transferCheckedDiscriminator);
+  const data = transfer?.data;
+  const [source, mint, destination, authority] = (transfer?.accountIndices ?? []).map(index => accounts[index] ?? '');
+
+  return {
+    feePayer: accounts[0] ?? '',
+    signedBy: signatures.filter(([, signature]) => signature !== null).map(([address]) => address),
+    unsignedBy: signatures.filter(([, signature]) => signature === null).map(([address]) => address),
+    transfer: data && data.length >= 10
+      ? { source: source!, mint: mint!, destination: destination!, authority: authority!, amount: Buffer.from(data).readBigUInt64LE(1), decimals: data[9]! }
+      : undefined,
   };
 };

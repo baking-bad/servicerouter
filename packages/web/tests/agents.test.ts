@@ -54,12 +54,12 @@ describe('the platform guide at /llms.txt (AD-5, WB-11)', () => {
     expect(guide).toContain('https://pay.test/service/<service-id>/<path>');
   });
 
-  it('says payment routing pays any API: x402 targets on Base, MPP targets on Tempo, and how to quote a link (RT-1, RT-19, T27)', () => {
+  it('says payment routing pays any API: x402 targets on Base and Solana, MPP targets on Tempo, and how to quote a link (RT-1, RT-19, T27, T29)', () => {
     const buyer = skillDocument(platformSkills.find(skill => skill.name === 'servicerouter-buyer')!, settings);
 
     for (const document of [guide, buyer]) {
       expect(document).toContain('https://pay.test/api.example.com/v1/pools');
-      expect(document).toContain('x402 on Base or MPP on Tempo');
+      expect(document).toContain('x402 on Base or Solana, or MPP on Tempo');
       expect(document).toContain('USDM on Cardano');
       expect(document).toContain('https://pay.test/_/check?url=<link>');
     }

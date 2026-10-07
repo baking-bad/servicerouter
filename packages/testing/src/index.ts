@@ -19,8 +19,8 @@ export type { TestSecretKeys } from './secretKeys.js';
 export { nownodesCategory, nownodesHosts, nownodesSecretNames, nownodesServiceConfig } from './fixtures.js';
 export { cardanoAnswers, cardanoSupportedExtra, facilitatorAnswers, fakeTransaction, payerOf, startFakeFacilitator } from './facilitator.js';
 export type { FacilitatorAnswer, FacilitatorPath, FacilitatorRequest, FacilitatorScript, FakeFacilitator, FakeFacilitatorOptions } from './facilitator.js';
-export { encodeBase58, startFakeSolanaRpc, tokenProgramAddress } from './solanaRpc.js';
-export type { FakeSolanaRpc } from './solanaRpc.js';
+export { associatedTokenAddress, decodeSolanaPayment, encodeBase58, startFakeSolanaRpc, tokenProgramAddress } from './solanaRpc.js';
+export type { FakeSolanaRpc, SolanaPayment } from './solanaRpc.js';
 export { createTestCardanoWallet, startFakeBlockfrost } from './blockfrost.js';
 export type { BlockfrostRequest, FakeBlockfrost, FundedValue, SubmitMode, TestCardanoWallet, TestCardanoWalletOptions } from './blockfrost.js';
 export {

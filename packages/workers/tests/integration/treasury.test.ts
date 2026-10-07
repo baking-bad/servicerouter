@@ -112,7 +112,7 @@ describe('the treasury jobs (TR-3, TR-5)', () => {
     const tempoAsset = config.assets.find(asset => asset.network.id === config.mpp.network.id)!;
     const wallets = { base: '0x3333333333333333333333333333333333333333', tempo: '0x4444444444444444444444444444444444444444' };
     const assets = config.assets.filter(asset => asset.name === 'cardano-usdm' || asset.name === 'base-usdc' || asset.name === tempoAsset.name);
-    const withSigner = { ...config, assets, signer: { ...config.signer, wallets } };
+    const withSigner = { ...config, assets, signer: { ...config.signer, wallets: { ...config.signer.wallets, ...wallets } } };
     // $4 on Base and $6 on Tempo, against a $5 daily limit
     evm.balances.set(wallets.base, 4_000_000n);
     evm.balances.set(wallets.tempo, 6_000_000n);
@@ -252,5 +252,40 @@ describe('the Solana balance reader and the treasury jobs on Solana (TR-1, TR-3,
     expect(drifted.run).toMatchObject({ alerts: 1, results: { 'solana-usdc': { ledger: '6', chain: '4.5', drift: '-1.5', alert: true } } });
     expect(logs).toContainEqual(expect.objectContaining({ asset: 'solana-usdc', drift: '-1.5', alert: true }));
     expect(drifted.text).toMatch(/treasury_drift_usd\{asset="solana-usdc"\} -1\.5/);
+  });
+
+  it('reports the Signer\'s Solana wallet and warns below a day\'s limit, while reconciliation\'s totals stay unchanged (TR-1, TR-3, TR-5, T29)', async () => {
+    const signerWallet = 'HGvHArgEcqSUut2Cppn6fBQzLxtsaj8vBccTFyxFJzhC';
+    const assets = config.assets.filter(asset => asset.name === 'solana-usdc');
+    const withSigner = { ...config, assets, signer: { ...config.signer, wallets: { ...config.signer.wallets, solana: signerWallet } } };
+    const solanaReaders = readerFor({ solana: solanaReader() });
+    // $3 in the hot wallet, against a $5 daily limit; the treasury holds what the ledger says
+    solana.setTokenAccounts(signerWallet, usdc().address, [3_000_000n]);
+    solana.setTokenAccounts(usdc().payTo, usdc().address, [6_000_000n]);
+    const registry = new Registry();
+    logs.length = 0;
+
+    await createTreasuryBalancesJob({
+      wallets: async () => treasuryWallets(withSigner), readerFor: solanaReaders, payouts: undefined, signerDailyLimit: 5_000_000n as MicroUsd,
+      metrics: createTreasuryMetrics(registry), logger,
+    })();
+
+    expect(await registry.metrics()).toMatch(/treasury_balance_usd\{wallet="signer:solana",asset="solana-usdc"\} 3/);
+    expect(logs.filter(line => line['msg'] === 'A Signer wallet holds less than a day\'s spend limit: top it up')).toEqual([
+      expect.objectContaining({ level: 40, wallet: 'signer:solana', held: '3', dailyLimit: '5', alert: true }),
+    ]);
+
+    const ledger = createLedger({ db: database.db, clock, ids: randomIdGenerator });
+    const reconcileWith = async (source: PlatformConfig) => {
+      await database.db.delete(reconciliationRuns);
+      await createReconciliationJob({
+        db: database.db, config: source, wallets: async () => treasuryWallets(source), readerFor: solanaReaders, ledger, metrics: createTreasuryMetrics(new Registry()),
+        clock, ids: randomIdGenerator, logger,
+      })();
+      const [run] = await database.db.select().from(reconciliationRuns);
+
+      return run!.results;
+    };
+    expect(await reconcileWith(withSigner)).toEqual(await reconcileWith({ ...config, assets }));
   });
 });

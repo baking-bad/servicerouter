@@ -54,13 +54,15 @@ describe('the treasury (TR-1, TR-5)', () => {
     expect(wallets.some(wallet => wallet.role === 'signer')).toBe(false);
   });
 
-  it('lists the Signer\'s hot wallets from signer.wallets, each with its chain\'s assets: Base\'s, and mpp.network\'s for Tempo (TR-1, T27)', () => {
+  it('lists the Signer\'s hot wallets from signer.wallets, each with its chain\'s assets: Base\'s, mpp.network\'s for Tempo, and Solana\'s (TR-1, T27, T29)', () => {
     const address = '0x3333333333333333333333333333333333333333';
-    const config = { ...examplePlatform, signer: { ...examplePlatform.signer, wallets: { base: address, tempo: address } } };
+    const solana = 'HGvHArgEcqSUut2Cppn6fBQzLxtsaj8vBccTFyxFJzhC';
+    const config = { ...examplePlatform, signer: { ...examplePlatform.signer, wallets: { base: address, tempo: address, solana } } };
 
     expect(treasuryWallets(config).filter(wallet => wallet.role === 'signer').map(wallet => [wallet.name, wallet.addresses, wallet.assets.map(asset => asset.name)])).toEqual([
       ['signer:base', [address], ['base-usdc']],
       ['signer:tempo', [address], ['tempo-pathusd']],
+      ['signer:solana', [solana], ['solana-usdc']],
     ]);
   });
 

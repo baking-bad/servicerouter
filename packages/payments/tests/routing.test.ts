@@ -8,7 +8,7 @@ import type { MicroUsd } from '@servicerouter/common';
 import { loadPlatformConfig } from '@servicerouter/core';
 
 import {
-  chooseOption, InvalidTargetError, mppRefusals, parseRoutingTarget, parseTargetChallenge, routingQuote, targetReceipt,
+  chooseOption, InvalidTargetError, mppRefusals, parseRoutingTarget, parseTargetChallenge, routingQuote, solanaRefusals, targetReceipt,
 } from '../src/index.js';
 
 const config = await loadPlatformConfig({ env: { CONFIG_PATH: 'config/example.yaml' } });
@@ -87,6 +87,38 @@ describe('choosing the target\'s option (RT-3, RT-4) and the quote (RT-5)', () =
 
     expect(chooseOption(tie, config, now)).toMatchObject({ protocol: 'x402', price: 2000n });
     expect(chooseOption(cheaper, config, now)).toMatchObject({ protocol: 'mpp', price: 1999n });
+  });
+
+  describe('x402 targets on Solana (RT-4, T29)', () => {
+    const solanaUsdc = config.assets.find(asset => asset.name === 'solana-usdc')!;
+    const ourWallet = 'HGvHArgEcqSUut2Cppn6fBQzLxtsaj8vBccTFyxFJzhC';
+    const withWallet = { ...config, signer: { ...config.signer, wallets: { ...config.signer.wallets, solana: ourWallet } } };
+    const onSolana = (amount: string, extra: Record<string, unknown> = { feePayer: '2wKupLR9q6wXYppw8Gr2NvWxKBUqm4PPJKkQfoxHDBg4' }) => ({
+      scheme: 'exact', network: solanaUsdc.network.id, amount, asset: solanaUsdc.address, payTo: '9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM', maxTimeoutSeconds: 60, extra,
+    });
+
+    it('pays USDC on Solana at its price when the option names its facilitator\'s fee payer', () => {
+      expect(chooseOption(parseTargetChallenge(header([onSolana('1500')]), new Uint8Array())!, withWallet, now))
+        .toMatchObject({ protocol: 'x402', asset: { name: 'solana-usdc' }, atomicAmount: 1500n, price: 1500n });
+    });
+
+    it('pays no Solana option without a fee payer, or whose fee payer is our own wallet, and says why', () => {
+      const challenge = parseTargetChallenge(header([onSolana('1000', {}), onSolana('1001', { feePayer: ourWallet })]), new Uint8Array())!;
+
+      expect(chooseOption(challenge, withWallet, now)).toBeUndefined();
+      expect(solanaRefusals(challenge, withWallet)).toEqual(['no_fee_payer', 'fee_payer_is_us']);
+      // Base options give no Solana reason
+      expect(solanaRefusals(parseTargetChallenge(header([plain]), new Uint8Array())!, withWallet)).toEqual([]);
+    });
+
+    it('chooses Base, then Solana, then MPP on Tempo at the same price, and a cheaper Solana option over both', () => {
+      const all = (solanaAmount: string) => parseTargetChallenge({ ...header([onSolana(solanaAmount), plain]), 'www-authenticate': mppChallenge('2000') }, new Uint8Array())!;
+      const withoutBase = parseTargetChallenge({ ...header([onSolana('2000')]), 'www-authenticate': mppChallenge('2000') }, new Uint8Array())!;
+
+      expect(chooseOption(all('2000'), withWallet, now)).toMatchObject({ protocol: 'x402', asset: { name: 'base-usdc' } });
+      expect(chooseOption(withoutBase, withWallet, now)).toMatchObject({ protocol: 'x402', asset: { name: 'solana-usdc' } });
+      expect(chooseOption(all('1999'), withWallet, now)).toMatchObject({ protocol: 'x402', asset: { name: 'solana-usdc' }, price: 1999n });
+    });
   });
 
   it('pays no MPP challenge in push mode only, with splits, in another currency, on another chain, or expired, and says why (RT-4, T27)', () => {

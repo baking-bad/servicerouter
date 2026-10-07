@@ -168,3 +168,4 @@ signer:                         # Payment routing's hot wallets (P-9). These cap
   wallets:                      # TR-3: the hot wallets' public addresses, for the balance monitor. Never their keys
     base: "0xcf0a93C0e051DCceFc14C26A3Ec42342cf2E9704"    # SIGNER_BASE_KEY's address
     tempo: "0xcf0a93C0e051DCceFc14C26A3Ec42342cf2E9704"   # SIGNER_TEMPO_KEY's address: one key serves both
+    solana: "HGvHArgEcqSUut2Cppn6fBQzLxtsaj8vBccTFyxFJzhC"   # SIGNER_SOLANA_KEY's address (owner): USDC only, since targets' facilitators pay Solana's fees

@@ -172,7 +172,7 @@ describe('the Signer\'s startup (L-1, L-11)', () => {
     await quiet.close();
 
     expect(startLines.filter(line => line['msg'] === 'Started')).toEqual([expect.objectContaining({
-      level: 30, app: 'signer', commit: '0123456789abcdef0123456789abcdef01234567', logLevel: 'info', environment: 'staging', wallets: { base: wallet.address, tempo: null },
+      level: 30, app: 'signer', commit: '0123456789abcdef0123456789abcdef01234567', logLevel: 'info', environment: 'staging', wallets: { base: wallet.address, tempo: null, solana: null }, solanaRpc: null,
       limits: { maxPerCall: '1', maxPerNetworkPerHour: null, maxPerNetworkPerDay: '100' }, ports: { port: expect.any(Number), metricsPort: expect.any(Number) },
     })]);
     expect(logger.level).toBe('warn');

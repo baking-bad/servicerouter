@@ -121,6 +121,7 @@ signer:                         # Optional. AR8
   # wallets:                    # Optional. TR-3: the hot wallets' public addresses, for the balance monitor. Never their keys
   #   base: "0x…"               # SIGNER_BASE_KEY's address
   #   tempo: "0x…"              # SIGNER_TEMPO_KEY's address: the same as Base's when one key serves both
+  #   solana: "…"               # SIGNER_SOLANA_KEY's address, in base58
 
 smtp:                           # Optional until email ships (AR19)
   host: smtp.example.com
